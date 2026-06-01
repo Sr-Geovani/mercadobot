@@ -20,6 +20,7 @@ ANTHROPIC_KEY  = os.environ.get("ANTHROPIC_KEY")
 logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
 
 dados_usuario = {}
+aguardando_dias = {}  # {chat_id: True} — aguardando resposta de quantos dias
 
 # ─── PALETA ──────────────────────────────────────────────────
 COR_BG      = "#0e0f11"
@@ -283,6 +284,39 @@ def bloco_pico(vendas: pd.DataFrame) -> str:
 
     return "\n".join(linhas)
 
+def bloco_reposicao(produtos: pd.DataFrame, modo: str) -> list:
+    """
+    Gera lista de reposição por filial.
+    modo: 'exato' = repor exatamente o que saiu
+          'estoque' = repor o que saiu + 30% de margem de segurança
+    """
+    v = produtos.copy()
+    fator = 1.3 if modo == "estoque" else 1.0
+    label_modo = "Reposição + 30% de estoque de segurança" if modo == "estoque" else "Reposição exata do que saiu"
+
+    blocos = []
+    for filial in v["nomeloja"].unique():
+        nome = filial.split()[-1].title()
+        df = v[v["nomeloja"] == filial].sort_values("quantidade", ascending=False)
+
+        linhas = [
+            f"🛒 {b(f'LISTA DE REPOSIÇÃO — {nome.upper()}')}",
+            f"{i(label_modo)}\n"
+        ]
+
+        total_itens = 0
+        for _, row in df.iterrows():
+            repor = max(1, round(row["quantidade"] * fator))
+            total_itens += repor
+            sufixo = f"+30% = {repor}" if modo == "estoque" else f"{repor}"
+            linhas.append(f"• {row['produto']}")
+            linhas.append(f"  {b(f'{sufixo} un')}  {i(f'vendido: {int(row.quantidade)} un')}")
+
+        linhas.append(f"\n📦 {b(f'Total: {total_itens} unidades')}")
+        blocos.append("\n".join(linhas))
+
+    return blocos
+
 # ─── INSIGHT IA (curto) ───────────────────────────────────────
 async def insight_ia(contexto: str, tema: str) -> str:
     client = anthropic.Anthropic(api_key=ANTHROPIC_KEY)
@@ -346,6 +380,7 @@ async def configurar_menu(app):
         BotCommand("semana",     "📅 Evolução semanal"),
         BotCommand("pico",       "🕐 Horários de pico"),
         BotCommand("alertas",    "⚠️ Alertas"),
+        BotCommand("reposicao",  "🛒 Lista de reposição"),
         BotCommand("menu",       "🔄 Menu"),
     ]
     await app.bot.set_my_commands(cmds)
@@ -353,13 +388,14 @@ async def configurar_menu(app):
 
 def kb_menu():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📊 Briefing",   callback_data="briefing"),
-         InlineKeyboardButton("⚠️ Alertas",    callback_data="alertas")],
-        [InlineKeyboardButton("📦 Produtos",   callback_data="produtos"),
-         InlineKeyboardButton("🗂 Categorias", callback_data="categorias")],
-        [InlineKeyboardButton("💳 Pagamentos", callback_data="pagamentos"),
-         InlineKeyboardButton("🕐 Pico",       callback_data="pico")],
-        [InlineKeyboardButton("📅 Semanal",    callback_data="semana")],
+        [InlineKeyboardButton("📊 Briefing",    callback_data="briefing"),
+         InlineKeyboardButton("⚠️ Alertas",     callback_data="alertas")],
+        [InlineKeyboardButton("📦 Produtos",    callback_data="produtos"),
+         InlineKeyboardButton("🗂 Categorias",  callback_data="categorias")],
+        [InlineKeyboardButton("💳 Pagamentos",  callback_data="pagamentos"),
+         InlineKeyboardButton("🕐 Pico",        callback_data="pico")],
+        [InlineKeyboardButton("📅 Semanal",     callback_data="semana")],
+        [InlineKeyboardButton("🛒 Lista de Reposição", callback_data="reposicao")],
     ])
 
 async def abrir_menu(msg):
@@ -578,6 +614,28 @@ async def comando_alertas(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await enviar(update.message, "\n".join(linhas))
     await abrir_menu(update.message)
 
+async def comando_reposicao(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    d = dados_usuario.get(chat_id, {})
+    if d.get("produtos") is None:
+        await update.message.reply_text(
+            "📎 Envie o arquivo de <i>Produtos Mais Vendidos</i> primeiro.",
+            parse_mode="HTML"
+        )
+        return
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("✅ Repor exatamente o que saiu", callback_data="rep_exato")],
+        [InlineKeyboardButton("📦 Repor + estoque de segurança (30%)", callback_data="rep_estoque")],
+    ])
+    await update.message.reply_text(
+        f"🛒 {b('LISTA DE REPOSIÇÃO')}\n\n"
+        f"A lista é baseada em tudo que saiu da loja no período importado.\n\n"
+        f"Como deseja repor?",
+        parse_mode="HTML",
+        reply_markup=kb
+    )
+    aguardando_dias[chat_id] = True
+
 async def mensagem_livre(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     ctx = resumo_dados(chat_id)
@@ -593,6 +651,23 @@ async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
     acao = query.data
     msg  = query.message
 
+    # ─── Reposição: escolha de modo via botão ───────────────
+    if acao.startswith("rep_"):
+        modo = acao.split("_")[1]  # 'exato' ou 'estoque'
+        d = dados_usuario.get(chat_id, {})
+        produtos = d.get("produtos")
+        if produtos is None:
+            await msg.reply_text("📎 Envie o arquivo de Produtos primeiro.")
+            return
+        label = "exata do que saiu" if modo == "exato" else "com estoque de segurança (+30%)"
+        await msg.reply_text(f"⏳ Gerando lista de reposição {label}...")
+        blocos = bloco_reposicao(produtos, modo)
+        for bloco in blocos:
+            await enviar(msg, bloco)
+        aguardando_dias.pop(chat_id, None)
+        await abrir_menu(msg)
+        return
+
     cmds = {
         "briefing":   comando_briefing,
         "produtos":   comando_produtos,
@@ -601,6 +676,7 @@ async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "semana":     comando_semana,
         "pico":       comando_pico,
         "alertas":    comando_alertas,
+        "reposicao":  comando_reposicao,
     }
 
     if acao == "briefing":
@@ -624,6 +700,7 @@ def main():
     app.add_handler(CommandHandler("semana",     comando_semana))
     app.add_handler(CommandHandler("pico",       comando_pico))
     app.add_handler(CommandHandler("alertas",    comando_alertas))
+    app.add_handler(CommandHandler("reposicao",  comando_reposicao))
     app.add_handler(MessageHandler(filters.Document.ALL, receber_arquivo))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, mensagem_livre))
     app.add_handler(CallbackQueryHandler(callback_botoes))
