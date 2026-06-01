@@ -3,3 +3,6 @@ anthropic
 pandas
 openpyxl
 matplotlib
+selenium
+webdriver-manager
+APScheduler==3.10.4

@@ -1,5 +1,6 @@
 import logging
 import os
+import asyncio
 import pandas as pd
 import matplotlib
 matplotlib.use("Agg")
@@ -381,6 +382,7 @@ async def configurar_menu(app):
         BotCommand("pico",       "🕐 Horários de pico"),
         BotCommand("alertas",    "⚠️ Alertas"),
         BotCommand("reposicao",  "🛒 Lista de reposição"),
+        BotCommand("atualizar",  "🔄 Buscar dados agora"),
         BotCommand("menu",       "🔄 Menu"),
     ]
     await app.bot.set_my_commands(cmds)
@@ -396,6 +398,7 @@ def kb_menu():
          InlineKeyboardButton("🕐 Pico",        callback_data="pico")],
         [InlineKeyboardButton("📅 Semanal",     callback_data="semana")],
         [InlineKeyboardButton("🛒 Lista de Reposição", callback_data="reposicao")],
+        [InlineKeyboardButton("🔄 Atualizar dados agora", callback_data="atualizar_menu")],
     ])
 
 async def abrir_menu(msg):
@@ -636,6 +639,61 @@ async def comando_reposicao(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     aguardando_dias[chat_id] = True
 
+async def comando_atualizar(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Dispara o download e briefing na hora, para o período escolhido."""
+    chat_id = update.effective_chat.id
+
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("📅 Hoje",          callback_data="atualizar_hoje")],
+        [InlineKeyboardButton("📅 Ontem",         callback_data="atualizar_ontem")],
+        [InlineKeyboardButton("📅 Últimos 7 dias", callback_data="atualizar_7dias")],
+        [InlineKeyboardButton("📅 Mês atual",     callback_data="atualizar_mes")],
+    ])
+    await update.message.reply_text(
+        f"🔄 {b('ATUALIZAR DADOS')}\n\n"
+        f"Qual período deseja buscar agora?",
+        parse_mode="HTML",
+        reply_markup=kb
+    )
+
+async def executar_atualizacao(msg, chat_id: int, data_ini: str, data_fim: str, label: str):
+    """Executa o scraper para o período escolhido e envia o briefing."""
+    await msg.reply_text(
+        f"⏳ Buscando dados de {b(label)} no PDV Legal...\n"
+        f"{i('Isso pode levar até 1 minuto.')}",
+        parse_mode="HTML"
+    )
+    try:
+        from scraper import baixar_relatorios_periodo
+        import pandas as pd
+
+        path_vendas, path_produtos = await asyncio.get_event_loop().run_in_executor(
+            None, baixar_relatorios_periodo, data_ini, data_fim
+        )
+
+        vendas   = pd.read_excel(path_vendas)
+        produtos = pd.read_excel(path_produtos)
+
+        # Atualiza dados em memória do usuário
+        if chat_id not in dados_usuario:
+            dados_usuario[chat_id] = {}
+        dados_usuario[chat_id]["vendas"]   = vendas
+        dados_usuario[chat_id]["produtos"] = produtos
+
+        await msg.reply_text(
+            f"✅ {b('Dados atualizados!')} Gerando briefing de {b(label)}...",
+            parse_mode="HTML"
+        )
+        await fluxo_briefing(msg, chat_id)
+
+    except Exception as e:
+        await msg.reply_text(
+            f"❌ Erro ao buscar dados: {str(e)}\n\n"
+            f"Você pode importar os arquivos manualmente enviando os Excel aqui.",
+            parse_mode="HTML"
+        )
+        await abrir_menu(msg)
+
 async def mensagem_livre(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     ctx = resumo_dados(chat_id)
@@ -651,7 +709,24 @@ async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
     acao = query.data
     msg  = query.message
 
-    # ─── Reposição: escolha de modo via botão ───────────────
+    # ─── Atualizar: período escolhido ───────────────────────
+    if acao.startswith("atualizar_"):
+        from datetime import datetime, timedelta
+        hoje   = datetime.now()
+        ontem  = hoje - timedelta(days=1)
+        fmt    = "%d/%m/%Y"
+
+        periodos = {
+            "atualizar_hoje":   (hoje.strftime(fmt),  hoje.strftime(fmt),  hoje.strftime(fmt)),
+            "atualizar_ontem":  (ontem.strftime(fmt), ontem.strftime(fmt), ontem.strftime(fmt)),
+            "atualizar_7dias":  ((hoje - timedelta(days=7)).strftime(fmt), hoje.strftime(fmt), "últimos 7 dias"),
+            "atualizar_mes":    (hoje.strftime("01/%m/%Y"), hoje.strftime(fmt), f"mês de {hoje.strftime('%B')}"),
+        }
+
+        if acao in periodos:
+            ini, fim, label = periodos[acao]
+            await executar_atualizacao(msg, chat_id, ini, fim, label)
+        return
     if acao.startswith("rep_"):
         modo = acao.split("_")[1]  # 'exato' ou 'estoque'
         d = dados_usuario.get(chat_id, {})
@@ -666,6 +741,19 @@ async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await enviar(msg, bloco)
         aguardando_dias.pop(chat_id, None)
         await abrir_menu(msg)
+        return
+
+    if acao == "atualizar_menu":
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("📅 Hoje",           callback_data="atualizar_hoje")],
+            [InlineKeyboardButton("📅 Ontem",          callback_data="atualizar_ontem")],
+            [InlineKeyboardButton("📅 Últimos 7 dias", callback_data="atualizar_7dias")],
+            [InlineKeyboardButton("📅 Mês atual",      callback_data="atualizar_mes")],
+        ])
+        await msg.reply_text(
+            f"🔄 {b('ATUALIZAR DADOS')}\n\nQual período deseja buscar agora?",
+            parse_mode="HTML", reply_markup=kb
+        )
         return
 
     cmds = {
@@ -688,8 +776,17 @@ async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if acao in cmds:
         await cmds[acao](fake, None)
 
-# ─── MAIN ────────────────────────────────────────────────────
+# ─── MAIN — ver ao final do arquivo ─────────────────────────
+
+
+# ─── INICIALIZAÇÃO COM SCHEDULER ─────────────────────────────
+# Substitui o main() original para incluir o agendador automático
+
+import asyncio as _asyncio
+
 def main():
+    from scheduler import iniciar_scheduler
+
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).post_init(configurar_menu).build()
     app.add_handler(CommandHandler("start",      start))
     app.add_handler(CommandHandler("menu",       comando_menu))
@@ -701,10 +798,15 @@ def main():
     app.add_handler(CommandHandler("pico",       comando_pico))
     app.add_handler(CommandHandler("alertas",    comando_alertas))
     app.add_handler(CommandHandler("reposicao",  comando_reposicao))
+    app.add_handler(CommandHandler("atualizar",  comando_atualizar))
     app.add_handler(MessageHandler(filters.Document.ALL, receber_arquivo))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, mensagem_livre))
     app.add_handler(CallbackQueryHandler(callback_botoes))
-    print("🤖 MercadoBot rodando...")
+
+    # Inicia o agendador junto com o bot
+    iniciar_scheduler()
+
+    print("🤖 MercadoBot rodando com briefing automático às 07:00...")
     app.run_polling()
 
 if __name__ == "__main__":
