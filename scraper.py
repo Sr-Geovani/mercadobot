@@ -1,6 +1,6 @@
 """
 scraper.py — Automação PDV Legal
-Baixa Resumo de Vendas e Produtos Mais Vendidos do dia anterior.
+Baixa Resumo de Vendas e Produtos Mais Vendidos para o período informado.
 """
 import os
 import time
@@ -13,25 +13,21 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.support.ui import Select
 
 logger = logging.getLogger(__name__)
 
 # ─── CONFIGURAÇÃO ────────────────────────────────────────────
-PDV_URL    = "https://pdvlegal.com.br/loginpdvlegal.aspx"
-PDV_EMAIL  = os.environ.get("PDV_EMAIL")
-PDV_SENHA  = os.environ.get("PDV_SENHA")
+PDV_URL      = "https://pdvlegal.com.br/loginpdvlegal.aspx"
+PDV_EMAIL    = os.environ.get("PDV_EMAIL")
+PDV_SENHA    = os.environ.get("PDV_SENHA")
 DOWNLOAD_DIR = Path("/tmp/pdvlegal")
 
-# URLs dos relatórios (conforme visto no sistema)
 URL_VENDAS   = "https://pdvlegal.com.br/relatorios.aspx?relatorio=1"
-URL_PRODUTOS = "https://pdvlegal.com.br/relatorios.aspx?relatorio=27"
+URL_PRODUTOS = "https://pdvlegal.com.br/dashboard_produtos.aspx?relatorio=dp"
 
 
 def criar_driver() -> webdriver.Chrome:
-    """Cria o Chrome em modo headless (invisível) para o servidor."""
     DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
-
     opts = Options()
     opts.add_argument("--headless=new")
     opts.add_argument("--no-sandbox")
@@ -47,107 +43,206 @@ def criar_driver() -> webdriver.Chrome:
     return webdriver.Chrome(options=opts)
 
 
-def aguardar_download(timeout: int = 30) -> Path:
+def aguardar_download(timeout: int = 45) -> Path:
     """Aguarda o arquivo .xlsx aparecer na pasta de download."""
     inicio = time.time()
     while time.time() - inicio < timeout:
-        arquivos = list(DOWNLOAD_DIR.glob("*.xlsx"))
-        # Ignora arquivos temporários do Chrome (.crdownload)
-        completos = [f for f in arquivos if not f.name.endswith(".crdownload")]
-        if completos:
-            return max(completos, key=lambda f: f.stat().st_mtime)
+        arquivos = [
+            f for f in DOWNLOAD_DIR.glob("*.xlsx")
+            if not f.name.endswith(".crdownload")
+        ]
+        if arquivos:
+            return max(arquivos, key=lambda f: f.stat().st_mtime)
         time.sleep(1)
     raise TimeoutError("Download não completou em tempo hábil.")
 
 
 def limpar_downloads():
-    """Remove arquivos antigos da pasta de download."""
-    for f in DOWNLOAD_DIR.glob("*.xlsx"):
+    for f in DOWNLOAD_DIR.glob("*"):
         f.unlink(missing_ok=True)
 
 
 def fazer_login(driver: webdriver.Chrome, wait: WebDriverWait):
-    """Faz login no PDV Legal."""
-    logger.info("Acessando PDV Legal...")
+    logger.info("Fazendo login no PDV Legal...")
     driver.get(PDV_URL)
     wait.until(EC.presence_of_element_located((By.ID, "txtEmail")))
-
     driver.find_element(By.ID, "txtEmail").send_keys(PDV_EMAIL)
     driver.find_element(By.ID, "txtSenha").send_keys(PDV_SENHA)
     driver.find_element(By.ID, "btnEntrar").click()
-
     wait.until(EC.url_changes(PDV_URL))
-    logger.info("Login realizado com sucesso.")
+    logger.info("Login realizado.")
+
+
+def definir_datas_vendas(driver: webdriver.Chrome, wait: WebDriverWait,
+                         data_ini: str, data_fim: str):
+    """Preenche os campos de data do Resumo de Vendas com os IDs reais."""
+    campo_ini = wait.until(EC.presence_of_element_located(
+        (By.ID, "ContentPlaceHolder1_txtdatapadrao1")
+    ))
+    campo_ini.clear()
+    campo_ini.send_keys(data_ini)
+
+    campo_fim = driver.find_element(By.ID, "ContentPlaceHolder1_txtdatapadrao2")
+    campo_fim.clear()
+    campo_fim.send_keys(data_fim)
+    logger.info(f"Datas definidas: {data_ini} → {data_fim}")
+
+
+def selecionar_todas_lojas(driver: webdriver.Chrome):
+    """Seleciona 'Todos' no dropdown de filial."""
+    from selenium.webdriver.support.ui import Select
+    dropdown = driver.find_element(By.ID, "ContentPlaceHolder1_ddlfilialpadrao")
+    Select(dropdown).select_by_value("0")
+    logger.info("Filtro de lojas: Todos selecionado.")
 
 
 def definir_datas(driver: webdriver.Chrome, wait: WebDriverWait,
                   data_ini: str, data_fim: str):
-    """Define as datas de início e fim no filtro do relatório."""
-    try:
-        campo_ini = wait.until(EC.presence_of_element_located((By.ID, "txtDataIni")))
-        campo_ini.clear()
-        campo_ini.send_keys(data_ini)
-        campo_fim = driver.find_element(By.ID, "txtDataFim")
-        campo_fim.clear()
-        campo_fim.send_keys(data_fim)
-    except Exception:
+    """Fallback genérico para a página de produtos (tenta IDs comuns)."""
+    pares = [
+        ("txtDataIni",  "txtDataFim"),
+        ("txtDtInicio", "txtDtFim"),
+        ("txtInicio",   "txtFim"),
+    ]
+    for id_ini, id_fim in pares:
         try:
-            campo_ini = driver.find_element(By.ID, "txtDtInicio")
-            campo_ini.clear()
-            campo_ini.send_keys(data_ini)
-            campo_fim = driver.find_element(By.ID, "txtDtFim")
-            campo_fim.clear()
-            campo_fim.send_keys(data_fim)
-        except Exception as e:
-            logger.warning(f"Campo de data não encontrado: {e}")
+            campo = wait.until(EC.presence_of_element_located((By.ID, id_ini)))
+            campo.clear()
+            campo.send_keys(data_ini)
+            driver.find_element(By.ID, id_fim).clear()
+            driver.find_element(By.ID, id_fim).send_keys(data_fim)
+            logger.info(f"Datas definidas via {id_ini}/{id_fim}")
+            return
+        except Exception:
+            continue
+    logger.warning("Campos de data não encontrados pelos IDs conhecidos.")
 
 
-def exportar_relatorio(driver: webdriver.Chrome, wait: WebDriverWait,
-                       url: str, data_ini: str, data_fim: str, nome: str) -> Path:
-    """Acessa um relatório, define a data e exporta em Excel."""
-    logger.info(f"Exportando {nome}...")
+def exportar_vendas(driver: webdriver.Chrome, wait: WebDriverWait,
+                    data_ini: str, data_fim: str) -> Path:
+    """
+    Exporta o Resumo Geral de Vendas (relatorio=1).
+    Fluxo: preenche datas → seleciona Todos → clica Gerar Relatório → baixa Excel.
+    """
+    logger.info("Exportando Resumo de Vendas...")
     limpar_downloads()
 
-    driver.get(url)
-    wait.until(EC.presence_of_element_located((By.TAG_NAME, "body")))
-    time.sleep(2)  # aguarda carregamento dos filtros
+    driver.get(URL_VENDAS)
+    time.sleep(2)
 
-    # Define datas
-    definir_datas(driver, wait, data_ini, data_fim)
+    # Preenche datas com IDs reais
+    definir_datas_vendas(driver, wait, data_ini, data_fim)
+
+    # Seleciona todas as lojas
+    selecionar_todas_lojas(driver)
     time.sleep(1)
 
-    # Clica em pesquisar/filtrar
+    # Clica em Gerar Relatório — já baixa o Excel direto
     try:
-        btn = driver.find_element(By.ID, "btnPesquisar")
-        btn.click()
-    except Exception:
-        try:
-            btn = driver.find_element(By.ID, "btnFiltrar")
-            btn.click()
-        except Exception:
-            logger.warning("Botão de pesquisa não encontrado, tentando continuar...")
-
-    time.sleep(3)
-
-    # Clica no botão de exportar Excel
-    try:
-        btn_excel = wait.until(EC.element_to_be_clickable(
-            (By.XPATH, "//a[contains(@href,'Excel') or contains(text(),'Excel') or contains(@id,'Excel')]")
+        btn = wait.until(EC.element_to_be_clickable(
+            (By.ID, "ContentPlaceHolder1_btnGerarRelatorio")
         ))
-        btn_excel.click()
-    except Exception:
-        try:
-            btn_excel = wait.until(EC.element_to_be_clickable(
-                (By.XPATH, "//img[contains(@src,'excel') or contains(@alt,'Excel')]")
-            ))
-            btn_excel.click()
-        except Exception as e:
-            raise RuntimeError(f"Botão de exportar Excel não encontrado em {nome}: {e}")
+        btn.click()
+        logger.info("Botão Gerar Relatório clicado.")
+    except Exception as e:
+        raise RuntimeError(f"Botão Gerar Relatório não encontrado: {e}")
 
     arquivo = aguardar_download()
-    destino = DOWNLOAD_DIR / f"{nome}.xlsx"
+    destino = DOWNLOAD_DIR / "vendas.xlsx"
     arquivo.rename(destino)
-    logger.info(f"{nome} baixado: {destino}")
+    logger.info(f"Vendas baixado: {destino}")
+    return destino
+
+
+def selecionar_periodo_produtos(driver: webdriver.Chrome, wait: WebDriverWait,
+                                data_ini: str, data_fim: str):
+    """
+    Seleciona o período no date range picker da página de produtos.
+    Mapeia o período solicitado para a opção mais próxima do dropdown.
+    """
+    from datetime import datetime, timedelta
+
+    hoje  = datetime.now().strftime("%d/%m/%Y")
+    ontem = (datetime.now() - timedelta(days=1)).strftime("%d/%m/%Y")
+
+    # Mapeia para a opção do dropdown
+    if data_ini == data_fim == hoje:
+        range_key = "Hoje"
+    elif data_ini == data_fim == ontem:
+        range_key = "Ontem"
+    elif data_ini == (datetime.now() - timedelta(days=7)).strftime("%d/%m/%Y"):
+        range_key = "Ultimos 7 dias"
+    elif data_ini == (datetime.now() - timedelta(days=15)).strftime("%d/%m/%Y"):
+        range_key = "Ultimos 15 dias"
+    elif data_ini == (datetime.now() - timedelta(days=30)).strftime("%d/%m/%Y"):
+        range_key = "Ultimos 30 dias"
+    elif data_ini == (datetime.now() - timedelta(days=60)).strftime("%d/%m/%Y"):
+        range_key = "Ultimos 60 dias"
+    elif data_ini == (datetime.now() - timedelta(days=90)).strftime("%d/%m/%Y"):
+        range_key = "Ultimos 90 dias"
+    else:
+        range_key = "Ultimos 30 dias"  # fallback padrão
+        logger.warning(f"Período não mapeado ({data_ini}→{data_fim}), usando 30 dias.")
+
+    # Abre o dropdown
+    btn = wait.until(EC.element_to_be_clickable((By.ID, "reportrange")))
+    btn.click()
+    time.sleep(1)
+
+    # Clica na opção correta pelo data-range-key
+    opcao = wait.until(EC.element_to_be_clickable(
+        (By.XPATH, f"//li[@data-range-key='{range_key}']")
+    ))
+    opcao.click()
+    logger.info(f"Período selecionado: {range_key}")
+    time.sleep(1)
+
+
+def exportar_produtos(driver: webdriver.Chrome, wait: WebDriverWait,
+                      data_ini: str, data_fim: str) -> Path:
+    """
+    Exporta Produtos Mais Vendidos (dashboard_produtos.aspx).
+    Seleciona período via date range picker e exporta via modal de download.
+    """
+    logger.info("Exportando Produtos Mais Vendidos...")
+    limpar_downloads()
+
+    driver.get(URL_PRODUTOS)
+    time.sleep(2)
+
+    # Seleciona período no date range picker
+    selecionar_periodo_produtos(driver, wait, data_ini, data_fim)
+    time.sleep(1)
+
+    # Clica no botão Filtrar (btnFiltro)
+    try:
+        btn_busca = wait.until(EC.element_to_be_clickable((By.ID, "btnFiltro")))
+        btn_busca.click()
+        time.sleep(3)
+    except Exception:
+        logger.warning("Botão btnFiltro não encontrado, continuando...")
+
+    # Abre o modal de download
+    try:
+        btn_modal = wait.until(EC.element_to_be_clickable((By.ID, "imgDownload")))
+        btn_modal.click()
+        time.sleep(1)
+    except Exception as e:
+        raise RuntimeError(f"Botão de download (modal) não encontrado: {e}")
+
+    # Clica no botão Excel dentro do modal
+    try:
+        btn_excel = wait.until(EC.element_to_be_clickable(
+            (By.ID, "ContentPlaceHolder1_ImageButton1")
+        ))
+        btn_excel.click()
+    except Exception as e:
+        raise RuntimeError(f"Botão Excel no modal não encontrado: {e}")
+
+    arquivo = aguardar_download()
+    destino = DOWNLOAD_DIR / "produtos.xlsx"
+    arquivo.rename(destino)
+    logger.info(f"Produtos baixado: {destino}")
     return destino
 
 
@@ -163,15 +258,14 @@ def baixar_relatorios_periodo(data_ini: str, data_fim: str) -> tuple:
     data_ini, data_fim: formato DD/MM/YYYY
     Retorna (path_vendas, path_produtos).
     """
-    logger.info(f"Baixando relatórios de {data_ini} a {data_fim}...")
-
+    logger.info(f"Período: {data_ini} → {data_fim}")
     driver = criar_driver()
-    wait   = WebDriverWait(driver, 20)
+    wait   = WebDriverWait(driver, 25)
 
     try:
         fazer_login(driver, wait)
-        path_vendas   = exportar_relatorio(driver, wait, URL_VENDAS,   data_ini, data_fim, "vendas")
-        path_produtos = exportar_relatorio(driver, wait, URL_PRODUTOS, data_ini, data_fim, "produtos")
+        path_vendas   = exportar_vendas(driver, wait, data_ini, data_fim)
+        path_produtos = exportar_produtos(driver, wait, data_ini, data_fim)
         return path_vendas, path_produtos
     finally:
         driver.quit()
@@ -180,5 +274,5 @@ def baixar_relatorios_periodo(data_ini: str, data_fim: str) -> tuple:
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     v, p = baixar_relatorios()
-    print(f"Vendas: {v}")
+    print(f"Vendas:   {v}")
     print(f"Produtos: {p}")
