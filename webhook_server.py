@@ -40,20 +40,18 @@ async def handle_webhook(request: web.Request) -> web.Response:
             return web.Response(text="ok")
 
         if evento == "pagamento_confirmado":
-            # Ativa assinatura por 31 dias
             fim = (datetime.now(BRASILIA) + timedelta(days=31)).isoformat()
-            await atualizar_usuario(
-                chat_id,
-                status="ativo",
-                assinatura_fim=fim
-            )
+            await atualizar_usuario(chat_id, status="ativo", assinatura_fim=fim)
             if _bot:
                 await _bot.send_message(
                     chat_id=chat_id,
                     text=(
-                        "✅ <b>Pagamento confirmado!</b>\n\n"
-                        "Sua assinatura do MercadoBot está ativa.\n"
-                        "Use /menu para acessar todas as funcionalidades."
+                        "✅ <b>Pagamento confirmado! Bem-vindo ao MercadoBot!</b>\n\n"
+                        "Seu acesso está liberado.\n\n"
+                        "Para começar, clique em <b>🔄 Atualizar dados agora</b> no menu "
+                        "para buscar seus relatórios do PDV Legal automaticamente.\n\n"
+                        "Ou envie os arquivos Excel manualmente se preferir.\n\n"
+                        "Use /menu para ver todas as opções disponíveis."
                     ),
                     parse_mode="HTML"
                 )

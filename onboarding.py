@@ -79,6 +79,12 @@ async def receber_pdv_email(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def receber_cpf(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cpf = "".join(filter(str.isdigit, update.message.text.strip()))
 
+    # Apaga a mensagem com CPF por segurança
+    try:
+        await update.message.delete()
+    except Exception:
+        pass
+
     if len(cpf) not in (11, 14):
         await update.message.reply_text(
             "⚠️ CPF ou CNPJ inválido. Digite apenas os números (11 dígitos para CPF, 14 para CNPJ):"
@@ -135,28 +141,25 @@ async def receber_pdv_senha(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Gera link de pagamento
         link = await gerar_link_pagamento(asaas_id, chat_id)
 
-        # Monta teclado apenas com botões válidos
-        botoes = []
         if link:
-            botoes.append([InlineKeyboardButton("💳 Ativar trial — cadastrar cartão", url=link)])
-        botoes.append([InlineKeyboardButton("📊 Explorar o bot agora", callback_data="atualizar_menu")])
-        kb = InlineKeyboardMarkup(botoes)
-
-        msg_link = (
-            f"\n\n👇 Cadastre seu cartão para garantir a continuidade após o trial:"
-            if link else
-            f"\n\n💡 Use /start para gerar seu link de pagamento quando quiser ativar."
-        )
-
-        await update.message.reply_text(
-            f"🎉 {b('Conta criada!')}\n\n"
-            f"Seu {b('trial de 7 dias')} está ativo agora.\n"
-            f"A primeira cobrança de {b('R$ 29,90')} só acontece no 8º dia — "
-            f"você pode cancelar antes disso sem custo algum."
-            f"{msg_link}",
-            parse_mode="HTML",
-            reply_markup=kb
-        )
+            kb = InlineKeyboardMarkup([
+                [InlineKeyboardButton("💳 Ativar trial — cadastrar cartão", url=link)],
+            ])
+            await update.message.reply_text(
+                f"🎉 {b('Conta criada com sucesso!')}\n\n"
+                f"Para ativar seu {b('trial de 7 dias')}, cadastre seu cartão agora.\n"
+                f"A cobrança de {b('R$ 29,90')} só acontece no 8º dia — "
+                f"você pode cancelar antes disso sem nenhum custo.\n\n"
+                f"👇 Clique abaixo para cadastrar seu cartão e liberar o acesso completo:",
+                parse_mode="HTML",
+                reply_markup=kb
+            )
+        else:
+            await update.message.reply_text(
+                f"🎉 {b('Conta criada!')}\n\n"
+                f"Você receberá em breve o link para cadastrar seu cartão e ativar o trial.",
+                parse_mode="HTML"
+            )
 
     except Exception as e:
         logger.error(f"Erro no onboarding: {e}")

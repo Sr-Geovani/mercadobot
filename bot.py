@@ -975,32 +975,37 @@ async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ─── MIDDLEWARE DE CONTROLE DE ACESSO ────────────────────────
 async def verificar_acesso(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
-    """
-    Verifica se o usuário tem acesso ativo.
-    Retorna True se pode usar, False se bloqueado.
-    """
-    from database import usuario_tem_acesso
+    """Verifica se o usuário tem acesso ativo."""
+    from database import usuario_tem_acesso, buscar_usuario
     chat_id = update.effective_chat.id
 
-    # Comandos liberados sem autenticação
-    msg = getattr(update, "message", None) or getattr(update, "callback_query", {})
-    texto = getattr(msg, "text", "") or ""
-    if texto.startswith("/start"):
-        return True
+    # Se está em conversa de onboarding, não bloqueia
+    if context.user_data.get("em_onboarding"):
+        return False
+
+    # Verifica se o usuário existe e está em alguma etapa do cadastro
+    usuario = await buscar_usuario(chat_id)
+    if not usuario:
+        # Novo usuário tentando usar o bot — manda pro /start
+        if update.message:
+            await update.message.reply_text(
+                "👋 Use /start para se cadastrar no MercadoBot.\n\n"
+                "7 dias grátis, depois R$ 29,90/mês."
+            )
+        return False
+
+    # Usuário com status pendente — ainda no onboarding, não bloqueia com mensagem
+    if usuario["status"] == "pendente":
+        return False
 
     tem_acesso, motivo = await usuario_tem_acesso(chat_id)
-
     if tem_acesso:
         return True
 
     mensagens = {
-        "nao_cadastrado": (
-            f"👋 Olá! Use /start para se cadastrar no MercadoBot.\n\n"
-            f"7 dias grátis, depois R$ 29,90/mês."
-        ),
         "trial_expirado": (
             f"⏰ {b('Seu trial de 7 dias encerrou.')}\n\n"
-            f"Para continuar usando o MercadoBot, ative sua assinatura:"
+            f"Para continuar usando o MercadoBot, cadastre seu cartão e ative a assinatura."
         ),
         "expirado": (
             f"⚠️ {b('Sua assinatura expirou.')}\n\n"
@@ -1008,15 +1013,11 @@ async def verificar_acesso(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         ),
         "bloqueado": (
             f"🔒 {b('Acesso bloqueado.')}\n\n"
-            f"Use /assinar para reativar sua conta."
+            f"Entre em contato para reativar sua conta."
         ),
         "cancelado": (
             f"😔 Sua assinatura foi cancelada.\n\n"
-            f"Use /assinar para reativar quando quiser."
-        ),
-        "pendente": (
-            f"⏳ Seu cadastro está pendente.\n\n"
-            f"Complete o pagamento para ativar o acesso."
+            f"Use /start para reativar quando quiser."
         ),
     }
 
@@ -1025,7 +1026,7 @@ async def verificar_acesso(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     if update.message:
         await update.message.reply_text(texto_bloqueio, parse_mode="HTML")
     elif update.callback_query:
-        await update.callback_query.answer("Acesso bloqueado. Use /start.")
+        await update.callback_query.answer("Acesso bloqueado.")
         await update.callback_query.message.reply_text(texto_bloqueio, parse_mode="HTML")
 
     return False
