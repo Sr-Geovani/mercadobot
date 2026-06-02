@@ -466,6 +466,8 @@ async def configurar_menu(app):
         BotCommand("alertas",    "⚠️ Alertas"),
         BotCommand("reposicao",  "🛒 Lista de reposição"),
         BotCommand("atualizar",  "🔄 Buscar dados agora"),
+        BotCommand("status",     "🔍 Status da assinatura"),
+        BotCommand("cancelar",   "❌ Cancelar assinatura"),
         BotCommand("menu",       "🔄 Menu"),
     ]
     await app.bot.set_my_commands(cmds)
@@ -866,9 +868,12 @@ async def mensagem_livre(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await abrir_menu(update.message)
 
 async def cmd_status_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Wrapper para o comando /status."""
     from onboarding import cmd_status
     await cmd_status(update, context)
+
+async def cmd_cancelar_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    from onboarding import cmd_cancelar_assinatura
+    await cmd_cancelar_assinatura(update, context)
 
 async def verificar_status_callback(msg, chat_id: int):
     """Verifica status e responde no chat."""
@@ -941,6 +946,22 @@ async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ─── Verificar status de pagamento ──────────────────────
     if acao == "verificar_status":
         await verificar_status_callback(msg, chat_id)
+        return
+
+    # ─── Confirmar cancelamento de assinatura ────────────────
+    if acao == "confirmar_cancelamento":
+        from database import buscar_usuario, atualizar_usuario
+        from pagamento import cancelar_assinatura
+        usuario = await buscar_usuario(chat_id)
+        if usuario and usuario.get("asaas_id"):
+            await cancelar_assinatura(usuario["asaas_id"])
+        await atualizar_usuario(chat_id, status="cancelado")
+        await msg.reply_text(
+            f"✅ Assinatura cancelada.\n\n"
+            f"Seu acesso foi encerrado. Obrigado por usar o MercadoBot!\n"
+            f"Use /start para reativar quando quiser.",
+            parse_mode="HTML"
+        )
         return
 
     # ─── Atualizar menu (deve vir ANTES do startswith) ──────
@@ -1110,6 +1131,7 @@ def main():
     app.add_handler(CommandHandler("reposicao",  comando_reposicao))
     app.add_handler(CommandHandler("atualizar",  comando_atualizar))
     app.add_handler(CommandHandler("status",     cmd_status_handler))
+    app.add_handler(CommandHandler("cancelar",   cmd_cancelar_handler))
     app.add_handler(MessageHandler(filters.Document.ALL,            receber_arquivo_com_acesso))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, mensagem_livre_com_acesso))
     app.add_handler(CallbackQueryHandler(callback_botoes))

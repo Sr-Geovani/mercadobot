@@ -227,11 +227,41 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 
-async def cmd_cancelar(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def cmd_cancelar_onboarding(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Cancela o fluxo de cadastro."""
     await update.message.reply_text(
         "Cadastro cancelado. Use /start para começar novamente quando quiser."
     )
     return ConversationHandler.END
+
+
+async def cmd_cancelar_assinatura(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Cancela a assinatura do usuário."""
+    from database import buscar_usuario, atualizar_usuario
+    from pagamento import cancelar_assinatura
+
+    chat_id = update.effective_chat.id
+    usuario = await buscar_usuario(chat_id)
+
+    if not usuario or usuario["status"] not in ("trial", "ativo"):
+        await update.message.reply_text(
+            "Você não tem uma assinatura ativa para cancelar."
+        )
+        return
+
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("❌ Sim, cancelar assinatura", callback_data="confirmar_cancelamento")],
+        [InlineKeyboardButton("↩️ Não, manter assinatura",  callback_data="menu_principal")],
+    ])
+    await update.message.reply_text(
+        f"⚠️ {b('Cancelar assinatura')}\n\n"
+        f"Tem certeza que deseja cancelar?\n\n"
+        f"• Seu acesso será encerrado imediatamente\n"
+        f"• Não haverá novas cobranças\n"
+        f"• Você pode reativar a qualquer momento com /start",
+        parse_mode="HTML",
+        reply_markup=kb
+    )
 
 
 def conversation_handler():
@@ -242,7 +272,7 @@ def conversation_handler():
             AGUARDA_CPF:       [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_cpf)],
             AGUARDA_PDV_SENHA: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_pdv_senha)],
         },
-        fallbacks=[CommandHandler("cancelar", cmd_cancelar)],
+        fallbacks=[CommandHandler("cancelar", cmd_cancelar_onboarding)],
         allow_reentry=True,
         per_message=False,
         per_chat=True,
