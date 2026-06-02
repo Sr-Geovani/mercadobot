@@ -23,13 +23,27 @@ PDV_SENHA    = os.environ.get("PDV_SENHA")
 DOWNLOAD_DIR = Path("/tmp/pdvlegal")
 
 
-async def fazer_login(page):
+async def fazer_login(page, email: str, senha: str):
     logger.info("Fazendo login no PDV Legal...")
     await page.goto(PDV_URL, wait_until="networkidle")
-    await page.fill("#txtEmail", PDV_EMAIL)
-    await page.fill("#txtSenha", PDV_SENHA)
+    await page.fill("#txtEmail", email)
+    await page.fill("#txtSenha", senha)
     await page.click("#btnEntrar")
-    await page.wait_for_url(lambda url: "loginpdvlegal" not in url, timeout=15000)
+
+    try:
+        await page.wait_for_url(lambda url: "loginpdvlegal" not in url, timeout=10000)
+    except Exception:
+        # Verifica se apareceu mensagem de erro na tela
+        try:
+            erro_visivel = await page.locator(".alert, .error, .msg-error").text_content(timeout=2000)
+            if erro_visivel:
+                raise ValueError(f"Login inválido: {erro_visivel.strip()}")
+        except ValueError:
+            raise
+        except Exception:
+            pass
+        raise ValueError("Login inválido — verifique seu e-mail e senha do PDV Legal.")
+
     logger.info("Login realizado.")
 
 
@@ -135,8 +149,13 @@ async def exportar_produtos(page, context, data_ini: str, data_fim: str) -> Path
     return destino
 
 
-async def _baixar_async(data_ini: str, data_fim: str) -> tuple:
+async def _baixar_async(data_ini: str, data_fim: str,
+                        email: str = None, senha: str = None) -> tuple:
     from playwright.async_api import async_playwright
+
+    # Usa credenciais passadas ou fallback para variáveis de ambiente
+    _email = email or PDV_EMAIL
+    _senha = senha or PDV_SENHA
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(
@@ -147,7 +166,7 @@ async def _baixar_async(data_ini: str, data_fim: str) -> tuple:
         page    = await context.new_page()
 
         try:
-            await fazer_login(page)
+            await fazer_login(page, _email, _senha)
             path_vendas   = await exportar_vendas(page, context, data_ini, data_fim)
             path_produtos = await exportar_produtos(page, context, data_ini, data_fim)
             return path_vendas, path_produtos
@@ -155,16 +174,17 @@ async def _baixar_async(data_ini: str, data_fim: str) -> tuple:
             await browser.close()
 
 
-def baixar_relatorios() -> tuple:
+def baixar_relatorios(email: str = None, senha: str = None) -> tuple:
     """Baixa relatórios do dia anterior no horário de Brasília."""
     ontem = (agora_brasilia() - timedelta(days=1)).strftime("%d/%m/%Y")
-    return baixar_relatorios_periodo(ontem, ontem)
+    return baixar_relatorios_periodo(ontem, ontem, email, senha)
 
 
-def baixar_relatorios_periodo(data_ini: str, data_fim: str) -> tuple:
-    """Baixa os dois relatórios para o período. Síncrono para compatibilidade."""
+def baixar_relatorios_periodo(data_ini: str, data_fim: str,
+                               email: str = None, senha: str = None) -> tuple:
+    """Baixa os dois relatórios para o período com as credenciais informadas."""
     logger.info(f"Período: {data_ini} → {data_fim}")
-    return asyncio.run(_baixar_async(data_ini, data_fim))
+    return asyncio.run(_baixar_async(data_ini, data_fim, email, senha))
 
 
 if __name__ == "__main__":

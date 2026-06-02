@@ -700,23 +700,28 @@ async def comando_alertas(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not d or vendas is None:
         await pedir_periodo(update.message)
         return
-        cancel = vendas["ValorItensCancelados"].sum()
-        total  = vendas["valor"].sum()
-        pct    = cancel/total*100
-        if pct > 5:
-            linhas.append(f"⚠️ Cancelamentos em {b(f'{pct:.1f}%')} do faturamento — acima do ideal (5%)")
-            linhas.append(f"   Valor: {c(f'R$ {cancel:,.2f}')}\n")
 
-        sem = vendas.copy()
-        sem["DataAbertura"] = pd.to_datetime(sem["DataAbertura"], dayfirst=True)
-        sem["semana"] = sem["DataAbertura"].dt.isocalendar().week
-        fat_sem = sem.groupby(["semana","nomeFilial"])["valor"].sum().unstack(fill_value=0)
-        if len(fat_sem) >= 2:
-            for col in fat_sem.columns:
-                var = fat_sem.iloc[-1][col] - fat_sem.iloc[-2][col]
-                if var < -200:
-                    nome = col.split()[-1].title()
-                    linhas.append(f"📉 {b(nome)}: queda de {i(f'R$ {abs(var):,.2f}')} na última semana")
+    await update.message.reply_text("⏳ Verificando alertas...")
+    ctx    = resumo_dados(chat_id)
+    linhas = [f"🚨 {b('ALERTAS E ATENÇÕES')}\n"]
+
+    cancel = vendas["ValorItensCancelados"].sum()
+    total  = vendas["valor"].sum()
+    pct    = cancel / total * 100 if total > 0 else 0
+    if pct > 5:
+        linhas.append(f"⚠️ Cancelamentos em {b(f'{pct:.1f}%')} do faturamento — acima do ideal (5%)")
+        linhas.append(f"   Valor: {c(f'R$ {cancel:,.2f}')}\n")
+
+    sem = vendas.copy()
+    sem["DataAbertura"] = pd.to_datetime(sem["DataAbertura"], dayfirst=True)
+    sem["semana"] = sem["DataAbertura"].dt.isocalendar().week
+    fat_sem = sem.groupby(["semana","nomeFilial"])["valor"].sum().unstack(fill_value=0)
+    if len(fat_sem) >= 2:
+        for col in fat_sem.columns:
+            var = fat_sem.iloc[-1][col] - fat_sem.iloc[-2][col]
+            if var < -200:
+                nome = col.split()[-1].title()
+                linhas.append(f"📉 {b(nome)}: queda de {i(f'R$ {abs(var):,.2f}')} na última semana")
 
     insight = await insight_ia(ctx, "todos os alertas críticos e ações corretivas imediatas")
     linhas.append(f"\n{insight}")
@@ -783,7 +788,13 @@ async def executar_atualizacao(msg, chat_id: int, data_ini: str, data_fim: str, 
         )
 
         from scraper import baixar_relatorios_periodo
+        from database import buscar_usuario
         import pandas as pd
+
+        # Busca credenciais do usuário no banco
+        usuario   = await buscar_usuario(chat_id)
+        pdv_email = usuario.get("pdv_email") if usuario else None
+        pdv_senha = usuario.get("pdv_senha") if usuario else None
 
         # Executa o scraper com feedback por etapa
         loop = asyncio.get_event_loop()
@@ -796,7 +807,7 @@ async def executar_atualizacao(msg, chat_id: int, data_ini: str, data_fim: str, 
         )
 
         path_vendas, path_produtos = await loop.run_in_executor(
-            None, baixar_relatorios_periodo, data_ini, data_fim
+            None, baixar_relatorios_periodo, data_ini, data_fim, pdv_email, pdv_senha
         )
 
         await atualizar_status(
@@ -847,10 +858,19 @@ async def executar_atualizacao(msg, chat_id: int, data_ini: str, data_fim: str, 
     except Exception as e:
         erro = str(e)
 
-        # Detecta erros externos (site fora, manutenção, timeout de login)
-        if any(x in erro.lower() for x in ["timeout", "manutenção", "maintenance",
-                                             "txtemail", "txtsenha", "btnentrar",
-                                             "net::err", "connection"]):
+        # Erro de login inválido
+        if "login inválido" in erro.lower():
+            await atualizar_status(
+                f"🔄 Buscando dados — {b(label)}\n\n"
+                f"❌ {b('E-mail ou senha incorretos')}\n\n"
+                f"Suas credenciais do PDV Legal não foram aceitas.\n\n"
+                f"Use /start para atualizar seu e-mail e senha."
+            )
+
+        # Erro externo — site fora, manutenção
+        elif any(x in erro.lower() for x in ["timeout", "manutenção", "maintenance",
+                                              "txtemail", "txtsenha", "btnentrar",
+                                              "net::err", "connection"]):
             await atualizar_status(
                 f"🔄 Buscando dados — {b(label)}\n\n"
                 f"⚠️ Não foi possível conectar ao PDV Legal\n\n"
@@ -859,8 +879,7 @@ async def executar_atualizacao(msg, chat_id: int, data_ini: str, data_fim: str, 
                 f"• Instabilidade na conexão do servidor\n"
                 f"• Lentidão no PDV Legal\n\n"
                 f"💡 Isso não é um problema no MercadoBot.\n"
-                f"Tente novamente em alguns minutos ou\n"
-                f"importe os arquivos manualmente."
+                f"Tente novamente em alguns minutos."
             )
         else:
             await atualizar_status(

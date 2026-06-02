@@ -45,14 +45,10 @@ async def briefing_usuario(bot: Bot, usuario: dict):
         )
 
         # Importa o scraper e processa com as credenciais do usuário
-        import os as _os
-        _os.environ["PDV_EMAIL"] = pdv_email
-        _os.environ["PDV_SENHA"] = pdv_senha
-
         from scraper import baixar_relatorios
         loop = asyncio.get_event_loop()
         path_vendas, path_produtos = await loop.run_in_executor(
-            None, baixar_relatorios
+            None, baixar_relatorios, pdv_email, pdv_senha
         )
 
         vendas   = pd.read_excel(path_vendas)
@@ -219,14 +215,10 @@ async def enviar_alertas_proativos():
         if not pdv_email or not pdv_senha:
             continue
         try:
-            import os as _os
-            _os.environ["PDV_EMAIL"] = pdv_email
-            _os.environ["PDV_SENHA"] = pdv_senha
-
             from scraper import baixar_relatorios_periodo
             hoje = agora.strftime("%d/%m/%Y")
             path_vendas, _ = await asyncio.get_event_loop().run_in_executor(
-                None, baixar_relatorios_periodo, hoje, hoje
+                None, baixar_relatorios_periodo, hoje, hoje, pdv_email, pdv_senha
             )
 
             vendas = pd.read_excel(path_vendas)
