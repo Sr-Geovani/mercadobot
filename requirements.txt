@@ -3,6 +3,5 @@ anthropic
 pandas
 openpyxl
 matplotlib
-selenium
-webdriver-manager
+playwright
 APScheduler==3.10.4

@@ -1,274 +1,131 @@
 """
-scraper.py — Automação PDV Legal
-Baixa Resumo de Vendas e Produtos Mais Vendidos para o período informado.
+scraper.py — Automação PDV Legal com Playwright
+Mais estável que Selenium no Railway.
 """
 import os
 import time
 import logging
+import asyncio
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from selenium import webdriver
-from selenium.webdriver.common.by import By
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-
 logger = logging.getLogger(__name__)
 
-# ─── CONFIGURAÇÃO ────────────────────────────────────────────
 PDV_URL      = "https://pdvlegal.com.br/loginpdvlegal.aspx"
 PDV_EMAIL    = os.environ.get("PDV_EMAIL")
 PDV_SENHA    = os.environ.get("PDV_SENHA")
 DOWNLOAD_DIR = Path("/tmp/pdvlegal")
 
-URL_VENDAS   = "https://pdvlegal.com.br/relatorios.aspx?relatorio=1"
-URL_PRODUTOS = "https://pdvlegal.com.br/dashboard_produtos.aspx?relatorio=dp"
 
-
-def criar_driver() -> webdriver.Chrome:
-    DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
-    opts = Options()
-    opts.add_argument("--headless=new")
-    opts.add_argument("--no-sandbox")
-    opts.add_argument("--disable-dev-shm-usage")
-    opts.add_argument("--disable-gpu")
-    opts.add_argument("--window-size=1920,1080")
-    opts.add_argument("--disable-extensions")
-    opts.add_argument("--disable-software-rasterizer")
-    opts.add_experimental_option("prefs", {
-        "download.default_directory": str(DOWNLOAD_DIR),
-        "download.prompt_for_download": False,
-        "download.directory_upgrade": True,
-        "safebrowsing.enabled": True,
-    })
-
-    # Tenta caminhos conhecidos do chromium no Nix/Railway
-    caminhos_chrome = [
-        "/nix/store/*/bin/chromium",
-        "/usr/bin/chromium",
-        "/usr/bin/chromium-browser",
-        "/usr/bin/google-chrome",
-    ]
-    import glob
-    for padrao in caminhos_chrome:
-        encontrados = glob.glob(padrao)
-        if encontrados:
-            opts.binary_location = encontrados[0]
-            logger.info(f"Chrome encontrado: {encontrados[0]}")
-            break
-
-    # Usa webdriver-manager como fallback
-    try:
-        from selenium.webdriver.chrome.service import Service
-        from webdriver_manager.chrome import ChromeDriverManager
-        service = Service(ChromeDriverManager().install())
-        return webdriver.Chrome(service=service, options=opts)
-    except Exception:
-        return webdriver.Chrome(options=opts)
-
-
-def aguardar_download(timeout: int = 45) -> Path:
-    """Aguarda o arquivo .xlsx aparecer na pasta de download."""
-    inicio = time.time()
-    while time.time() - inicio < timeout:
-        arquivos = [
-            f for f in DOWNLOAD_DIR.glob("*.xlsx")
-            if not f.name.endswith(".crdownload")
-        ]
-        if arquivos:
-            return max(arquivos, key=lambda f: f.stat().st_mtime)
-        time.sleep(1)
-    raise TimeoutError("Download não completou em tempo hábil.")
-
-
-def limpar_downloads():
-    for f in DOWNLOAD_DIR.glob("*"):
-        f.unlink(missing_ok=True)
-
-
-def fazer_login(driver: webdriver.Chrome, wait: WebDriverWait):
+async def fazer_login(page):
     logger.info("Fazendo login no PDV Legal...")
-    driver.get(PDV_URL)
-    wait.until(EC.presence_of_element_located((By.ID, "txtEmail")))
-    driver.find_element(By.ID, "txtEmail").send_keys(PDV_EMAIL)
-    driver.find_element(By.ID, "txtSenha").send_keys(PDV_SENHA)
-    driver.find_element(By.ID, "btnEntrar").click()
-    wait.until(EC.url_changes(PDV_URL))
+    await page.goto(PDV_URL, wait_until="networkidle")
+    await page.fill("#txtEmail", PDV_EMAIL)
+    await page.fill("#txtSenha", PDV_SENHA)
+    await page.click("#btnEntrar")
+    await page.wait_for_url(lambda url: "loginpdvlegal" not in url, timeout=15000)
     logger.info("Login realizado.")
 
 
-def definir_datas_vendas(driver: webdriver.Chrome, wait: WebDriverWait,
-                         data_ini: str, data_fim: str):
-    """Preenche os campos de data do Resumo de Vendas com os IDs reais."""
-    campo_ini = wait.until(EC.presence_of_element_located(
-        (By.ID, "ContentPlaceHolder1_txtdatapadrao1")
-    ))
-    campo_ini.clear()
-    campo_ini.send_keys(data_ini)
+async def exportar_vendas(page, context, data_ini: str, data_fim: str) -> Path:
+    logger.info(f"Exportando Vendas: {data_ini} → {data_fim}")
+    DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
-    campo_fim = driver.find_element(By.ID, "ContentPlaceHolder1_txtdatapadrao2")
-    campo_fim.clear()
-    campo_fim.send_keys(data_fim)
-    logger.info(f"Datas definidas: {data_ini} → {data_fim}")
+    await page.goto(
+        "https://pdvlegal.com.br/relatorios.aspx?relatorio=1",
+        wait_until="networkidle"
+    )
+    await page.wait_for_timeout(1500)
 
-
-def selecionar_todas_lojas(driver: webdriver.Chrome):
-    """Seleciona 'Todos' no dropdown de filial."""
-    from selenium.webdriver.support.ui import Select
-    dropdown = driver.find_element(By.ID, "ContentPlaceHolder1_ddlfilialpadrao")
-    Select(dropdown).select_by_value("0")
-    logger.info("Filtro de lojas: Todos selecionado.")
-
-
-def definir_datas(driver: webdriver.Chrome, wait: WebDriverWait,
-                  data_ini: str, data_fim: str):
-    """Fallback genérico para a página de produtos (tenta IDs comuns)."""
-    pares = [
-        ("txtDataIni",  "txtDataFim"),
-        ("txtDtInicio", "txtDtFim"),
-        ("txtInicio",   "txtFim"),
-    ]
-    for id_ini, id_fim in pares:
-        try:
-            campo = wait.until(EC.presence_of_element_located((By.ID, id_ini)))
-            campo.clear()
-            campo.send_keys(data_ini)
-            driver.find_element(By.ID, id_fim).clear()
-            driver.find_element(By.ID, id_fim).send_keys(data_fim)
-            logger.info(f"Datas definidas via {id_ini}/{id_fim}")
-            return
-        except Exception:
-            continue
-    logger.warning("Campos de data não encontrados pelos IDs conhecidos.")
-
-
-def exportar_vendas(driver: webdriver.Chrome, wait: WebDriverWait,
-                    data_ini: str, data_fim: str) -> Path:
-    """
-    Exporta o Resumo Geral de Vendas (relatorio=1).
-    Fluxo: preenche datas → seleciona Todos → clica Gerar Relatório → baixa Excel.
-    """
-    logger.info("Exportando Resumo de Vendas...")
-    limpar_downloads()
-
-    driver.get(URL_VENDAS)
-    time.sleep(2)
-
-    # Preenche datas com IDs reais
-    definir_datas_vendas(driver, wait, data_ini, data_fim)
+    # Preenche datas
+    await page.fill("#ContentPlaceHolder1_txtdatapadrao1", data_ini)
+    await page.fill("#ContentPlaceHolder1_txtdatapadrao2", data_fim)
 
     # Seleciona todas as lojas
-    selecionar_todas_lojas(driver)
-    time.sleep(1)
+    await page.select_option("#ContentPlaceHolder1_ddlfilialpadrao", value="0")
+    await page.wait_for_timeout(500)
 
-    # Clica em Gerar Relatório — já baixa o Excel direto
-    try:
-        btn = wait.until(EC.element_to_be_clickable(
-            (By.ID, "ContentPlaceHolder1_btnGerarRelatorio")
-        ))
-        btn.click()
-        logger.info("Botão Gerar Relatório clicado.")
-    except Exception as e:
-        raise RuntimeError(f"Botão Gerar Relatório não encontrado: {e}")
+    # Clica em Gerar Relatório e aguarda download
+    async with context.expect_event("page") as _:
+        async with page.expect_download(timeout=45000) as download_info:
+            await page.click("#ContentPlaceHolder1_btnGerarRelatorio")
 
-    arquivo = aguardar_download()
+    download = await download_info.value
     destino = DOWNLOAD_DIR / "vendas.xlsx"
-    arquivo.rename(destino)
+    await download.save_as(destino)
     logger.info(f"Vendas baixado: {destino}")
     return destino
 
 
-def selecionar_periodo_produtos(driver: webdriver.Chrome, wait: WebDriverWait,
-                                data_ini: str, data_fim: str):
-    """
-    Seleciona o período no date range picker da página de produtos.
-    Mapeia o período solicitado para a opção mais próxima do dropdown.
-    """
-    from datetime import datetime, timedelta
+async def exportar_produtos(page, context, data_ini: str, data_fim: str) -> Path:
+    logger.info(f"Exportando Produtos: {data_ini} → {data_fim}")
+    DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
+    await page.goto(
+        "https://pdvlegal.com.br/dashboard_produtos.aspx?relatorio=dp",
+        wait_until="networkidle"
+    )
+    await page.wait_for_timeout(1500)
+
+    # Mapeia período para o data-range-key
     hoje  = datetime.now().strftime("%d/%m/%Y")
     ontem = (datetime.now() - timedelta(days=1)).strftime("%d/%m/%Y")
+    d7    = (datetime.now() - timedelta(days=7)).strftime("%d/%m/%Y")
+    d15   = (datetime.now() - timedelta(days=15)).strftime("%d/%m/%Y")
+    d30   = (datetime.now() - timedelta(days=30)).strftime("%d/%m/%Y")
 
-    # Mapeia para a opção do dropdown
-    if data_ini == data_fim == hoje:
-        range_key = "Hoje"
-    elif data_ini == data_fim == ontem:
-        range_key = "Ontem"
-    elif data_ini == (datetime.now() - timedelta(days=7)).strftime("%d/%m/%Y"):
-        range_key = "Ultimos 7 dias"
-    elif data_ini == (datetime.now() - timedelta(days=15)).strftime("%d/%m/%Y"):
-        range_key = "Ultimos 15 dias"
-    elif data_ini == (datetime.now() - timedelta(days=30)).strftime("%d/%m/%Y"):
-        range_key = "Ultimos 30 dias"
-    elif data_ini == (datetime.now() - timedelta(days=60)).strftime("%d/%m/%Y"):
-        range_key = "Ultimos 60 dias"
-    elif data_ini == (datetime.now() - timedelta(days=90)).strftime("%d/%m/%Y"):
-        range_key = "Ultimos 90 dias"
-    else:
-        range_key = "Ultimos 30 dias"  # fallback padrão
-        logger.warning(f"Período não mapeado ({data_ini}→{data_fim}), usando 30 dias.")
+    mapa = {
+        (hoje,  hoje):  "Hoje",
+        (ontem, ontem): "Ontem",
+        (d7,    hoje):  "Ultimos 7 dias",
+        (d15,   hoje):  "Ultimos 15 dias",
+        (d30,   hoje):  "Ultimos 30 dias",
+    }
+    range_key = mapa.get((data_ini, data_fim), "Ultimos 30 dias")
 
-    # Abre o dropdown
-    btn = wait.until(EC.element_to_be_clickable((By.ID, "reportrange")))
-    btn.click()
-    time.sleep(1)
+    # Abre o date picker e seleciona opção
+    await page.click("#reportrange")
+    await page.wait_for_timeout(500)
+    await page.click(f"li[data-range-key='{range_key}']")
+    await page.wait_for_timeout(500)
 
-    # Clica na opção correta pelo data-range-key
-    opcao = wait.until(EC.element_to_be_clickable(
-        (By.XPATH, f"//li[@data-range-key='{range_key}']")
-    ))
-    opcao.click()
-    logger.info(f"Período selecionado: {range_key}")
-    time.sleep(1)
+    # Clica em Filtrar
+    await page.click("#btnFiltro")
+    await page.wait_for_timeout(3000)
 
+    # Abre modal de download
+    await page.click("#imgDownload")
+    await page.wait_for_timeout(1000)
 
-def exportar_produtos(driver: webdriver.Chrome, wait: WebDriverWait,
-                      data_ini: str, data_fim: str) -> Path:
-    """
-    Exporta Produtos Mais Vendidos (dashboard_produtos.aspx).
-    Seleciona período via date range picker e exporta via modal de download.
-    """
-    logger.info("Exportando Produtos Mais Vendidos...")
-    limpar_downloads()
+    # Clica em Excel e aguarda download
+    async with page.expect_download(timeout=45000) as download_info:
+        await page.click("#ContentPlaceHolder1_ImageButton1")
 
-    driver.get(URL_PRODUTOS)
-    time.sleep(2)
-
-    # Seleciona período no date range picker
-    selecionar_periodo_produtos(driver, wait, data_ini, data_fim)
-    time.sleep(1)
-
-    # Clica no botão Filtrar (btnFiltro)
-    try:
-        btn_busca = wait.until(EC.element_to_be_clickable((By.ID, "btnFiltro")))
-        btn_busca.click()
-        time.sleep(3)
-    except Exception:
-        logger.warning("Botão btnFiltro não encontrado, continuando...")
-
-    # Abre o modal de download
-    try:
-        btn_modal = wait.until(EC.element_to_be_clickable((By.ID, "imgDownload")))
-        btn_modal.click()
-        time.sleep(1)
-    except Exception as e:
-        raise RuntimeError(f"Botão de download (modal) não encontrado: {e}")
-
-    # Clica no botão Excel dentro do modal
-    try:
-        btn_excel = wait.until(EC.element_to_be_clickable(
-            (By.ID, "ContentPlaceHolder1_ImageButton1")
-        ))
-        btn_excel.click()
-    except Exception as e:
-        raise RuntimeError(f"Botão Excel no modal não encontrado: {e}")
-
-    arquivo = aguardar_download()
+    download = await download_info.value
     destino = DOWNLOAD_DIR / "produtos.xlsx"
-    arquivo.rename(destino)
+    await download.save_as(destino)
     logger.info(f"Produtos baixado: {destino}")
     return destino
+
+
+async def _baixar_async(data_ini: str, data_fim: str) -> tuple:
+    from playwright.async_api import async_playwright
+
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(
+            headless=True,
+            args=["--no-sandbox", "--disable-dev-shm-usage"]
+        )
+        context = await browser.new_context(accept_downloads=True)
+        page    = await context.new_page()
+
+        try:
+            await fazer_login(page)
+            path_vendas   = await exportar_vendas(page, context, data_ini, data_fim)
+            path_produtos = await exportar_produtos(page, context, data_ini, data_fim)
+            return path_vendas, path_produtos
+        finally:
+            await browser.close()
 
 
 def baixar_relatorios() -> tuple:
@@ -278,22 +135,9 @@ def baixar_relatorios() -> tuple:
 
 
 def baixar_relatorios_periodo(data_ini: str, data_fim: str) -> tuple:
-    """
-    Baixa os dois relatórios para o período especificado.
-    data_ini, data_fim: formato DD/MM/YYYY
-    Retorna (path_vendas, path_produtos).
-    """
+    """Baixa os dois relatórios para o período. Síncrono para compatibilidade."""
     logger.info(f"Período: {data_ini} → {data_fim}")
-    driver = criar_driver()
-    wait   = WebDriverWait(driver, 25)
-
-    try:
-        fazer_login(driver, wait)
-        path_vendas   = exportar_vendas(driver, wait, data_ini, data_fim)
-        path_produtos = exportar_produtos(driver, wait, data_ini, data_fim)
-        return path_vendas, path_produtos
-    finally:
-        driver.quit()
+    return asyncio.run(_baixar_async(data_ini, data_fim))
 
 
 if __name__ == "__main__":
