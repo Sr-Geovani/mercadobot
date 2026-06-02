@@ -1,6 +1,6 @@
 #!/bin/bash
-echo "Instalando Playwright browsers..."
-python -m playwright install chromium
-python -m playwright install-deps chromium
-echo "Iniciando MercadoBot..."
+set -e
+echo "=== Instalando Playwright browsers ==="
+python -m playwright install chromium --with-deps
+echo "=== Browser instalado. Iniciando MercadoBot ==="
 python bot.py

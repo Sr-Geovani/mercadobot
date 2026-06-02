@@ -689,8 +689,7 @@ async def executar_atualizacao(msg, chat_id: int, data_ini: str, data_fim: str, 
     except Exception as e:
         await msg.reply_text(
             f"❌ Erro ao buscar dados: {str(e)}\n\n"
-            f"Você pode importar os arquivos manualmente enviando os Excel aqui.",
-            parse_mode="HTML"
+            f"Você pode importar os arquivos manualmente enviando os Excel aqui."
         )
         await abrir_menu(msg)
 
