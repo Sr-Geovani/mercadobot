@@ -174,6 +174,31 @@ async def _baixar_async(data_ini: str, data_fim: str,
             await browser.close()
 
 
+def testar_login(email: str, senha: str) -> bool:
+    """Testa se as credenciais são válidas. Retorna True se OK."""
+    import asyncio as _asyncio
+
+    async def _testar():
+        from playwright.async_api import async_playwright
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(
+                headless=True,
+                args=["--no-sandbox", "--disable-dev-shm-usage"]
+            )
+            page = await browser.new_page()
+            try:
+                await fazer_login(page, email, senha)
+                return True
+            except ValueError:
+                return False
+            except Exception:
+                raise  # Propaga erros de conectividade
+            finally:
+                await browser.close()
+
+    return _asyncio.run(_testar())
+
+
 def baixar_relatorios(email: str = None, senha: str = None) -> tuple:
     """Baixa relatórios do dia anterior no horário de Brasília."""
     ontem = (agora_brasilia() - timedelta(days=1)).strftime("%d/%m/%Y")

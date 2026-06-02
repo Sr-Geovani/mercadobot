@@ -275,6 +275,12 @@ def bloco_giro_produtos(produtos: pd.DataFrame) -> str:
     return "\n".join(linhas)
 
 
+def nome_mes(n: int) -> str:
+    meses = ["janeiro","fevereiro","março","abril","maio","junho",
+             "julho","agosto","setembro","outubro","novembro","dezembro"]
+    return meses[n - 1]
+
+
 def bloco_projecao_mes(vendas: pd.DataFrame) -> str:
     """Projeta o faturamento do mês com base nos dias já rodados."""
     v = vendas.copy()
@@ -304,7 +310,7 @@ def bloco_projecao_mes(vendas: pd.DataFrame) -> str:
     linhas.append(f"📊 Média diária: {b(f'R$ {media_diaria:,.2f}')}")
     linhas.append(f"💰 Faturado até agora: {b(f'R$ {fat_total:,.2f}')}")
     linhas.append(f"   {i(f'({fat_ate_hoje_pct:.0f}% do mês transcorrido)')}\n")
-    linhas.append(f"🎯 {b(f'Projeção para o mês: R$ {projecao:,.2f}')}")
+    linhas.append(f"🎯 {b(f'Projeção para {nome_mes(hoje.month)}: R$ {projecao:,.2f}')}")
     linhas.append(f"   {i(f'Média de R$ {media_diaria:,.2f}/dia × {dias_mes} dias')}")
 
     return "\n".join(linhas)
@@ -1514,8 +1520,8 @@ async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "atualizar_hoje":         (hoje.strftime(fmt),         hoje.strftime(fmt),         "hoje"),
             "atualizar_ontem":        (ontem.strftime(fmt),        ontem.strftime(fmt),        "ontem"),
             "atualizar_7dias":        ((hoje - timedelta(days=7)).strftime(fmt), hoje.strftime(fmt), "últimos 7 dias"),
-            "atualizar_mes":          (hoje.strftime("01/%m/%Y"),  hoje.strftime(fmt),         f"mês de {hoje.strftime('%B')}"),
-            "atualizar_mes_anterior": (mes_ant_ini.strftime(fmt),  mes_ant_fim.strftime(fmt),  f"{mes_ant_ini.strftime('%B')} de {mes_ant_ini.year}"),
+            "atualizar_mes":          (hoje.strftime("01/%m/%Y"),  hoje.strftime(fmt),         f"mês de {nome_mes(hoje.month)}"),
+            "atualizar_mes_anterior": (mes_ant_ini.strftime(fmt),  mes_ant_fim.strftime(fmt),  f"{nome_mes(mes_ant_ini.month)} de {mes_ant_ini.year}"),
         }
 
         if acao in periodos:

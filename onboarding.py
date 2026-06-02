@@ -221,6 +221,30 @@ async def receber_pdv_senha(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception:
         pass
 
+    await update.message.reply_text("⏳ Validando suas credenciais no PDV Legal...")
+
+    # Testa o login antes de confirmar o cadastro
+    try:
+        from scraper import testar_login
+        login_ok = await asyncio.get_event_loop().run_in_executor(
+            None, testar_login, pdv_email, pdv_senha
+        )
+        if not login_ok:
+            await update.message.reply_text(
+                f"❌ {b('E-mail ou senha incorretos no PDV Legal.')}\n\n"
+                f"Verifique suas credenciais e tente novamente com /start.",
+                parse_mode="HTML"
+            )
+            return ConversationHandler.END
+    except Exception as e:
+        logger.warning(f"Erro ao validar login: {e}")
+        # Se não conseguir validar (site fora), continua o cadastro
+        await update.message.reply_text(
+            f"⚠️ Não foi possível validar o login agora (PDV Legal instável).\n"
+            f"Prosseguindo com o cadastro...",
+            parse_mode="HTML"
+        )
+
     await update.message.reply_text("⏳ Configurando sua conta, aguarde...")
 
     try:
