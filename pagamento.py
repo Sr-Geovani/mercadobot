@@ -26,6 +26,19 @@ def _headers():
     }
 
 
+async def buscar_cliente_por_email(email: str) -> dict | None:
+    """Busca cliente no Asaas pelo email."""
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(
+            f"{ASAAS_URL}/customers",
+            params={"email": email},
+            headers=_headers()
+        )
+        data = resp.json()
+        clientes = data.get("data", [])
+        return clientes[0] if clientes else None
+
+
 async def criar_cliente_asaas(nome: str, email: str, cpf: str = None) -> dict:
     """Cria ou busca cliente no Asaas, atualizando CPF se necessário."""
     async with httpx.AsyncClient() as client:

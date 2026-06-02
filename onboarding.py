@@ -29,7 +29,6 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if usuario:
         status = usuario["status"]
 
-        # Usuário ativo ou em trial — manda direto pro menu
         if status in ("trial", "ativo"):
             from bot import kb_menu
             await update.message.reply_text(
@@ -40,61 +39,50 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return ConversationHandler.END
 
-        # Usuário pagou mas estava pendente — ativa o trial
         if status == "pendente":
-            # Verifica no Asaas se tem pagamento confirmado
             try:
                 from pagamento import verificar_pagamento_confirmado
                 pago = await verificar_pagamento_confirmado(usuario.get("asaas_id", ""))
                 if pago:
                     from datetime import datetime, timedelta
                     from zoneinfo import ZoneInfo
-                    brasilia = ZoneInfo("America/Sao_Paulo")
+                    brasilia  = ZoneInfo("America/Sao_Paulo")
                     trial_fim = (datetime.now(brasilia) + timedelta(days=7)).isoformat()
                     assin_fim = (datetime.now(brasilia) + timedelta(days=31)).isoformat()
-                    await atualizar_usuario(
-                        chat_id,
-                        status="trial",
-                        trial_fim=trial_fim,
-                        assinatura_fim=assin_fim
-                    )
+                    await atualizar_usuario(chat_id, status="trial", trial_fim=trial_fim, assinatura_fim=assin_fim)
                     from bot import kb_menu
                     await update.message.reply_text(
                         f"👋 Bem-vindo de volta, {b(nome)}!\n\n"
-                        f"✅ Seu pagamento foi identificado. Acesso liberado!\n\n"
+                        f"✅ Pagamento identificado. Acesso liberado!\n\n"
                         f"Use o menu abaixo para começar 👇",
                         parse_mode="HTML",
                         reply_markup=kb_menu()
                     )
                     return ConversationHandler.END
             except Exception as e:
-                logger.warning(f"Erro ao verificar pagamento Asaas: {e}")
+                logger.warning(f"Erro ao verificar pagamento: {e}")
 
-            # Pendente sem pagamento confirmado — reenvia link
             await update.message.reply_text(
                 f"👋 {b(nome)}, você já tem um cadastro!\n\n"
-                f"⏳ Seu pagamento ainda não foi confirmado.\n\n"
-                f"Se já cadastrou o cartão, aguarde alguns minutos e tente /start novamente.\n"
-                f"Se ainda não pagou, use /status para ver o link de pagamento.",
+                f"⏳ Seu pagamento ainda não foi confirmado.\n"
+                f"Se já cadastrou o cartão, aguarde e tente /start novamente.",
                 parse_mode="HTML"
             )
             return ConversationHandler.END
 
-        # Bloqueado ou cancelado — oferece reativação
         if status in ("bloqueado", "cancelado", "expirado"):
             kb = InlineKeyboardMarkup([
                 [InlineKeyboardButton("🔄 Reativar assinatura", callback_data="reativar")],
             ])
             await update.message.reply_text(
                 f"👋 {b(nome)}, bem-vindo de volta!\n\n"
-                f"Sua assinatura está inativa.\n"
-                f"Para reativar, clique abaixo:",
+                f"Sua assinatura está inativa. Para reativar:",
                 parse_mode="HTML",
                 reply_markup=kb
             )
             return ConversationHandler.END
 
-    # Novo usuário — inicia onboarding
+    # Usuário não está no banco — pede email para buscar no Asaas
     await update.message.reply_text(
         f"👋 Olá, {b(nome)}! Bem-vindo ao {b('MercadoBot')}!\n\n"
         f"Sou o assistente de inteligência para mercadinhos autônomos em condomínios. "
@@ -109,6 +97,9 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def receber_pdv_email(update: Update, context: ContextTypes.DEFAULT_TYPE):
     pdv_email = update.message.text.strip().lower()
+    chat_id   = update.effective_chat.id
+    user      = update.effective_user
+    nome      = user.first_name or "Operador"
 
     if "@" not in pdv_email or "." not in pdv_email:
         await update.message.reply_text(
@@ -117,6 +108,41 @@ async def receber_pdv_email(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return AGUARDA_PDV_EMAIL
 
     context.user_data["pdv_email"] = pdv_email
+
+    # Verifica se o email já existe no Asaas com pagamento recente
+    try:
+        from pagamento import buscar_cliente_por_email, verificar_pagamento_confirmado
+        cliente = await buscar_cliente_por_email(pdv_email)
+        if cliente:
+            asaas_id = cliente.get("id")
+            pago = await verificar_pagamento_confirmado(asaas_id)
+            if pago:
+                # Recria o usuário no banco com acesso ativo
+                from datetime import datetime, timedelta
+                from zoneinfo import ZoneInfo
+                brasilia  = ZoneInfo("America/Sao_Paulo")
+                trial_fim = (datetime.now(brasilia) + timedelta(days=7)).isoformat()
+                assin_fim = (datetime.now(brasilia) + timedelta(days=31)).isoformat()
+                await criar_usuario(chat_id, nome, pdv_email)
+                await atualizar_usuario(
+                    chat_id,
+                    asaas_id=asaas_id,
+                    status="trial",
+                    trial_fim=trial_fim,
+                    assinatura_fim=assin_fim
+                )
+                from bot import kb_menu
+                await update.message.reply_text(
+                    f"✅ {b('Conta reconhecida!')}\n\n"
+                    f"Identificamos seu pagamento ativo.\n"
+                    f"Para finalizar, informe sua {b('senha do PDV Legal')}:",
+                    parse_mode="HTML"
+                )
+                context.user_data["asaas_id"]      = asaas_id
+                context.user_data["ja_tem_acesso"]  = True
+                return AGUARDA_PDV_SENHA
+    except Exception as e:
+        logger.warning(f"Erro ao buscar no Asaas: {e}")
 
     await update.message.reply_text(
         f"✅ E-mail registrado.\n\n"
@@ -168,8 +194,8 @@ async def receber_pdv_senha(update: Update, context: ContextTypes.DEFAULT_TYPE):
     pdv_email = context.user_data["pdv_email"]
     cpf       = context.user_data.get("cpf", "")
     pdv_senha = update.message.text.strip()
+    ja_tem_acesso = context.user_data.get("ja_tem_acesso", False)
 
-    # Apaga a mensagem com a senha por segurança
     try:
         await update.message.delete()
     except Exception:
@@ -178,7 +204,20 @@ async def receber_pdv_senha(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("⏳ Configurando sua conta, aguarde...")
 
     try:
-        # Cria usuário no banco com status pendente até pagamento
+        # Usuário reconhecido pelo Asaas — só atualiza a senha e libera
+        if ja_tem_acesso:
+            await atualizar_usuario(chat_id, pdv_email=pdv_email, pdv_senha=pdv_senha)
+            from bot import kb_menu
+            await update.message.reply_text(
+                f"✅ {b('Acesso restaurado com sucesso!')}\n\n"
+                f"Suas credenciais foram atualizadas.\n\n"
+                f"Use o menu abaixo para começar 👇",
+                parse_mode="HTML",
+                reply_markup=kb_menu()
+            )
+            return ConversationHandler.END
+
+        # Novo usuário — cria conta e gera cobrança
         await criar_usuario(chat_id, nome, pdv_email)
         await atualizar_usuario(
             chat_id,
@@ -187,12 +226,10 @@ async def receber_pdv_senha(update: Update, context: ContextTypes.DEFAULT_TYPE):
             status="pendente"
         )
 
-        # Cria cliente no Asaas com CPF
         cliente  = await criar_cliente_asaas(nome, pdv_email, cpf)
         asaas_id = cliente.get("id")
         await atualizar_usuario(chat_id, asaas_id=asaas_id)
 
-        # Gera link de pagamento
         link = await gerar_link_pagamento(asaas_id, chat_id)
 
         if link:
@@ -205,7 +242,7 @@ async def receber_pdv_senha(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"Para ativar seu {b('trial de 7 dias')}, cadastre seu cartão agora.\n"
                 f"A cobrança de {b('R$ 29,90')} só acontece no 8º dia — "
                 f"você pode cancelar antes disso sem nenhum custo.\n\n"
-                f"Após cadastrar o cartão, clique em {b('Verificar status')} para confirmar que o acesso foi liberado. 👇",
+                f"Após cadastrar o cartão, clique em {b('Verificar status')} para confirmar. 👇",
                 parse_mode="HTML",
                 reply_markup=kb
             )
