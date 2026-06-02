@@ -38,10 +38,10 @@ async def exportar_vendas(page, context, data_ini: str, data_fim: str) -> Path:
     await page.wait_for_timeout(1500)
 
     # Preenche datas via JavaScript para evitar abrir o datepicker
-    await page.evaluate("""
-        document.getElementById('ContentPlaceHolder1_txtdatapadrao1').value = arguments[0];
-        document.getElementById('ContentPlaceHolder1_txtdatapadrao2').value = arguments[1];
-    """, data_ini, data_fim)
+    await page.evaluate(f"""
+        document.getElementById('ContentPlaceHolder1_txtdatapadrao1').value = '{data_ini}';
+        document.getElementById('ContentPlaceHolder1_txtdatapadrao2').value = '{data_fim}';
+    """)
 
     # Força fechamento do datepicker via JS e clica fora
     await page.evaluate("document.body.click()")
