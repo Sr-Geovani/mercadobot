@@ -153,3 +153,4 @@ if __name__ == "__main__":
     v, p = baixar_relatorios()
     print(f"Vendas:   {v}")
     print(f"Produtos: {p}")
+# MercadoBot v1780365935
