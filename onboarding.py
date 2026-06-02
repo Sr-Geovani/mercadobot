@@ -351,16 +351,19 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 
-async def iniciar_atualizacao_credenciais(update_or_msg, chat_id: int):
+async def iniciar_atualizacao_credenciais(msg, chat_id: int):
     """Inicia o fluxo de atualização de credenciais PDV Legal."""
-    msg = update_or_msg if hasattr(update_or_msg, 'reply_text') else update_or_msg.message
+    # Marca no dados_usuario que está aguardando nova credencial
+    if chat_id not in dados_usuario:
+        dados_usuario[chat_id] = {}
+    dados_usuario[chat_id]["aguardando"] = "novo_email"
+
     await msg.reply_text(
         f"⚙️ {b('Atualizar credenciais PDV Legal')}\n\n"
         f"Digite seu novo {b('e-mail de login do PDV Legal')}:\n\n"
         f"{i('ou envie /cancelar para voltar ao menu')}",
         parse_mode="HTML"
     )
-    return AGUARDA_NOVO_PDV_EMAIL
 
 
 async def receber_novo_pdv_email(update: Update, context: ContextTypes.DEFAULT_TYPE):

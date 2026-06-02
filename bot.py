@@ -899,9 +899,50 @@ async def executar_atualizacao(msg, chat_id: int, data_ini: str, data_fim: str, 
 
 async def mensagem_livre(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
+    texto   = update.message.text.strip()
+    d       = dados_usuario.get(chat_id, {})
+
+    # ─── Fluxo de atualização de credenciais ─────────────────
+    aguardando = d.get("aguardando")
+
+    if aguardando == "novo_email":
+        if "@" not in texto or "." not in texto:
+            await update.message.reply_text("⚠️ E-mail inválido. Digite novamente:")
+            return
+        dados_usuario[chat_id]["novo_pdv_email"] = texto
+        dados_usuario[chat_id]["aguardando"]     = "nova_senha"
+        await update.message.reply_text(
+            f"✅ E-mail registrado.\n\n"
+            f"Agora digite sua nova {b('senha do PDV Legal')}:",
+            parse_mode="HTML"
+        )
+        return
+
+    if aguardando == "nova_senha":
+        novo_email = d.get("novo_pdv_email")
+        nova_senha = texto
+        # Apaga mensagem com senha
+        try:
+            await update.message.delete()
+        except Exception:
+            pass
+        from database import atualizar_usuario
+        await atualizar_usuario(chat_id, pdv_email=novo_email, pdv_senha=nova_senha)
+        dados_usuario[chat_id].pop("aguardando",    None)
+        dados_usuario[chat_id].pop("novo_pdv_email", None)
+        await update.message.reply_text(
+            f"✅ {b('Credenciais atualizadas!')}\n\n"
+            f"Suas novas credenciais foram salvas.\n"
+            f"Use {b('🔄 Atualizar dados agora')} para testar.",
+            parse_mode="HTML",
+            reply_markup=kb_menu()
+        )
+        return
+
+    # ─── Mensagem livre normal ────────────────────────────────
     ctx = resumo_dados(chat_id)
     await update.message.reply_text("⏳ Pensando...")
-    insight = await insight_ia(ctx, update.message.text)
+    insight = await insight_ia(ctx, texto)
     await enviar(update.message, insight)
     await abrir_menu(update.message)
 
@@ -1000,7 +1041,7 @@ async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ─── Atualizar credenciais PDV Legal ─────────────────────
     if acao == "atualizar_credenciais":
-        from onboarding import iniciar_atualizacao_credenciais, AGUARDA_NOVO_PDV_EMAIL
+        from onboarding import iniciar_atualizacao_credenciais
         await iniciar_atualizacao_credenciais(msg, chat_id)
         return
 
