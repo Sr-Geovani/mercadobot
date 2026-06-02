@@ -80,9 +80,9 @@ async def exportar_vendas(page, context, data_ini: str, data_fim: str) -> Path:
         df_test = pd.read_excel(destino, skiprows=skip)
         nao_nulos = df_test.dropna(how="all")
         tem_dados = "nomeFilial" in df_test.columns or "valor" in df_test.columns
-        logger.info(f"skiprows={skip}: {len(nao_nulos)} linhas não-nulas, colunas={list(df_test.columns)[:4]}, tem_dados={tem_dados}")
+        logger.info(f"skiprows={skip}: {len(nao_nulos)} linhas não-nulas, tem_dados={tem_dados}")
         if tem_dados and len(nao_nulos) > 5:
-            logger.info(f"✅ skiprows={skip} é o correto")
+            logger.info(f"✅ skiprows={skip} correto — {len(nao_nulos)} linhas de dados")
             break
 
     return destino

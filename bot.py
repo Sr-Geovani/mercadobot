@@ -21,6 +21,7 @@ TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 ANTHROPIC_KEY  = os.environ.get("ANTHROPIC_KEY")
 
 logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 dados_usuario = {}
 aguardando_dias = {}
