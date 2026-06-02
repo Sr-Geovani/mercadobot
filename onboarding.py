@@ -11,16 +11,14 @@ from pagamento import criar_cliente_asaas, gerar_link_pagamento
 logger = logging.getLogger(__name__)
 
 # Estados da conversa
-AGUARDA_EMAIL = 1
-AGUARDA_PDV_EMAIL = 2
-AGUARDA_PDV_SENHA = 3
+AGUARDA_PDV_EMAIL = 1
+AGUARDA_PDV_SENHA = 2
 
 def b(t): return f"<b>{t}</b>"
 def i(t): return f"<i>{t}</i>"
 
 
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Ponto de entrada — verifica se já é usuário ou inicia cadastro."""
     chat_id = update.effective_chat.id
     user    = update.effective_user
     nome    = user.first_name or "Operador"
@@ -28,11 +26,10 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     usuario = await buscar_usuario(chat_id)
 
     if usuario and usuario["status"] in ("trial", "ativo"):
-        # Usuário já cadastrado e ativo — manda para o menu
         from bot import kb_menu
         await update.message.reply_text(
             f"👋 Bem-vindo de volta, {b(nome)}!\n\n"
-            f"Seus dados estão carregados. Use o menu abaixo 👇",
+            f"Use o menu abaixo para acessar suas análises 👇",
             parse_mode="HTML",
             reply_markup=kb_menu()
         )
@@ -46,41 +43,39 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return ConversationHandler.END
 
-    # Novo usuário — inicia onboarding
+    # Novo usuário
     await update.message.reply_text(
         f"👋 Olá, {b(nome)}! Bem-vindo ao {b('MercadoBot')}!\n\n"
-        f"Sou o assistente de inteligência para mercadinhos autônomos em condomínios.\n\n"
+        f"Sou o assistente de inteligência para mercadinhos autônomos em condomínios. "
+        f"Conecto direto ao seu PDV Legal e entrego análises, alertas e insights no Telegram — sem você abrir nenhum relatório.\n\n"
         f"🎁 {b('7 dias grátis')} para experimentar tudo.\n"
-        f"Depois, apenas {b('R$ 29,90/mês')} com cobrança automática.\n\n"
-        f"Vamos começar? Me informe seu {b('e-mail')}:",
-        parse_mode="HTML"
-    )
-    return AGUARDA_EMAIL
-
-
-async def receber_email(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    email = update.message.text.strip().lower()
-
-    if "@" not in email or "." not in email:
-        await update.message.reply_text("⚠️ E-mail inválido. Tente novamente:")
-        return AGUARDA_EMAIL
-
-    context.user_data["email"] = email
-    await update.message.reply_text(
-        f"✅ E-mail: {i(email)}\n\n"
-        f"Agora informe seu {b('e-mail de login do PDV Legal')}:",
+        f"Depois, apenas {b('R$ 29,90/mês')} com renovação automática.\n\n"
+        f"Para começar, preciso do seu {b('e-mail de login do PDV Legal')}:",
         parse_mode="HTML"
     )
     return AGUARDA_PDV_EMAIL
 
 
 async def receber_pdv_email(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    pdv_email = update.message.text.strip()
+    pdv_email = update.message.text.strip().lower()
+
+    if "@" not in pdv_email or "." not in pdv_email:
+        await update.message.reply_text(
+            "⚠️ E-mail inválido. Digite o e-mail que você usa para entrar no PDV Legal:"
+        )
+        return AGUARDA_PDV_EMAIL
+
     context.user_data["pdv_email"] = pdv_email
+
     await update.message.reply_text(
-        f"✅ Login PDV Legal salvo.\n\n"
-        f"Agora informe sua {b('senha do PDV Legal')}:\n\n"
-        f"{i('Suas credenciais são criptografadas e usadas apenas para baixar seus relatórios.')}",
+        f"✅ E-mail: {i(pdv_email)}\n\n"
+        f"🔐 {b('Sobre a segurança das suas credenciais:')}\n\n"
+        f"Sua senha é usada {b('exclusivamente')} para acessar o PDV Legal e baixar seus relatórios automaticamente — da mesma forma que você faz hoje manualmente.\n\n"
+        f"• Não compartilhamos suas credenciais com terceiros\n"
+        f"• Não realizamos nenhuma alteração no seu sistema\n"
+        f"• O acesso é somente leitura (download de relatórios)\n"
+        f"• Você pode revogar o acesso a qualquer momento\n\n"
+        f"Agora informe sua {b('senha do PDV Legal')}:",
         parse_mode="HTML"
     )
     return AGUARDA_PDV_SENHA
@@ -90,11 +85,8 @@ async def receber_pdv_senha(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id   = update.effective_chat.id
     user      = update.effective_user
     nome      = user.first_name or "Operador"
-    email     = context.user_data["email"]
     pdv_email = context.user_data["pdv_email"]
     pdv_senha = update.message.text.strip()
-
-    await update.message.reply_text("⏳ Configurando sua conta...")
 
     # Apaga a mensagem com a senha por segurança
     try:
@@ -102,9 +94,11 @@ async def receber_pdv_senha(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception:
         pass
 
+    await update.message.reply_text("⏳ Configurando sua conta, aguarde...")
+
     try:
         # Cria usuário no banco
-        await criar_usuario(chat_id, nome, email)
+        await criar_usuario(chat_id, nome, pdv_email)
         await atualizar_usuario(
             chat_id,
             pdv_email=pdv_email,
@@ -113,7 +107,7 @@ async def receber_pdv_senha(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
         # Cria cliente no Asaas
-        cliente = await criar_cliente_asaas(nome, email)
+        cliente  = await criar_cliente_asaas(nome, pdv_email)
         asaas_id = cliente.get("id")
         await atualizar_usuario(chat_id, asaas_id=asaas_id)
 
@@ -121,15 +115,15 @@ async def receber_pdv_senha(update: Update, context: ContextTypes.DEFAULT_TYPE):
         link = await gerar_link_pagamento(asaas_id, chat_id)
 
         kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("💳 Cadastrar cartão e ativar trial", url=link)],
-            [InlineKeyboardButton("📊 Explorar o bot agora", callback_data="menu_principal")],
+            [InlineKeyboardButton("💳 Ativar trial — cadastrar cartão", url=link)],
+            [InlineKeyboardButton("📊 Explorar o bot agora", callback_data="atualizar_menu")],
         ])
 
         await update.message.reply_text(
-            f"🎉 {b('Conta criada com sucesso!')}\n\n"
-            f"Seu {b('trial de 7 dias')} começa agora.\n"
-            f"A cobrança de {b('R$ 29,90')} só acontece no 8º dia.\n\n"
-            f"👇 Cadastre seu cartão para garantir a continuidade:",
+            f"🎉 {b('Conta criada!')}\n\n"
+            f"Seu {b('trial de 7 dias')} está ativo agora.\n"
+            f"A primeira cobrança de {b('R$ 29,90')} só acontece no 8º dia — e você pode cancelar antes disso sem custo.\n\n"
+            f"👇 Cadastre seu cartão para garantir a continuidade do serviço após o trial:",
             parse_mode="HTML",
             reply_markup=kb
         )
@@ -144,16 +138,16 @@ async def receber_pdv_senha(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def cmd_cancelar(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Cadastro cancelado. Use /start para começar novamente.")
+    await update.message.reply_text(
+        "Cadastro cancelado. Use /start para começar novamente quando quiser."
+    )
     return ConversationHandler.END
 
 
 def conversation_handler():
-    """Retorna o ConversationHandler do onboarding."""
     return ConversationHandler(
         entry_points=[CommandHandler("start", cmd_start)],
         states={
-            AGUARDA_EMAIL:     [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_email)],
             AGUARDA_PDV_EMAIL: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_pdv_email)],
             AGUARDA_PDV_SENHA: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_pdv_senha)],
         },

@@ -38,7 +38,7 @@ async def inicializar_banco():
     logger.info("Banco de dados inicializado.")
 
 
-async def criar_usuario(chat_id: int, nome: str, email: str) -> dict:
+async def criar_usuario(chat_id: int, nome: str, pdv_email: str) -> dict:
     agora = datetime.now(BRASILIA).isoformat()
     trial_fim = (datetime.now(BRASILIA) + timedelta(days=7)).isoformat()
     async with aiosqlite.connect(DB_PATH) as db:
@@ -46,7 +46,7 @@ async def criar_usuario(chat_id: int, nome: str, email: str) -> dict:
             INSERT OR IGNORE INTO usuarios
             (chat_id, nome, email, status, trial_fim, criado_em, atualizado_em)
             VALUES (?, ?, ?, 'pendente', ?, ?, ?)
-        """, (chat_id, nome, email, trial_fim, agora, agora))
+        """, (chat_id, nome, pdv_email, trial_fim, agora, agora))
         await db.commit()
     return await buscar_usuario(chat_id)
 
