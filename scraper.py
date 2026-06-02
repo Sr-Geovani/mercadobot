@@ -38,19 +38,21 @@ async def exportar_vendas(page, context, data_ini: str, data_fim: str) -> Path:
     await page.wait_for_timeout(1500)
     logger.info("Página de vendas carregada")
 
-    # Preenche datas via JavaScript e dispara eventos para o sistema reconhecer
-    await page.evaluate(f"""
-        var ini = document.getElementById('ContentPlaceHolder1_txtdatapadrao1');
-        var fim = document.getElementById('ContentPlaceHolder1_txtdatapadrao2');
-        ini.value = '{data_ini}';
-        fim.value = '{data_fim}';
-        ini.dispatchEvent(new Event('change', {{bubbles: true}}));
-        fim.dispatchEvent(new Event('change', {{bubbles: true}}));
-        ini.dispatchEvent(new Event('blur', {{bubbles: true}}));
-        fim.dispatchEvent(new Event('blur', {{bubbles: true}}));
-    """)
-    logger.info(f"Datas preenchidas: {data_ini} → {data_fim}")
+    # Preenche datas clicando e digitando (datepicker reconhece input humano)
+    campo_ini = page.locator("#ContentPlaceHolder1_txtdatapadrao1")
+    await campo_ini.click()
+    await campo_ini.triple_click()
+    await campo_ini.type(data_ini, delay=50)
+    await page.keyboard.press("Tab")
+    await page.wait_for_timeout(500)
+
+    campo_fim = page.locator("#ContentPlaceHolder1_txtdatapadrao2")
+    await campo_fim.click()
+    await campo_fim.triple_click()
+    await campo_fim.type(data_fim, delay=50)
+    await page.keyboard.press("Escape")
     await page.wait_for_timeout(800)
+    logger.info(f"Datas preenchidas: {data_ini} → {data_fim}")
 
     # Seleciona todas as lojas
     await page.select_option("#ContentPlaceHolder1_ddlfilialpadrao", value="0")
