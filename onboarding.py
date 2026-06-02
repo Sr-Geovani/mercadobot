@@ -227,6 +227,13 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 
+async def cmd_cancelar(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "Cadastro cancelado. Use /start para começar novamente quando quiser."
+    )
+    return ConversationHandler.END
+
+
 def conversation_handler():
     return ConversationHandler(
         entry_points=[CommandHandler("start", cmd_start)],
