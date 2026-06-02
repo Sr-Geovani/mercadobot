@@ -239,10 +239,12 @@ async def receber_pdv_senha(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ])
             await update.message.reply_text(
                 f"🎉 {b('Conta criada com sucesso!')}\n\n"
-                f"Para ativar seu {b('trial de 7 dias')}, cadastre seu cartão agora.\n"
-                f"A cobrança de {b('R$ 29,90')} só acontece no 8º dia — "
-                f"você pode cancelar antes disso sem nenhum custo.\n\n"
-                f"Após cadastrar o cartão, clique em {b('Verificar status')} para confirmar. 👇",
+                f"Para ativar seu {b('trial de 7 dias')}, cadastre seu {b('cartão de crédito')} agora.\n\n"
+                f"• A cobrança de {b('R$ 29,90')} só acontece no 8º dia\n"
+                f"• Renovação automática todo mês\n"
+                f"• Cancele a qualquer momento antes do 8º dia sem custo\n\n"
+                f"⚠️ {i('Aceitamos apenas cartão de crédito para garantir a recorrência automática.')}\n\n"
+                f"Após cadastrar, clique em {b('Verificar status')} para confirmar. 👇",
                 parse_mode="HTML",
                 reply_markup=kb
             )
