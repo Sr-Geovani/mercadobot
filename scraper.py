@@ -36,23 +36,28 @@ async def exportar_vendas(page, context, data_ini: str, data_fim: str) -> Path:
         wait_until="networkidle"
     )
     await page.wait_for_timeout(1500)
+    logger.info("Página de vendas carregada")
 
-    # Preenche datas via JavaScript para evitar abrir o datepicker
+    # Preenche datas via JavaScript
     await page.evaluate(f"""
         document.getElementById('ContentPlaceHolder1_txtdatapadrao1').value = '{data_ini}';
         document.getElementById('ContentPlaceHolder1_txtdatapadrao2').value = '{data_fim}';
     """)
+    logger.info(f"Datas preenchidas: {data_ini} → {data_fim}")
 
-    # Força fechamento do datepicker via JS e clica fora
+    # Fecha datepicker
     await page.evaluate("document.body.click()")
     await page.keyboard.press("Escape")
     await page.wait_for_timeout(800)
+    logger.info("Datepicker fechado")
 
     # Seleciona todas as lojas
     await page.select_option("#ContentPlaceHolder1_ddlfilialpadrao", value="0")
     await page.wait_for_timeout(500)
+    logger.info("Todas as lojas selecionadas")
 
-    # Clica em Gerar Relatório via JavaScript para evitar bloqueio de elementos
+    # Clica em Gerar Relatório via JS
+    logger.info("Clicando em Gerar Relatório...")
     async with page.expect_download(timeout=45000) as download_info:
         await page.evaluate(
             "document.getElementById('ContentPlaceHolder1_btnGerarRelatorio').click()"
