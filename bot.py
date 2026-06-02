@@ -558,6 +558,20 @@ async def receber_arquivo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ Erro: {str(e)}")
 
 # ─── FLUXO BRIEFING ──────────────────────────────────────────
+async def pedir_periodo(msg):
+    """Quando não há dados em memória, oferece busca automática por período."""
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("📅 Hoje",           callback_data="atualizar_hoje")],
+        [InlineKeyboardButton("📅 Ontem",          callback_data="atualizar_ontem")],
+        [InlineKeyboardButton("📅 Últimos 7 dias", callback_data="atualizar_7dias")],
+        [InlineKeyboardButton("📅 Mês atual",      callback_data="atualizar_mes")],
+    ])
+    await msg.reply_text(
+        f"📂 Nenhum dado carregado ainda.\n\n"
+        f"Escolha o período para buscar automaticamente no PDV Legal:",
+        reply_markup=kb
+    )
+
 async def fluxo_briefing(msg, chat_id: int):
     d = dados_usuario.get(chat_id, {})
     if not d:
@@ -594,15 +608,19 @@ async def fluxo_briefing(msg, chat_id: int):
     await abrir_menu(msg)
 
 async def comando_briefing(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    d = dados_usuario.get(chat_id, {})
+    if not d.get("vendas") and not d.get("produtos"):
+        await pedir_periodo(update.message)
+        return
     await update.message.reply_text("⏳ Gerando briefing completo...")
-    await fluxo_briefing(update.message, update.effective_chat.id)
+    await fluxo_briefing(update.message, chat_id)
 
 async def comando_produtos(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     d = dados_usuario.get(chat_id, {})
-    produtos = d.get("produtos")
-    if produtos is None:
-        await update.message.reply_text("📎 Envie o arquivo de Produtos Mais Vendidos primeiro.")
+    if d.get("produtos") is None:
+        await pedir_periodo(update.message)
         return
     await update.message.reply_text("⏳ Analisando produtos...")
     await enviar(update.message, bloco_top_produtos(produtos))
@@ -615,9 +633,8 @@ async def comando_produtos(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def comando_categorias(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     d = dados_usuario.get(chat_id, {})
-    produtos = d.get("produtos")
-    if produtos is None:
-        await update.message.reply_text("📎 Envie o arquivo de Produtos Mais Vendidos primeiro.")
+    if d.get("produtos") is None:
+        await pedir_periodo(update.message)
         return
     await update.message.reply_text("⏳ Calculando receita por categoria...")
     await enviar(update.message, bloco_categorias(produtos))
@@ -630,9 +647,8 @@ async def comando_categorias(update: Update, context: ContextTypes.DEFAULT_TYPE)
 async def comando_pagamentos(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     d = dados_usuario.get(chat_id, {})
-    vendas = d.get("vendas")
-    if vendas is None:
-        await update.message.reply_text("📎 Envie o arquivo de Vendas primeiro.")
+    if d.get("vendas") is None:
+        await pedir_periodo(update.message)
         return
     await update.message.reply_text("⏳ Analisando mix de pagamentos...")
     await enviar(update.message, bloco_pagamentos(vendas))
@@ -645,9 +661,8 @@ async def comando_pagamentos(update: Update, context: ContextTypes.DEFAULT_TYPE)
 async def comando_semana(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     d = dados_usuario.get(chat_id, {})
-    vendas = d.get("vendas")
-    if vendas is None:
-        await update.message.reply_text("📎 Envie o arquivo de Vendas primeiro.")
+    if d.get("vendas") is None:
+        await pedir_periodo(update.message)
         return
     await update.message.reply_text("⏳ Calculando evolução semanal...")
     await enviar(update.message, bloco_semanal(vendas))
@@ -660,9 +675,8 @@ async def comando_semana(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def comando_pico(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     d = dados_usuario.get(chat_id, {})
-    vendas = d.get("vendas")
-    if vendas is None:
-        await update.message.reply_text("📎 Envie o arquivo de Vendas primeiro.")
+    if d.get("vendas") is None:
+        await pedir_periodo(update.message)
         return
     await update.message.reply_text("⏳ Analisando horários de pico...")
     await enviar(update.message, bloco_pico(vendas))
@@ -674,11 +688,9 @@ async def comando_pico(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def comando_alertas(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
-    ctx = resumo_dados(chat_id)
     d = dados_usuario.get(chat_id, {})
-    vendas = d.get("vendas")
     if not d:
-        await update.message.reply_text("📎 Envie seus arquivos Excel primeiro.")
+        await pedir_periodo(update.message)
         return
 
     linhas = [f"🚨 {b('ALERTAS E ATENÇÕES')}\n"]
@@ -711,10 +723,7 @@ async def comando_reposicao(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     d = dados_usuario.get(chat_id, {})
     if d.get("produtos") is None:
-        await update.message.reply_text(
-            "📎 Envie o arquivo de <i>Produtos Mais Vendidos</i> primeiro.",
-            parse_mode="HTML"
-        )
+        await pedir_periodo(update.message)
         return
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("✅ Repor exatamente o que saiu", callback_data="rep_exato")],
@@ -1051,6 +1060,10 @@ async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
     }
 
     if acao == "briefing":
+        d = dados_usuario.get(chat_id, {})
+        if not d.get("vendas") and not d.get("produtos"):
+            await pedir_periodo(msg)
+            return
         await msg.reply_text("⏳ Gerando briefing completo...")
         await fluxo_briefing(msg, chat_id)
         return
