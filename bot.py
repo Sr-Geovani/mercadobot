@@ -753,8 +753,18 @@ async def executar_atualizacao(msg, chat_id: int, data_ini: str, data_fim: str, 
             f"⏳ Processando e gerando análises..."
         )
 
-        vendas   = normalizar_vendas(pd.read_excel(path_vendas))
-        produtos = normalizar_produtos(pd.read_excel(path_produtos))
+        vendas_raw   = pd.read_excel(path_vendas)
+        produtos_raw = pd.read_excel(path_produtos)
+
+        # DEBUG — loga estrutura dos arquivos baixados
+        logger.info(f"VENDAS shape: {vendas_raw.shape}")
+        logger.info(f"VENDAS colunas: {list(vendas_raw.columns)}")
+        logger.info(f"VENDAS primeiras linhas:\n{vendas_raw.head(3).to_string()}")
+        logger.info(f"PRODUTOS shape: {produtos_raw.shape}")
+        logger.info(f"PRODUTOS colunas: {list(produtos_raw.columns)}")
+
+        vendas   = normalizar_vendas(vendas_raw)
+        produtos = normalizar_produtos(produtos_raw)
 
         if chat_id not in dados_usuario:
             dados_usuario[chat_id] = {}
