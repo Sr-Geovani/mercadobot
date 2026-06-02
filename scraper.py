@@ -40,15 +40,13 @@ async def exportar_vendas(page, context, data_ini: str, data_fim: str) -> Path:
 
     # Preenche datas clicando e digitando (datepicker reconhece input humano)
     campo_ini = page.locator("#ContentPlaceHolder1_txtdatapadrao1")
-    await campo_ini.click()
-    await campo_ini.triple_click()
+    await campo_ini.click(click_count=3)
     await campo_ini.type(data_ini, delay=50)
     await page.keyboard.press("Tab")
     await page.wait_for_timeout(500)
 
     campo_fim = page.locator("#ContentPlaceHolder1_txtdatapadrao2")
-    await campo_fim.click()
-    await campo_fim.triple_click()
+    await campo_fim.click(click_count=3)
     await campo_fim.type(data_fim, delay=50)
     await page.keyboard.press("Escape")
     await page.wait_for_timeout(800)
