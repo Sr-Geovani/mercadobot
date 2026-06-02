@@ -34,13 +34,38 @@ def criar_driver() -> webdriver.Chrome:
     opts.add_argument("--disable-dev-shm-usage")
     opts.add_argument("--disable-gpu")
     opts.add_argument("--window-size=1920,1080")
+    opts.add_argument("--disable-extensions")
+    opts.add_argument("--disable-software-rasterizer")
     opts.add_experimental_option("prefs", {
         "download.default_directory": str(DOWNLOAD_DIR),
         "download.prompt_for_download": False,
         "download.directory_upgrade": True,
         "safebrowsing.enabled": True,
     })
-    return webdriver.Chrome(options=opts)
+
+    # Tenta caminhos conhecidos do chromium no Nix/Railway
+    caminhos_chrome = [
+        "/nix/store/*/bin/chromium",
+        "/usr/bin/chromium",
+        "/usr/bin/chromium-browser",
+        "/usr/bin/google-chrome",
+    ]
+    import glob
+    for padrao in caminhos_chrome:
+        encontrados = glob.glob(padrao)
+        if encontrados:
+            opts.binary_location = encontrados[0]
+            logger.info(f"Chrome encontrado: {encontrados[0]}")
+            break
+
+    # Usa webdriver-manager como fallback
+    try:
+        from selenium.webdriver.chrome.service import Service
+        from webdriver_manager.chrome import ChromeDriverManager
+        service = Service(ChromeDriverManager().install())
+        return webdriver.Chrome(service=service, options=opts)
+    except Exception:
+        return webdriver.Chrome(options=opts)
 
 
 def aguardar_download(timeout: int = 45) -> Path:
