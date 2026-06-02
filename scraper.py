@@ -37,26 +37,26 @@ async def exportar_vendas(page, context, data_ini: str, data_fim: str) -> Path:
     )
     await page.wait_for_timeout(1500)
 
-    # Preenche datas
-    await page.fill("#ContentPlaceHolder1_txtdatapadrao1", data_ini)
-    await page.fill("#ContentPlaceHolder1_txtdatapadrao2", data_fim)
+    # Preenche datas via JavaScript para evitar abrir o datepicker
+    await page.evaluate("""
+        document.getElementById('ContentPlaceHolder1_txtdatapadrao1').value = arguments[0];
+        document.getElementById('ContentPlaceHolder1_txtdatapadrao2').value = arguments[1];
+    """, data_ini, data_fim)
 
-    # Fecha o datepicker clicando fora (no título da página)
+    # Força fechamento do datepicker via JS e clica fora
+    await page.evaluate("document.body.click()")
     await page.keyboard.press("Escape")
-    await page.wait_for_timeout(500)
-    try:
-        await page.click("h1", timeout=2000)
-    except Exception:
-        await page.click("body", position={"x": 10, "y": 10})
-    await page.wait_for_timeout(500)
+    await page.wait_for_timeout(800)
 
     # Seleciona todas as lojas
     await page.select_option("#ContentPlaceHolder1_ddlfilialpadrao", value="0")
     await page.wait_for_timeout(500)
 
-    # Clica em Gerar Relatório e aguarda download
+    # Clica em Gerar Relatório via JavaScript para evitar bloqueio de elementos
     async with page.expect_download(timeout=45000) as download_info:
-        await page.click("#ContentPlaceHolder1_btnGerarRelatorio")
+        await page.evaluate(
+            "document.getElementById('ContentPlaceHolder1_btnGerarRelatorio').click()"
+        )
 
     download = await download_info.value
     destino = DOWNLOAD_DIR / "vendas.xlsx"
