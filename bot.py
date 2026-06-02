@@ -1,6 +1,8 @@
 import logging
 import os
 import asyncio
+import subprocess
+import sys
 import pandas as pd
 import matplotlib
 matplotlib.use("Agg")
@@ -21,7 +23,25 @@ ANTHROPIC_KEY  = os.environ.get("ANTHROPIC_KEY")
 logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=logging.INFO)
 
 dados_usuario = {}
-aguardando_dias = {}  # {chat_id: True} — aguardando resposta de quantos dias
+aguardando_dias = {}
+
+# ─── INSTALA PLAYWRIGHT BROWSER SE NECESSÁRIO ────────────────
+def garantir_browser():
+    """Instala o Chromium do Playwright se ainda não estiver disponível."""
+    try:
+        from playwright.sync_api import sync_playwright
+        with sync_playwright() as p:
+            # Tenta apenas verificar se o browser existe
+            browser = p.chromium.launch(headless=True)
+            browser.close()
+        logging.info("✅ Playwright Chromium já instalado.")
+    except Exception:
+        logging.info("⏳ Instalando Playwright Chromium...")
+        subprocess.run(
+            [sys.executable, "-m", "playwright", "install", "chromium", "--with-deps"],
+            check=True
+        )
+        logging.info("✅ Playwright Chromium instalado com sucesso.")
 
 # ─── PALETA ──────────────────────────────────────────────────
 COR_BG      = "#0e0f11"
@@ -784,6 +804,7 @@ async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
 import asyncio as _asyncio
 
 def main():
+    garantir_browser()
     from scheduler import iniciar_scheduler
 
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).post_init(configurar_menu).build()
