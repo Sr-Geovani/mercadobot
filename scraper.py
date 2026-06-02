@@ -38,18 +38,19 @@ async def exportar_vendas(page, context, data_ini: str, data_fim: str) -> Path:
     await page.wait_for_timeout(1500)
     logger.info("Página de vendas carregada")
 
-    # Preenche datas via JavaScript
+    # Preenche datas via JavaScript e dispara eventos para o sistema reconhecer
     await page.evaluate(f"""
-        document.getElementById('ContentPlaceHolder1_txtdatapadrao1').value = '{data_ini}';
-        document.getElementById('ContentPlaceHolder1_txtdatapadrao2').value = '{data_fim}';
+        var ini = document.getElementById('ContentPlaceHolder1_txtdatapadrao1');
+        var fim = document.getElementById('ContentPlaceHolder1_txtdatapadrao2');
+        ini.value = '{data_ini}';
+        fim.value = '{data_fim}';
+        ini.dispatchEvent(new Event('change', {{bubbles: true}}));
+        fim.dispatchEvent(new Event('change', {{bubbles: true}}));
+        ini.dispatchEvent(new Event('blur', {{bubbles: true}}));
+        fim.dispatchEvent(new Event('blur', {{bubbles: true}}));
     """)
     logger.info(f"Datas preenchidas: {data_ini} → {data_fim}")
-
-    # Fecha datepicker
-    await page.evaluate("document.body.click()")
-    await page.keyboard.press("Escape")
     await page.wait_for_timeout(800)
-    logger.info("Datepicker fechado")
 
     # Seleciona todas as lojas
     await page.select_option("#ContentPlaceHolder1_ddlfilialpadrao", value="0")
