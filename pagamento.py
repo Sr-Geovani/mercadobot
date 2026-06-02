@@ -97,30 +97,51 @@ async def criar_assinatura_com_trial(
 
 
 async def gerar_link_pagamento(asaas_cliente_id: str, chat_id: int) -> str:
-    """Gera cobrança com link de pagamento via Asaas."""
+    """
+    Cria assinatura mensal recorrente com trial de 7 dias.
+    Primeira cobrança no 8º dia, renovação automática todo mês.
+    """
     async with httpx.AsyncClient() as client:
         primeiro_vencimento = (
             datetime.now(BRASILIA) + timedelta(days=TRIAL_DIAS + 1)
         ).strftime("%Y-%m-%d")
 
+        # Cria assinatura recorrente mensal
         payload = {
             "customer":          asaas_cliente_id,
-            "billingType":       "UNDEFINED",
+            "billingType":       "CREDIT_CARD",
             "value":             PRECO_MENSAL,
-            "dueDate":           primeiro_vencimento,
-            "description":       f"MercadoBot — 7 dias grátis, depois R$ {PRECO_MENSAL}/mês",
+            "nextDueDate":       primeiro_vencimento,
+            "cycle":             "MONTHLY",
+            "description":       "MercadoBot — Inteligência para seu mercadinho autônomo",
             "externalReference": str(chat_id),
         }
         resp = await client.post(
-            f"{ASAAS_URL}/payments",
+            f"{ASAAS_URL}/subscriptions",
             json=payload,
             headers=_headers()
         )
         data = resp.json()
-        logger.info(f"Payment criado: {data}")
+        logger.info(f"Assinatura criada: {data}")
 
-        # Retorna o link de fatura gerado pelo Asaas
-        return data.get("invoiceUrl") or data.get("bankSlipUrl") or ""
+        assinatura_id = data.get("id")
+        if not assinatura_id:
+            logger.error(f"Erro ao criar assinatura: {data}")
+            return ""
+
+        # Busca o link de pagamento da primeira cobrança da assinatura
+        resp_pagamentos = await client.get(
+            f"{ASAAS_URL}/subscriptions/{assinatura_id}/payments",
+            headers=_headers()
+        )
+        pagamentos = resp_pagamentos.json()
+        logger.info(f"Pagamentos da assinatura: {pagamentos}")
+
+        if pagamentos.get("data"):
+            primeira_cobranca = pagamentos["data"][0]
+            return primeira_cobranca.get("invoiceUrl") or primeira_cobranca.get("bankSlipUrl") or ""
+
+        return ""
 
 
 async def cancelar_assinatura(asaas_id: str) -> bool:
