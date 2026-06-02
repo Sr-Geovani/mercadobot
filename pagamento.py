@@ -144,6 +144,37 @@ async def gerar_link_pagamento(asaas_cliente_id: str, chat_id: int) -> str:
         return ""
 
 
+async def verificar_pagamento_confirmado(asaas_cliente_id: str) -> bool:
+    """
+    Verifica se existe pagamento confirmado recente (últimos 35 dias).
+    Pagamentos antigos não reativam o acesso.
+    """
+    if not asaas_cliente_id:
+        return False
+
+    from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
+    brasilia   = ZoneInfo("America/Sao_Paulo")
+    data_corte = (datetime.now(brasilia) - timedelta(days=35)).strftime("%Y-%m-%d")
+
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(
+            f"{ASAAS_URL}/payments",
+            params={
+                "customer":        asaas_cliente_id,
+                "status":          "CONFIRMED",
+                "dateCreated[ge]": data_corte,
+            },
+            headers=_headers()
+        )
+        data = resp.json()
+        pagamentos = data.get("data", [])
+        if pagamentos:
+            logger.info(f"Pagamento recente encontrado: {pagamentos[0].get('id')}")
+            return True
+        return False
+
+
 async def cancelar_assinatura(asaas_id: str) -> bool:
     """Cancela assinatura no Asaas."""
     async with httpx.AsyncClient() as client:

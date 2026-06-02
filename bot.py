@@ -943,6 +943,25 @@ async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
     popup = textos_popup.get(acao, "⏳ Processando...")
     await query.answer(popup)
 
+    # ─── Reativar assinatura ─────────────────────────────────
+    if acao == "reativar":
+        from database import buscar_usuario
+        from pagamento import criar_cliente_asaas, gerar_link_pagamento
+        usuario = await buscar_usuario(chat_id)
+        if usuario and usuario.get("asaas_id"):
+            link = await gerar_link_pagamento(usuario["asaas_id"], chat_id)
+            if link:
+                kb_reativar = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("💳 Reativar agora", url=link)],
+                ])
+                await msg.reply_text(
+                    f"👇 Clique para reativar sua assinatura:",
+                    reply_markup=kb_reativar
+                )
+                return
+        await msg.reply_text("Use /start para criar um novo cadastro.")
+        return
+
     # ─── Verificar status de pagamento ──────────────────────
     if acao == "verificar_status":
         await verificar_status_callback(msg, chat_id)

@@ -26,25 +26,75 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     usuario = await buscar_usuario(chat_id)
 
-    if usuario and usuario["status"] in ("trial", "ativo"):
-        from bot import kb_menu
-        await update.message.reply_text(
-            f"👋 Bem-vindo de volta, {b(nome)}!\n\n"
-            f"Use o menu abaixo para acessar suas análises 👇",
-            parse_mode="HTML",
-            reply_markup=kb_menu()
-        )
-        return ConversationHandler.END
+    if usuario:
+        status = usuario["status"]
 
-    if usuario and usuario["status"] in ("bloqueado", "cancelado"):
-        await update.message.reply_text(
-            f"⚠️ {b('Sua assinatura está inativa.')}\n\n"
-            f"Para reativar o MercadoBot, use /assinar.",
-            parse_mode="HTML"
-        )
-        return ConversationHandler.END
+        # Usuário ativo ou em trial — manda direto pro menu
+        if status in ("trial", "ativo"):
+            from bot import kb_menu
+            await update.message.reply_text(
+                f"👋 Bem-vindo de volta, {b(nome)}!\n\n"
+                f"Sua assinatura está ativa. Use o menu abaixo 👇",
+                parse_mode="HTML",
+                reply_markup=kb_menu()
+            )
+            return ConversationHandler.END
 
-    # Novo usuário
+        # Usuário pagou mas estava pendente — ativa o trial
+        if status == "pendente":
+            # Verifica no Asaas se tem pagamento confirmado
+            try:
+                from pagamento import verificar_pagamento_confirmado
+                pago = await verificar_pagamento_confirmado(usuario.get("asaas_id", ""))
+                if pago:
+                    from datetime import datetime, timedelta
+                    from zoneinfo import ZoneInfo
+                    brasilia = ZoneInfo("America/Sao_Paulo")
+                    trial_fim = (datetime.now(brasilia) + timedelta(days=7)).isoformat()
+                    assin_fim = (datetime.now(brasilia) + timedelta(days=31)).isoformat()
+                    await atualizar_usuario(
+                        chat_id,
+                        status="trial",
+                        trial_fim=trial_fim,
+                        assinatura_fim=assin_fim
+                    )
+                    from bot import kb_menu
+                    await update.message.reply_text(
+                        f"👋 Bem-vindo de volta, {b(nome)}!\n\n"
+                        f"✅ Seu pagamento foi identificado. Acesso liberado!\n\n"
+                        f"Use o menu abaixo para começar 👇",
+                        parse_mode="HTML",
+                        reply_markup=kb_menu()
+                    )
+                    return ConversationHandler.END
+            except Exception as e:
+                logger.warning(f"Erro ao verificar pagamento Asaas: {e}")
+
+            # Pendente sem pagamento confirmado — reenvia link
+            await update.message.reply_text(
+                f"👋 {b(nome)}, você já tem um cadastro!\n\n"
+                f"⏳ Seu pagamento ainda não foi confirmado.\n\n"
+                f"Se já cadastrou o cartão, aguarde alguns minutos e tente /start novamente.\n"
+                f"Se ainda não pagou, use /status para ver o link de pagamento.",
+                parse_mode="HTML"
+            )
+            return ConversationHandler.END
+
+        # Bloqueado ou cancelado — oferece reativação
+        if status in ("bloqueado", "cancelado", "expirado"):
+            kb = InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔄 Reativar assinatura", callback_data="reativar")],
+            ])
+            await update.message.reply_text(
+                f"👋 {b(nome)}, bem-vindo de volta!\n\n"
+                f"Sua assinatura está inativa.\n"
+                f"Para reativar, clique abaixo:",
+                parse_mode="HTML",
+                reply_markup=kb
+            )
+            return ConversationHandler.END
+
+    # Novo usuário — inicia onboarding
     await update.message.reply_text(
         f"👋 Olá, {b(nome)}! Bem-vindo ao {b('MercadoBot')}!\n\n"
         f"Sou o assistente de inteligência para mercadinhos autônomos em condomínios. "
