@@ -798,10 +798,11 @@ async def receber_arquivo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def pedir_periodo(msg):
     """Quando não há dados em memória, oferece busca automática por período."""
     kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("📅 Hoje",           callback_data="atualizar_hoje")],
-        [InlineKeyboardButton("📅 Ontem",          callback_data="atualizar_ontem")],
-        [InlineKeyboardButton("📅 Últimos 7 dias", callback_data="atualizar_7dias")],
-        [InlineKeyboardButton("📅 Mês atual",      callback_data="atualizar_mes")],
+        [InlineKeyboardButton("📅 Hoje",            callback_data="atualizar_hoje")],
+        [InlineKeyboardButton("📅 Ontem",           callback_data="atualizar_ontem")],
+        [InlineKeyboardButton("📅 Últimos 7 dias",  callback_data="atualizar_7dias")],
+        [InlineKeyboardButton("📅 Mês atual",       callback_data="atualizar_mes")],
+        [InlineKeyboardButton("📅 Mês anterior",    callback_data="atualizar_mes_anterior")],
     ])
     await msg.reply_text(
         f"📂 Nenhum dado carregado ainda.\n\n"
@@ -1421,10 +1422,11 @@ async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ─── Atualizar menu (deve vir ANTES do startswith) ──────
     if acao == "atualizar_menu":
         kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("📅 Hoje",           callback_data="atualizar_hoje")],
-            [InlineKeyboardButton("📅 Ontem",          callback_data="atualizar_ontem")],
-            [InlineKeyboardButton("📅 Últimos 7 dias", callback_data="atualizar_7dias")],
-            [InlineKeyboardButton("📅 Mês atual",      callback_data="atualizar_mes")],
+            [InlineKeyboardButton("📅 Hoje",            callback_data="atualizar_hoje")],
+            [InlineKeyboardButton("📅 Ontem",           callback_data="atualizar_ontem")],
+            [InlineKeyboardButton("📅 Últimos 7 dias",  callback_data="atualizar_7dias")],
+            [InlineKeyboardButton("📅 Mês atual",       callback_data="atualizar_mes")],
+            [InlineKeyboardButton("📅 Mês anterior",    callback_data="atualizar_mes_anterior")],
         ])
         await msg.reply_text(
             f"🔄 {b('ATUALIZAR DADOS')}\n\nQual período deseja buscar agora?",
@@ -1437,15 +1439,24 @@ async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
         from datetime import datetime, timedelta
         from zoneinfo import ZoneInfo
         brasilia = ZoneInfo("America/Sao_Paulo")
-        hoje   = datetime.now(brasilia)
-        ontem  = hoje - timedelta(days=1)
-        fmt    = "%d/%m/%Y"
+        hoje     = datetime.now(brasilia)
+        ontem    = hoje - timedelta(days=1)
+        fmt      = "%d/%m/%Y"
+
+        # Calcula mês anterior
+        if hoje.month == 1:
+            mes_ant_ini = hoje.replace(year=hoje.year-1, month=12, day=1)
+        else:
+            mes_ant_ini = hoje.replace(month=hoje.month-1, day=1)
+        # Último dia do mês anterior
+        mes_ant_fim = hoje.replace(day=1) - timedelta(days=1)
 
         periodos = {
-            "atualizar_hoje":   (hoje.strftime(fmt),  hoje.strftime(fmt),  "hoje"),
-            "atualizar_ontem":  (ontem.strftime(fmt), ontem.strftime(fmt), "ontem"),
-            "atualizar_7dias":  ((hoje - timedelta(days=7)).strftime(fmt), hoje.strftime(fmt), "últimos 7 dias"),
-            "atualizar_mes":    (hoje.strftime("01/%m/%Y"), hoje.strftime(fmt), f"mês de {hoje.strftime('%B')}"),
+            "atualizar_hoje":         (hoje.strftime(fmt),         hoje.strftime(fmt),         "hoje"),
+            "atualizar_ontem":        (ontem.strftime(fmt),        ontem.strftime(fmt),        "ontem"),
+            "atualizar_7dias":        ((hoje - timedelta(days=7)).strftime(fmt), hoje.strftime(fmt), "últimos 7 dias"),
+            "atualizar_mes":          (hoje.strftime("01/%m/%Y"),  hoje.strftime(fmt),         f"mês de {hoje.strftime('%B')}"),
+            "atualizar_mes_anterior": (mes_ant_ini.strftime(fmt),  mes_ant_fim.strftime(fmt),  f"{mes_ant_ini.strftime('%B')} de {mes_ant_ini.year}"),
         }
 
         if acao in periodos:
