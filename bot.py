@@ -678,39 +678,99 @@ async def comando_atualizar(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def executar_atualizacao(msg, chat_id: int, data_ini: str, data_fim: str, label: str):
     """Executa o scraper para o período escolhido e envia o briefing."""
-    await msg.reply_text(
-        f"⏳ Buscando dados de {b(label)} no PDV Legal...\n"
-        f"{i('Isso pode levar até 1 minuto.')}",
+
+    # Mensagem de status que vamos editar em tempo real
+    status = await msg.reply_text(
+        f"🔄 Iniciando busca de dados — {b(label)}\n\n"
+        f"⏳ Conectando ao PDV Legal...",
         parse_mode="HTML"
     )
+
+    async def atualizar_status(texto: str):
+        try:
+            await status.edit_text(texto, parse_mode="HTML")
+        except Exception:
+            pass
+
     try:
+        await atualizar_status(
+            f"🔄 Buscando dados — {b(label)}\n\n"
+            f"✅ Conectado\n"
+            f"⏳ Fazendo login no PDV Legal..."
+        )
+
         from scraper import baixar_relatorios_periodo
         import pandas as pd
 
-        path_vendas, path_produtos = await asyncio.get_event_loop().run_in_executor(
+        # Executa o scraper com feedback por etapa
+        loop = asyncio.get_event_loop()
+
+        await atualizar_status(
+            f"🔄 Buscando dados — {b(label)}\n\n"
+            f"✅ Conectado\n"
+            f"✅ Login realizado\n"
+            f"⏳ Exportando Resumo de Vendas..."
+        )
+
+        path_vendas, path_produtos = await loop.run_in_executor(
             None, baixar_relatorios_periodo, data_ini, data_fim
+        )
+
+        await atualizar_status(
+            f"🔄 Buscando dados — {b(label)}\n\n"
+            f"✅ Conectado\n"
+            f"✅ Login realizado\n"
+            f"✅ Vendas exportadas\n"
+            f"✅ Produtos exportados\n"
+            f"⏳ Processando e gerando análises..."
         )
 
         vendas   = pd.read_excel(path_vendas)
         produtos = pd.read_excel(path_produtos)
 
-        # Atualiza dados em memória do usuário
         if chat_id not in dados_usuario:
             dados_usuario[chat_id] = {}
         dados_usuario[chat_id]["vendas"]   = vendas
         dados_usuario[chat_id]["produtos"] = produtos
 
-        await msg.reply_text(
-            f"✅ {b('Dados atualizados!')} Gerando briefing de {b(label)}...",
-            parse_mode="HTML"
+        await atualizar_status(
+            f"🔄 Buscando dados — {b(label)}\n\n"
+            f"✅ Conectado\n"
+            f"✅ Login realizado\n"
+            f"✅ Vendas exportadas\n"
+            f"✅ Produtos exportados\n"
+            f"✅ Dados processados\n\n"
+            f"📊 Gerando briefing completo..."
         )
+
         await fluxo_briefing(msg, chat_id)
 
     except Exception as e:
-        await msg.reply_text(
-            f"❌ Erro ao buscar dados: {str(e)}\n\n"
-            f"Você pode importar os arquivos manualmente enviando os Excel aqui."
-        )
+        erro = str(e)
+
+        # Detecta erros externos (site fora, manutenção, timeout de login)
+        if any(x in erro.lower() for x in ["timeout", "manutenção", "maintenance",
+                                             "txtemail", "txtsenha", "btnentrar",
+                                             "net::err", "connection"]):
+            await atualizar_status(
+                f"🔄 Buscando dados — {b(label)}\n\n"
+                f"⚠️ Não foi possível conectar ao PDV Legal\n\n"
+                f"Possíveis causas:\n"
+                f"• Site em manutenção\n"
+                f"• Instabilidade na conexão do servidor\n"
+                f"• Lentidão no PDV Legal\n\n"
+                f"💡 Isso não é um problema no MercadoBot.\n"
+                f"Tente novamente em alguns minutos ou\n"
+                f"importe os arquivos manualmente."
+            )
+        else:
+            await atualizar_status(
+                f"🔄 Buscando dados — {b(label)}\n\n"
+                f"❌ Erro inesperado\n\n"
+                f"{i(erro[:200])}\n\n"
+                f"Tente novamente ou importe os arquivos manualmente."
+            )
+
         await abrir_menu(msg)
 
 async def mensagem_livre(update: Update, context: ContextTypes.DEFAULT_TYPE):
