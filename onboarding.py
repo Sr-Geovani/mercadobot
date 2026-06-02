@@ -147,14 +147,15 @@ async def receber_pdv_senha(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if link:
             kb = InlineKeyboardMarkup([
-                [InlineKeyboardButton("💳 Ativar trial — cadastrar cartão", url=link)],
+                [InlineKeyboardButton("💳 Cadastrar cartão e ativar trial", url=link)],
+                [InlineKeyboardButton("🔍 Verificar status do acesso", callback_data="verificar_status")],
             ])
             await update.message.reply_text(
                 f"🎉 {b('Conta criada com sucesso!')}\n\n"
                 f"Para ativar seu {b('trial de 7 dias')}, cadastre seu cartão agora.\n"
                 f"A cobrança de {b('R$ 29,90')} só acontece no 8º dia — "
                 f"você pode cancelar antes disso sem nenhum custo.\n\n"
-                f"👇 Clique abaixo para cadastrar seu cartão e liberar o acesso completo:",
+                f"Após cadastrar o cartão, clique em {b('Verificar status')} para confirmar que o acesso foi liberado. 👇",
                 parse_mode="HTML",
                 reply_markup=kb
             )
@@ -174,11 +175,56 @@ async def receber_pdv_senha(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 
-async def cmd_cancelar(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "Cadastro cancelado. Use /start para começar novamente quando quiser."
-    )
-    return ConversationHandler.END
+async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Verifica o status da assinatura do usuário."""
+    from database import buscar_usuario
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    chat_id  = update.effective_chat.id
+    usuario  = await buscar_usuario(chat_id)
+    brasilia = ZoneInfo("America/Sao_Paulo")
+
+    if not usuario:
+        await update.message.reply_text(
+            "Você ainda não tem cadastro.\nUse /start para se cadastrar."
+        )
+        return
+
+    status = usuario["status"]
+    agora  = datetime.now(brasilia)
+
+    if status == "pendente":
+        await update.message.reply_text(
+            f"⏳ {b('Aguardando confirmação do pagamento.')}\n\n"
+            f"Se já cadastrou o cartão, aguarde alguns instantes.\n"
+            f"O acesso é liberado automaticamente após a confirmação.",
+            parse_mode="HTML"
+        )
+    elif status == "trial":
+        fim = datetime.fromisoformat(usuario["trial_fim"])
+        dias = (fim - agora).days + 1
+        await update.message.reply_text(
+            f"✅ {b('Trial ativo')}\n\n"
+            f"Você tem {b(f'{dias} dias')} restantes de teste gratuito.\n"
+            f"A cobrança de R$ 29,90 só acontece após o trial.",
+            parse_mode="HTML"
+        )
+    elif status == "ativo":
+        fim = datetime.fromisoformat(usuario["assinatura_fim"])
+        dias = (fim - agora).days + 1
+        await update.message.reply_text(
+            f"✅ {b('Assinatura ativa')}\n\n"
+            f"Próxima renovação em {b(f'{dias} dias')}.\n"
+            f"Valor: R$ 29,90/mês.",
+            parse_mode="HTML"
+        )
+    elif status in ("bloqueado", "cancelado", "expirado"):
+        await update.message.reply_text(
+            f"❌ {b('Assinatura inativa.')}\n\n"
+            f"Use /start para reativar.",
+            parse_mode="HTML"
+        )
 
 
 def conversation_handler():

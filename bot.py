@@ -865,6 +865,44 @@ async def mensagem_livre(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await enviar(update.message, insight)
     await abrir_menu(update.message)
 
+async def cmd_status_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Wrapper para o comando /status."""
+    from onboarding import cmd_status
+    await cmd_status(update, context)
+
+async def verificar_status_callback(msg, chat_id: int):
+    """Verifica status e responde no chat."""
+    from database import buscar_usuario
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    brasilia = ZoneInfo("America/Sao_Paulo")
+    usuario  = await buscar_usuario(chat_id)
+
+    if not usuario or usuario["status"] == "pendente":
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔍 Verificar novamente", callback_data="verificar_status")],
+        ])
+        await msg.reply_text(
+            f"⏳ {b('Ainda aguardando confirmação.')}\n\n"
+            f"Se já cadastrou o cartão, aguarde alguns instantes e tente novamente.",
+            parse_mode="HTML",
+            reply_markup=kb
+        )
+        return
+
+    status = usuario["status"]
+    if status in ("trial", "ativo"):
+        agora = datetime.now(brasilia)
+        fim   = datetime.fromisoformat(usuario.get("trial_fim") or usuario.get("assinatura_fim", ""))
+        dias  = max(0, (fim - agora).days + 1)
+        await msg.reply_text(
+            f"✅ {b('Acesso liberado!')}\n\n"
+            f"Você tem {b(f'{dias} dias')} restantes.\n\n"
+            f"Use o menu abaixo para começar:",
+            parse_mode="HTML",
+            reply_markup=kb_menu()
+        )
+
 async def receber_arquivo_com_acesso(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Verifica acesso antes de processar arquivo."""
     if not await verificar_acesso(update, context):
@@ -885,19 +923,25 @@ async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Mapa de textos para o popup instantâneo
     textos_popup = {
-        "briefing":       "📊 Gerando briefing...",
-        "produtos":       "📦 Analisando produtos...",
-        "categorias":     "🗂 Calculando categorias...",
-        "pagamentos":     "💳 Analisando pagamentos...",
-        "semana":         "📅 Calculando semanas...",
-        "pico":           "🕐 Analisando horários...",
-        "alertas":        "⚠️ Verificando alertas...",
-        "reposicao":      "🛒 Abrindo reposição...",
-        "atualizar_menu": "🔄 Carregando períodos...",
+        "briefing":         "📊 Gerando briefing...",
+        "produtos":         "📦 Analisando produtos...",
+        "categorias":       "🗂 Calculando categorias...",
+        "pagamentos":       "💳 Analisando pagamentos...",
+        "semana":           "📅 Calculando semanas...",
+        "pico":             "🕐 Analisando horários...",
+        "alertas":          "⚠️ Verificando alertas...",
+        "reposicao":        "🛒 Abrindo reposição...",
+        "atualizar_menu":   "🔄 Carregando períodos...",
+        "verificar_status": "🔍 Verificando pagamento...",
     }
 
     popup = textos_popup.get(acao, "⏳ Processando...")
     await query.answer(popup)
+
+    # ─── Verificar status de pagamento ──────────────────────
+    if acao == "verificar_status":
+        await verificar_status_callback(msg, chat_id)
+        return
 
     # ─── Atualizar menu (deve vir ANTES do startswith) ──────
     if acao == "atualizar_menu":
@@ -1065,6 +1109,7 @@ def main():
     app.add_handler(CommandHandler("alertas",    comando_alertas))
     app.add_handler(CommandHandler("reposicao",  comando_reposicao))
     app.add_handler(CommandHandler("atualizar",  comando_atualizar))
+    app.add_handler(CommandHandler("status",     cmd_status_handler))
     app.add_handler(MessageHandler(filters.Document.ALL,            receber_arquivo_com_acesso))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, mensagem_livre_com_acesso))
     app.add_handler(CallbackQueryHandler(callback_botoes))
