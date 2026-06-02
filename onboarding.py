@@ -15,6 +15,8 @@ AGUARDA_PDV_EMAIL       = 1
 AGUARDA_PDV_SENHA       = 2
 AGUARDA_CPF             = 3
 AGUARDA_NOME_MERCADINHO = 4
+AGUARDA_NOVO_PDV_EMAIL  = 5
+AGUARDA_NOVO_PDV_SENHA  = 6
 
 def b(t): return f"<b>{t}</b>"
 def i(t): return f"<i>{t}</i>"
@@ -32,11 +34,15 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if status in ("trial", "ativo"):
             from bot import kb_menu
+            kb = InlineKeyboardMarkup([
+                [InlineKeyboardButton("📊 Abrir menu", callback_data="menu_principal")],
+                [InlineKeyboardButton("⚙️ Atualizar credenciais PDV Legal", callback_data="atualizar_credenciais")],
+            ])
             await update.message.reply_text(
                 f"👋 Bem-vindo de volta, {b(nome)}!\n\n"
-                f"Sua assinatura está ativa. Use o menu abaixo 👇",
+                f"Sua assinatura está ativa. O que deseja fazer?",
                 parse_mode="HTML",
-                reply_markup=kb_menu()
+                reply_markup=kb
             )
             return ConversationHandler.END
 
@@ -345,6 +351,55 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 
+async def iniciar_atualizacao_credenciais(update_or_msg, chat_id: int):
+    """Inicia o fluxo de atualização de credenciais PDV Legal."""
+    msg = update_or_msg if hasattr(update_or_msg, 'reply_text') else update_or_msg.message
+    await msg.reply_text(
+        f"⚙️ {b('Atualizar credenciais PDV Legal')}\n\n"
+        f"Digite seu novo {b('e-mail de login do PDV Legal')}:\n\n"
+        f"{i('ou envie /cancelar para voltar ao menu')}",
+        parse_mode="HTML"
+    )
+    return AGUARDA_NOVO_PDV_EMAIL
+
+
+async def receber_novo_pdv_email(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    novo_email = update.message.text.strip().lower()
+    if "@" not in novo_email or "." not in novo_email:
+        await update.message.reply_text("⚠️ E-mail inválido. Tente novamente:")
+        return AGUARDA_NOVO_PDV_EMAIL
+    context.user_data["novo_pdv_email"] = novo_email
+    await update.message.reply_text(
+        f"✅ E-mail: {i(novo_email)}\n\n"
+        f"Agora digite sua nova {b('senha do PDV Legal')}:",
+        parse_mode="HTML"
+    )
+    return AGUARDA_NOVO_PDV_SENHA
+
+
+async def receber_novo_pdv_senha(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id   = update.effective_chat.id
+    novo_email = context.user_data.get("novo_pdv_email")
+    novo_senha = update.message.text.strip()
+
+    try:
+        await update.message.delete()
+    except Exception:
+        pass
+
+    await atualizar_usuario(chat_id, pdv_email=novo_email, pdv_senha=novo_senha)
+
+    from bot import kb_menu
+    await update.message.reply_text(
+        f"✅ {b('Credenciais atualizadas com sucesso!')}\n\n"
+        f"Suas novas credenciais do PDV Legal foram salvas.\n"
+        f"Use o menu abaixo para continuar:",
+        parse_mode="HTML",
+        reply_markup=kb_menu()
+    )
+    return ConversationHandler.END
+
+
 async def cmd_cancelar_onboarding(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Cancela o fluxo de cadastro."""
     await update.message.reply_text(
@@ -390,6 +445,8 @@ def conversation_handler():
             AGUARDA_NOME_MERCADINHO: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_nome_mercadinho)],
             AGUARDA_CPF:             [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_cpf)],
             AGUARDA_PDV_SENHA:       [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_pdv_senha)],
+            AGUARDA_NOVO_PDV_EMAIL:  [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_novo_pdv_email)],
+            AGUARDA_NOVO_PDV_SENHA:  [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_novo_pdv_senha)],
         },
         fallbacks=[CommandHandler("cancelar", cmd_cancelar_onboarding)],
         allow_reentry=True,

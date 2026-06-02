@@ -466,8 +466,9 @@ async def configurar_menu(app):
         BotCommand("alertas",    "⚠️ Alertas"),
         BotCommand("reposicao",  "🛒 Lista de reposição"),
         BotCommand("atualizar",  "🔄 Buscar dados agora"),
-        BotCommand("status",     "🔍 Status da assinatura"),
-        BotCommand("cancelar",   "❌ Cancelar assinatura"),
+        BotCommand("status",        "🔍 Status da assinatura"),
+        BotCommand("configuracoes", "⚙️ Atualizar credenciais"),
+        BotCommand("cancelar",      "❌ Cancelar assinatura"),
         BotCommand("menu",       "🔄 Menu"),
     ]
     await app.bot.set_my_commands(cmds)
@@ -860,11 +861,16 @@ async def executar_atualizacao(msg, chat_id: int, data_ini: str, data_fim: str, 
 
         # Erro de login inválido
         if "login inválido" in erro.lower():
-            await atualizar_status(
+            kb_cred = InlineKeyboardMarkup([
+                [InlineKeyboardButton("⚙️ Atualizar credenciais", callback_data="atualizar_credenciais")],
+            ])
+            await status.edit_text(
                 f"🔄 Buscando dados — {b(label)}\n\n"
                 f"❌ {b('E-mail ou senha incorretos')}\n\n"
                 f"Suas credenciais do PDV Legal não foram aceitas.\n\n"
-                f"Use /start para atualizar seu e-mail e senha."
+                f"Clique abaixo para atualizar:",
+                parse_mode="HTML",
+                reply_markup=kb_cred
             )
 
         # Erro externo — site fora, manutenção
@@ -906,6 +912,18 @@ async def cmd_status_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
 async def cmd_cancelar_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     from onboarding import cmd_cancelar_assinatura
     await cmd_cancelar_assinatura(update, context)
+
+async def cmd_configuracoes_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Abre menu de configurações."""
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔑 Atualizar e-mail e senha do PDV Legal", callback_data="atualizar_credenciais")],
+        [InlineKeyboardButton("🔍 Ver status da assinatura", callback_data="verificar_status")],
+    ])
+    await update.message.reply_text(
+        f"⚙️ {b('Configurações')}\n\nO que deseja atualizar?",
+        parse_mode="HTML",
+        reply_markup=kb
+    )
 
 async def verificar_status_callback(msg, chat_id: int):
     """Verifica status e responde no chat."""
@@ -974,6 +992,17 @@ async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     popup = textos_popup.get(acao, "⏳ Processando...")
     await query.answer(popup)
+
+    # ─── Menu principal ──────────────────────────────────────
+    if acao == "menu_principal":
+        await abrir_menu(msg)
+        return
+
+    # ─── Atualizar credenciais PDV Legal ─────────────────────
+    if acao == "atualizar_credenciais":
+        from onboarding import iniciar_atualizacao_credenciais, AGUARDA_NOVO_PDV_EMAIL
+        await iniciar_atualizacao_credenciais(msg, chat_id)
+        return
 
     # ─── Reativar assinatura ─────────────────────────────────
     if acao == "reativar":
@@ -1193,8 +1222,9 @@ def main():
     app.add_handler(CommandHandler("alertas",    comando_alertas))
     app.add_handler(CommandHandler("reposicao",  comando_reposicao))
     app.add_handler(CommandHandler("atualizar",  comando_atualizar))
-    app.add_handler(CommandHandler("status",     cmd_status_handler))
-    app.add_handler(CommandHandler("cancelar",   cmd_cancelar_handler))
+    app.add_handler(CommandHandler("status",        cmd_status_handler))
+    app.add_handler(CommandHandler("configuracoes", cmd_configuracoes_handler))
+    app.add_handler(CommandHandler("cancelar",      cmd_cancelar_handler))
     app.add_handler(MessageHandler(filters.Document.ALL,            receber_arquivo_com_acesso))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, mensagem_livre_com_acesso))
     app.add_handler(CallbackQueryHandler(callback_botoes))
