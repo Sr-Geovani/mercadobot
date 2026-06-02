@@ -88,30 +88,30 @@ async def criar_assinatura_com_trial(
 
 
 async def gerar_link_pagamento(asaas_cliente_id: str, chat_id: int) -> str:
-    """
-    Gera link de pagamento para o cliente cadastrar o cartão.
-    O trial começa imediatamente, a cobrança só no 8º dia.
-    """
+    """Gera cobrança com link de pagamento via Asaas."""
     async with httpx.AsyncClient() as client:
         primeiro_vencimento = (
             datetime.now(BRASILIA) + timedelta(days=TRIAL_DIAS + 1)
         ).strftime("%Y-%m-%d")
 
         payload = {
-            "customer":        asaas_cliente_id,
-            "billingType":     "UNDEFINED",  # usuário escolhe cartão ou Pix
-            "value":           PRECO_MENSAL,
-            "dueDate":         primeiro_vencimento,
-            "description":     f"MercadoBot — 7 dias grátis, depois R$ {PRECO_MENSAL}/mês",
+            "customer":          asaas_cliente_id,
+            "billingType":       "UNDEFINED",
+            "value":             PRECO_MENSAL,
+            "dueDate":           primeiro_vencimento,
+            "description":       f"MercadoBot — 7 dias grátis, depois R$ {PRECO_MENSAL}/mês",
             "externalReference": str(chat_id),
         }
         resp = await client.post(
-            f"{ASAAS_URL}/paymentLinks",
+            f"{ASAAS_URL}/payments",
             json=payload,
             headers=_headers()
         )
         data = resp.json()
-        return data.get("url", "")
+        logger.info(f"Payment criado: {data}")
+
+        # Retorna o link de fatura gerado pelo Asaas
+        return data.get("invoiceUrl") or data.get("bankSlipUrl") or ""
 
 
 async def cancelar_assinatura(asaas_id: str) -> bool:

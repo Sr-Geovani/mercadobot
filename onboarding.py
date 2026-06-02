@@ -114,16 +114,25 @@ async def receber_pdv_senha(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Gera link de pagamento
         link = await gerar_link_pagamento(asaas_id, chat_id)
 
-        kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("💳 Ativar trial — cadastrar cartão", url=link)],
-            [InlineKeyboardButton("📊 Explorar o bot agora", callback_data="atualizar_menu")],
-        ])
+        # Monta teclado apenas com botões válidos
+        botoes = []
+        if link:
+            botoes.append([InlineKeyboardButton("💳 Ativar trial — cadastrar cartão", url=link)])
+        botoes.append([InlineKeyboardButton("📊 Explorar o bot agora", callback_data="atualizar_menu")])
+        kb = InlineKeyboardMarkup(botoes)
+
+        msg_link = (
+            f"\n\n👇 Cadastre seu cartão para garantir a continuidade após o trial:"
+            if link else
+            f"\n\n💡 Use /start para gerar seu link de pagamento quando quiser ativar."
+        )
 
         await update.message.reply_text(
             f"🎉 {b('Conta criada!')}\n\n"
             f"Seu {b('trial de 7 dias')} está ativo agora.\n"
-            f"A primeira cobrança de {b('R$ 29,90')} só acontece no 8º dia — e você pode cancelar antes disso sem custo.\n\n"
-            f"👇 Cadastre seu cartão para garantir a continuidade do serviço após o trial:",
+            f"A primeira cobrança de {b('R$ 29,90')} só acontece no 8º dia — "
+            f"você pode cancelar antes disso sem custo algum."
+            f"{msg_link}",
             parse_mode="HTML",
             reply_markup=kb
         )
