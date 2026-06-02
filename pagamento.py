@@ -109,17 +109,16 @@ async def criar_assinatura_com_trial(
         return assinatura
 
 
-async def gerar_link_pagamento(asaas_cliente_id: str, chat_id: int) -> str:
+async def gerar_link_pagamento(asaas_cliente_id: str, chat_id: int) -> tuple:
     """
     Cria assinatura mensal recorrente com trial de 7 dias.
-    Primeira cobrança no 8º dia, renovação automática todo mês.
+    Retorna (link, assinatura_id).
     """
     async with httpx.AsyncClient() as client:
         primeiro_vencimento = (
             datetime.now(BRASILIA) + timedelta(days=TRIAL_DIAS + 1)
         ).strftime("%Y-%m-%d")
 
-        # Cria assinatura recorrente mensal
         payload = {
             "customer":          asaas_cliente_id,
             "billingType":       "CREDIT_CARD",
@@ -140,21 +139,22 @@ async def gerar_link_pagamento(asaas_cliente_id: str, chat_id: int) -> str:
         assinatura_id = data.get("id")
         if not assinatura_id:
             logger.error(f"Erro ao criar assinatura: {data}")
-            return ""
+            return "", ""
 
-        # Busca o link de pagamento da primeira cobrança da assinatura
-        resp_pagamentos = await client.get(
+        # Busca o link da primeira cobrança
+        resp_pag = await client.get(
             f"{ASAAS_URL}/subscriptions/{assinatura_id}/payments",
             headers=_headers()
         )
-        pagamentos = resp_pagamentos.json()
+        pagamentos = resp_pag.json()
         logger.info(f"Pagamentos da assinatura: {pagamentos}")
 
+        link = ""
         if pagamentos.get("data"):
-            primeira_cobranca = pagamentos["data"][0]
-            return primeira_cobranca.get("invoiceUrl") or primeira_cobranca.get("bankSlipUrl") or ""
+            primeira = pagamentos["data"][0]
+            link = primeira.get("invoiceUrl") or primeira.get("bankSlipUrl") or ""
 
-        return ""
+        return link, assinatura_id
 
 
 async def verificar_pagamento_confirmado(asaas_cliente_id: str) -> bool:
@@ -186,6 +186,37 @@ async def verificar_pagamento_confirmado(asaas_cliente_id: str) -> bool:
             logger.info(f"Pagamento recente encontrado: {pagamentos[0].get('id')}")
             return True
         return False
+
+
+async def buscar_assinatura_ativa(asaas_cliente_id: str) -> str:
+    """Busca assinatura ativa existente para o cliente. Retorna o ID ou vazio."""
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(
+            f"{ASAAS_URL}/subscriptions",
+            params={"customer": asaas_cliente_id, "status": "ACTIVE"},
+            headers=_headers()
+        )
+        data = resp.json()
+        assinaturas = data.get("data", [])
+        if assinaturas:
+            logger.info(f"Assinatura ativa encontrada: {assinaturas[0]['id']}")
+            return assinaturas[0]["id"]
+        return ""
+
+
+async def buscar_link_assinatura(assinatura_id: str) -> str:
+    """Busca o link de pagamento da próxima cobrança de uma assinatura."""
+    async with httpx.AsyncClient() as client:
+        resp = await client.get(
+            f"{ASAAS_URL}/subscriptions/{assinatura_id}/payments",
+            params={"status": "PENDING"},
+            headers=_headers()
+        )
+        data = resp.json()
+        pagamentos = data.get("data", [])
+        if pagamentos:
+            return pagamentos[0].get("invoiceUrl") or pagamentos[0].get("bankSlipUrl") or ""
+        return ""
 
 
 async def cancelar_assinatura(asaas_id: str) -> bool:

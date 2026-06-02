@@ -11,9 +11,10 @@ from pagamento import criar_cliente_asaas, gerar_link_pagamento
 logger = logging.getLogger(__name__)
 
 # Estados da conversa
-AGUARDA_PDV_EMAIL = 1
-AGUARDA_PDV_SENHA = 2
-AGUARDA_CPF      = 3
+AGUARDA_PDV_EMAIL       = 1
+AGUARDA_PDV_SENHA       = 2
+AGUARDA_CPF             = 3
+AGUARDA_NOME_MERCADINHO = 4
 
 def b(t): return f"<b>{t}</b>"
 def i(t): return f"<i>{t}</i>"
@@ -146,10 +147,23 @@ async def receber_pdv_email(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(
         f"✅ E-mail registrado.\n\n"
+        f"Qual o nome da sua {b('marca ou operação')}?\n\n"
+        f"Exemplo: {i('VenueMarket')} ou {i('CondoShop')}\n\n"
+        f"Esse nome será usado para personalizar seu briefing diário:",
+        parse_mode="HTML"
+    )
+    return AGUARDA_NOME_MERCADINHO
+
+
+async def receber_nome_mercadinho(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    nome_mercadinho = update.message.text.strip()
+    context.user_data["nome_mercadinho"] = nome_mercadinho
+
+    await update.message.reply_text(
+        f"✅ {b(nome_mercadinho)} registrado!\n\n"
         f"Para emitir sua cobrança, preciso do seu {b('CPF ou CNPJ')} (só números).\n\n"
         f"🎁 {b('Não se preocupe')} — você terá {b('7 dias de teste gratuito')} "
-        f"antes de qualquer cobrança. Pode cancelar a qualquer momento durante esse período "
-        f"sem pagar nada.\n\n"
+        f"antes de qualquer cobrança. Pode cancelar a qualquer momento sem custo.\n\n"
         f"Digite seu CPF ou CNPJ:",
         parse_mode="HTML"
     )
@@ -159,7 +173,6 @@ async def receber_pdv_email(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def receber_cpf(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cpf = "".join(filter(str.isdigit, update.message.text.strip()))
 
-    # Apaga a mensagem com CPF por segurança
     try:
         await update.message.delete()
     except Exception:
@@ -176,7 +189,7 @@ async def receber_cpf(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"✅ Documento registrado.\n\n"
         f"🔐 {b('Sobre a segurança das suas credenciais:')}\n\n"
-        f"Sua senha é usada {b('exclusivamente')} para acessar o PDV Legal e baixar seus relatórios automaticamente — da mesma forma que você faz hoje manualmente.\n\n"
+        f"Sua senha é usada {b('exclusivamente')} para acessar o PDV Legal e baixar seus relatórios automaticamente.\n\n"
         f"• Não compartilhamos suas credenciais com terceiros\n"
         f"• Não realizamos nenhuma alteração no seu sistema\n"
         f"• O acesso é somente leitura (download de relatórios)\n"
@@ -191,10 +204,11 @@ async def receber_pdv_senha(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id   = update.effective_chat.id
     user      = update.effective_user
     nome      = user.first_name or "Operador"
-    pdv_email = context.user_data["pdv_email"]
-    cpf       = context.user_data.get("cpf", "")
-    pdv_senha = update.message.text.strip()
-    ja_tem_acesso = context.user_data.get("ja_tem_acesso", False)
+    pdv_email         = context.user_data["pdv_email"]
+    cpf               = context.user_data.get("cpf", "")
+    nome_mercadinho   = context.user_data.get("nome_mercadinho", "")
+    pdv_senha         = update.message.text.strip()
+    ja_tem_acesso     = context.user_data.get("ja_tem_acesso", False)
 
     try:
         await update.message.delete()
@@ -223,6 +237,7 @@ async def receber_pdv_senha(update: Update, context: ContextTypes.DEFAULT_TYPE):
             chat_id,
             pdv_email=pdv_email,
             pdv_senha=pdv_senha,
+            nome_mercadinho=nome_mercadinho,
             status="pendente"
         )
 
@@ -230,7 +245,21 @@ async def receber_pdv_senha(update: Update, context: ContextTypes.DEFAULT_TYPE):
         asaas_id = cliente.get("id")
         await atualizar_usuario(chat_id, asaas_id=asaas_id)
 
-        link = await gerar_link_pagamento(asaas_id, chat_id)
+        # Verifica se já tem assinatura ativa no Asaas (reativação)
+        from pagamento import buscar_assinatura_ativa
+        assinatura_id = await buscar_assinatura_ativa(asaas_id)
+
+        if not assinatura_id:
+            # Cria nova assinatura
+            link, assinatura_id = await gerar_link_pagamento(asaas_id, chat_id)
+        else:
+            # Já tem assinatura — só busca o link da próxima cobrança
+            from pagamento import buscar_link_assinatura
+            link = await buscar_link_assinatura(assinatura_id)
+            logger.info(f"Assinatura existente reutilizada: {assinatura_id}")
+
+        if assinatura_id:
+            await atualizar_usuario(chat_id, assinatura_asaas_id=assinatura_id)
 
         if link:
             kb = InlineKeyboardMarkup([
@@ -357,9 +386,10 @@ def conversation_handler():
     return ConversationHandler(
         entry_points=[CommandHandler("start", cmd_start)],
         states={
-            AGUARDA_PDV_EMAIL: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_pdv_email)],
-            AGUARDA_CPF:       [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_cpf)],
-            AGUARDA_PDV_SENHA: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_pdv_senha)],
+            AGUARDA_PDV_EMAIL:       [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_pdv_email)],
+            AGUARDA_NOME_MERCADINHO: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_nome_mercadinho)],
+            AGUARDA_CPF:             [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_cpf)],
+            AGUARDA_PDV_SENHA:       [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_pdv_senha)],
         },
         fallbacks=[CommandHandler("cancelar", cmd_cancelar_onboarding)],
         allow_reentry=True,

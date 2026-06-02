@@ -972,12 +972,17 @@ async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
         from database import buscar_usuario, atualizar_usuario
         from pagamento import cancelar_assinatura
         usuario = await buscar_usuario(chat_id)
-        if usuario and usuario.get("asaas_id"):
-            await cancelar_assinatura(usuario["asaas_id"])
+        if usuario:
+            # Cancela pelo ID da assinatura (não do cliente)
+            assinatura_id = usuario.get("assinatura_asaas_id")
+            if assinatura_id:
+                sucesso = await cancelar_assinatura(assinatura_id)
+                logger.info(f"Assinatura {assinatura_id} cancelada: {sucesso}")
         await atualizar_usuario(chat_id, status="cancelado")
         await msg.reply_text(
             f"✅ Assinatura cancelada.\n\n"
-            f"Seu acesso foi encerrado. Obrigado por usar o MercadoBot!\n"
+            f"Seu acesso foi encerrado e não haverá novas cobranças.\n"
+            f"Obrigado por usar o MercadoBot!\n\n"
             f"Use /start para reativar quando quiser.",
             parse_mode="HTML"
         )

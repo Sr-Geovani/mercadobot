@@ -19,18 +19,20 @@ async def inicializar_banco():
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("""
             CREATE TABLE IF NOT EXISTS usuarios (
-                chat_id         INTEGER PRIMARY KEY,
-                nome            TEXT,
-                email           TEXT,
-                pdv_email       TEXT,
-                pdv_senha       TEXT,
-                status          TEXT DEFAULT 'pendente',
-                plano           TEXT DEFAULT 'mensal',
-                trial_fim       TEXT,
-                assinatura_fim  TEXT,
-                asaas_id        TEXT,
-                criado_em       TEXT,
-                atualizado_em   TEXT
+                chat_id             INTEGER PRIMARY KEY,
+                nome                TEXT,
+                nome_mercadinho     TEXT,
+                email               TEXT,
+                pdv_email           TEXT,
+                pdv_senha           TEXT,
+                status              TEXT DEFAULT 'pendente',
+                plano               TEXT DEFAULT 'mensal',
+                trial_fim           TEXT,
+                assinatura_fim      TEXT,
+                asaas_id            TEXT,
+                assinatura_asaas_id TEXT,
+                criado_em           TEXT,
+                atualizado_em       TEXT
             )
         """)
         # status: pendente | trial | ativo | cancelado | bloqueado
