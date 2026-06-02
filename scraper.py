@@ -67,6 +67,15 @@ async def exportar_vendas(page, context, data_ini: str, data_fim: str) -> Path:
     destino = DOWNLOAD_DIR / "vendas.xlsx"
     await download.save_as(destino)
     logger.info(f"Vendas baixado: {destino}")
+
+    # DEBUG — inspeciona estrutura do arquivo
+    import pandas as pd
+    df_debug = pd.read_excel(destino)
+    logger.info(f"VENDAS shape: {df_debug.shape}")
+    logger.info(f"VENDAS colunas: {list(df_debug.columns)}")
+    logger.info(f"VENDAS tipos:\n{df_debug.dtypes.to_string()}")
+    logger.info(f"VENDAS amostra:\n{df_debug.head(3).to_string()}")
+
     return destino
 
 
