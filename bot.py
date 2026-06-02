@@ -340,17 +340,45 @@ def bloco_reposicao(produtos: pd.DataFrame, modo: str) -> list:
     return blocos
 
 # ─── INSIGHT IA (curto) ───────────────────────────────────────
-async def insight_ia(contexto: str, tema: str) -> str:
-    client = anthropic.Anthropic(api_key=ANTHROPIC_KEY)
-    prompt = f"""Você é o MercadoBot, assistente para mercadinhos autônomos em condomínios.
+import random
 
-Dados:
+TEMAS_INSIGHT = [
+    ("mix_pagamento", "Analise o mix de pagamento (PIX, Débito, Crédito). Calcule o custo estimado de taxas com base em 1.5% no débito e 2.5% no crédito. Sugira ação concreta para migrar para PIX e o quanto economizaria por mês."),
+    ("ruptura", "Identifique produtos que venderam bem em semanas anteriores mas com queda brusca recente. Calcule a perda estimada de receita se esse produto entrou em ruptura. Sugira ação imediata."),
+    ("horario_morto", "Identifique os 3 horários com menos vendas. Calcule quanto de receita potencial está sendo perdida nesses horários comparado ao horário de pico. Sugira ação para aumentar vendas nesses períodos."),
+    ("comparativo_filiais", "Compare as duas filiais: qual tem maior ticket médio, qual tem maior volume, qual tem mais cancelamentos. Identifique o que a filial melhor pode ensinar para a outra."),
+    ("categoria_oculta", "Identifique a categoria com maior crescimento proporcional e a com maior queda. Sugira ajuste de mix de produtos baseado nesses dados."),
+    ("cancelamentos", "Analise os cancelamentos em detalhe: valor total, percentual do faturamento, comparativo entre filiais. Se estiver acima de 5%, calcule o impacto anual e sugira investigação."),
+    ("produto_ancora", "Identifique o produto âncora de cada filial (maior contribuição de receita). Calcule o risco se esse produto entrar em falta e sugira política de estoque de segurança."),
+    ("dia_semana", "Identifique o melhor e pior dia da semana em faturamento. Calcule a diferença e sugira ação para melhorar o dia mais fraco (promoção, reposição extra, comunicação no condomínio)."),
+    ("ticket_medio", "Analise o ticket médio por filial e por período. Se estiver abaixo de R$ 15, sugira estratégias para aumentá-lo (cross-sell, posicionamento de produtos, combos)."),
+    ("tendencia_semanal", "Identifique a tendência das últimas semanas: o negócio está crescendo ou caindo? Calcule a taxa de variação e projete o faturamento para as próximas 2 semanas se a tendência continuar."),
+]
+
+async def insight_ia(contexto: str, tema: str = None) -> str:
+    client = anthropic.Anthropic(api_key=ANTHROPIC_KEY)
+
+    # Seleciona tema aleatório se não especificado
+    if tema is None or tema == "geral":
+        _, descricao_tema = random.choice(TEMAS_INSIGHT)
+    else:
+        descricao_tema = tema
+
+    prompt = f"""Você é um consultor especialista em mercadinhos autônomos de condomínio no Brasil.
+
+Dados reais do operador:
 {contexto}
 
-Gere exatamente 2 insights curtos sobre: {tema}
-Cada insight em 1 linha. Use • no início. Sem introdução, sem conclusão.
-Foque em ação prática ou alerta específico com número real dos dados.
-Não use traços, asteriscos ou markdown."""
+TAREFA: {descricao_tema}
+
+REGRAS:
+• Responda em 3-5 linhas no máximo
+• Use os números reais dos dados — nunca invente valores
+• Comece com um emoji relevante
+• Seja direto e prático — o operador precisa saber O QUE FAZER
+• Se não houver dados suficientes para esse tema, escolha outro ângulo relevante
+• Não use traços, asteriscos ou markdown
+• Use bullet • para listar no máximo 2 itens de ação"""
 
     msg = client.messages.create(
         model="claude-sonnet-4-6",
@@ -559,7 +587,7 @@ async def fluxo_briefing(msg, chat_id: int):
 
     # Bloco 5 — Insights IA (curtos)
     insight = await insight_ia(ctx, "cancelamentos, quedas de faturamento e oportunidades de produto")
-    await enviar(msg, f"💡 {b('INSIGHTS')}\n\n{insight}")
+    await enviar(msg, f"💡 {b('INSIGHT DO DIA')}\n\n{insight}")
 
     await abrir_menu(msg)
 
@@ -893,7 +921,9 @@ async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ini, fim, label = periodos[acao]
             await executar_atualizacao(msg, chat_id, ini, fim, label)
         return
-        modo = acao.split("_")[1]  # 'exato' ou 'estoque'
+
+    if acao.startswith("rep_"):
+        modo = acao.split("_")[1]
         d = dados_usuario.get(chat_id, {})
         produtos = d.get("produtos")
         if produtos is None:
@@ -931,17 +961,86 @@ async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ─── MAIN — ver ao final do arquivo ─────────────────────────
 
 
-# ─── INICIALIZAÇÃO COM SCHEDULER ─────────────────────────────
-# Substitui o main() original para incluir o agendador automático
+# ─── MIDDLEWARE DE CONTROLE DE ACESSO ────────────────────────
+async def verificar_acesso(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    """
+    Verifica se o usuário tem acesso ativo.
+    Retorna True se pode usar, False se bloqueado.
+    """
+    from database import usuario_tem_acesso
+    chat_id = update.effective_chat.id
 
-import asyncio as _asyncio
+    # Comandos liberados sem autenticação
+    msg = getattr(update, "message", None) or getattr(update, "callback_query", {})
+    texto = getattr(msg, "text", "") or ""
+    if texto.startswith("/start"):
+        return True
 
+    tem_acesso, motivo = await usuario_tem_acesso(chat_id)
+
+    if tem_acesso:
+        return True
+
+    mensagens = {
+        "nao_cadastrado": (
+            f"👋 Olá! Use /start para se cadastrar no MercadoBot.\n\n"
+            f"7 dias grátis, depois R$ 29,90/mês."
+        ),
+        "trial_expirado": (
+            f"⏰ {b('Seu trial de 7 dias encerrou.')}\n\n"
+            f"Para continuar usando o MercadoBot, ative sua assinatura:"
+        ),
+        "expirado": (
+            f"⚠️ {b('Sua assinatura expirou.')}\n\n"
+            f"Regularize para continuar usando o MercadoBot."
+        ),
+        "bloqueado": (
+            f"🔒 {b('Acesso bloqueado.')}\n\n"
+            f"Use /assinar para reativar sua conta."
+        ),
+        "cancelado": (
+            f"😔 Sua assinatura foi cancelada.\n\n"
+            f"Use /assinar para reativar quando quiser."
+        ),
+        "pendente": (
+            f"⏳ Seu cadastro está pendente.\n\n"
+            f"Complete o pagamento para ativar o acesso."
+        ),
+    }
+
+    texto_bloqueio = mensagens.get(motivo, "Use /start para acessar o MercadoBot.")
+
+    if update.message:
+        await update.message.reply_text(texto_bloqueio, parse_mode="HTML")
+    elif update.callback_query:
+        await update.callback_query.answer("Acesso bloqueado. Use /start.")
+        await update.callback_query.message.reply_text(texto_bloqueio, parse_mode="HTML")
+
+    return False
+
+
+# ─── INICIALIZAÇÃO COM SCHEDULER E SAAS ──────────────────────
 def main():
     garantir_browser()
-    from scheduler import iniciar_scheduler
 
-    app = ApplicationBuilder().token(TELEGRAM_TOKEN).post_init(configurar_menu).build()
-    app.add_handler(CommandHandler("start",      start))
+    from scheduler import iniciar_scheduler
+    from onboarding import conversation_handler
+    from webhook_server import iniciar_servidor_webhook, set_bot
+    from database import inicializar_banco
+
+    async def post_init(app):
+        await inicializar_banco()
+        await configurar_menu(app)
+        set_bot(app.bot)
+        runner = await iniciar_servidor_webhook()
+        app.bot_data["webhook_runner"] = runner
+        logger.info("✅ SaaS inicializado — banco, webhook e menu prontos.")
+
+    app = ApplicationBuilder().token(TELEGRAM_TOKEN).post_init(post_init).build()
+
+    # Onboarding tem prioridade (group=-1)
+    app.add_handler(conversation_handler(), group=-1)
+
     app.add_handler(CommandHandler("menu",       comando_menu))
     app.add_handler(CommandHandler("briefing",   comando_briefing))
     app.add_handler(CommandHandler("produtos",   comando_produtos))
@@ -956,10 +1055,9 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, mensagem_livre))
     app.add_handler(CallbackQueryHandler(callback_botoes))
 
-    # Inicia o agendador junto com o bot
     iniciar_scheduler()
 
-    print("🤖 MercadoBot rodando com briefing automático às 07:00...")
+    print("🤖 MercadoBot SaaS rodando...")
     app.run_polling()
 
 if __name__ == "__main__":
