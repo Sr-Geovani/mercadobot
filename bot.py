@@ -610,16 +610,19 @@ async def fluxo_briefing(msg, chat_id: int):
 async def comando_briefing(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     d = dados_usuario.get(chat_id, {})
-    if not d.get("vendas") and not d.get("produtos"):
+    vendas   = d.get("vendas")
+    produtos = d.get("produtos")
+    if (vendas is None or vendas.empty) and (produtos is None or produtos.empty):
         await pedir_periodo(update.message)
         return
     await update.message.reply_text("⏳ Gerando briefing completo...")
     await fluxo_briefing(update.message, chat_id)
 
 async def comando_produtos(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = update.effective_chat.id
-    d = dados_usuario.get(chat_id, {})
-    if d.get("produtos") is None:
+    chat_id  = update.effective_chat.id
+    d        = dados_usuario.get(chat_id, {})
+    produtos = d.get("produtos")
+    if produtos is None or produtos.empty:
         await pedir_periodo(update.message)
         return
     await update.message.reply_text("⏳ Analisando produtos...")
@@ -631,9 +634,10 @@ async def comando_produtos(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await abrir_menu(update.message)
 
 async def comando_categorias(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = update.effective_chat.id
-    d = dados_usuario.get(chat_id, {})
-    if d.get("produtos") is None:
+    chat_id  = update.effective_chat.id
+    d        = dados_usuario.get(chat_id, {})
+    produtos = d.get("produtos")
+    if produtos is None or produtos.empty:
         await pedir_periodo(update.message)
         return
     await update.message.reply_text("⏳ Calculando receita por categoria...")
@@ -646,8 +650,9 @@ async def comando_categorias(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 async def comando_pagamentos(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
-    d = dados_usuario.get(chat_id, {})
-    if d.get("vendas") is None:
+    d       = dados_usuario.get(chat_id, {})
+    vendas  = d.get("vendas")
+    if vendas is None or vendas.empty:
         await pedir_periodo(update.message)
         return
     await update.message.reply_text("⏳ Analisando mix de pagamentos...")
@@ -660,8 +665,9 @@ async def comando_pagamentos(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 async def comando_semana(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
-    d = dados_usuario.get(chat_id, {})
-    if d.get("vendas") is None:
+    d       = dados_usuario.get(chat_id, {})
+    vendas  = d.get("vendas")
+    if vendas is None or vendas.empty:
         await pedir_periodo(update.message)
         return
     await update.message.reply_text("⏳ Calculando evolução semanal...")
@@ -674,8 +680,9 @@ async def comando_semana(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def comando_pico(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
-    d = dados_usuario.get(chat_id, {})
-    if d.get("vendas") is None:
+    d       = dados_usuario.get(chat_id, {})
+    vendas  = d.get("vendas")
+    if vendas is None or vendas.empty:
         await pedir_periodo(update.message)
         return
     await update.message.reply_text("⏳ Analisando horários de pico...")
@@ -688,14 +695,11 @@ async def comando_pico(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def comando_alertas(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
-    d = dados_usuario.get(chat_id, {})
-    if not d:
+    d       = dados_usuario.get(chat_id, {})
+    vendas  = d.get("vendas")
+    if not d or vendas is None:
         await pedir_periodo(update.message)
         return
-
-    linhas = [f"🚨 {b('ALERTAS E ATENÇÕES')}\n"]
-
-    if vendas is not None:
         cancel = vendas["ValorItensCancelados"].sum()
         total  = vendas["valor"].sum()
         pct    = cancel/total*100
@@ -1060,8 +1064,11 @@ async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
     }
 
     if acao == "briefing":
-        d = dados_usuario.get(chat_id, {})
-        if not d.get("vendas") and not d.get("produtos"):
+        d        = dados_usuario.get(chat_id, {})
+        vendas   = d.get("vendas")
+        produtos = d.get("produtos")
+        sem_dados = (vendas is None or vendas.empty) and (produtos is None or produtos.empty)
+        if sem_dados:
             await pedir_periodo(msg)
             return
         await msg.reply_text("⏳ Gerando briefing completo...")
