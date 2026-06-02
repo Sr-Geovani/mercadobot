@@ -865,6 +865,18 @@ async def mensagem_livre(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await enviar(update.message, insight)
     await abrir_menu(update.message)
 
+async def receber_arquivo_com_acesso(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Verifica acesso antes de processar arquivo."""
+    if not await verificar_acesso(update, context):
+        return
+    await receber_arquivo(update, context)
+
+async def mensagem_livre_com_acesso(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Verifica acesso antes de processar mensagem livre."""
+    if not await verificar_acesso(update, context):
+        return
+    await mensagem_livre(update, context)
+
 async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     chat_id = query.message.chat_id
@@ -1038,10 +1050,10 @@ def main():
 
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).post_init(post_init).build()
 
-    # ConversationHandler do onboarding — grupo 0, processa primeiro
+    # ConversationHandler do onboarding — grupo 0, tem prioridade total
     app.add_handler(conversation_handler())
 
-    # Demais handlers — grupo 1, só processam se conversation não capturou
+    # Demais handlers — grupo 1, só processam após o conversation liberar
     app.add_handler(CommandHandler("menu",       comando_menu),       group=1)
     app.add_handler(CommandHandler("briefing",   comando_briefing),   group=1)
     app.add_handler(CommandHandler("produtos",   comando_produtos),   group=1)
@@ -1052,9 +1064,9 @@ def main():
     app.add_handler(CommandHandler("alertas",    comando_alertas),    group=1)
     app.add_handler(CommandHandler("reposicao",  comando_reposicao),  group=1)
     app.add_handler(CommandHandler("atualizar",  comando_atualizar),  group=1)
-    app.add_handler(MessageHandler(filters.Document.ALL,              receber_arquivo), group=1)
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND,   mensagem_livre),  group=1)
-    app.add_handler(CallbackQueryHandler(callback_botoes),            group=1)
+    app.add_handler(MessageHandler(filters.Document.ALL,            receber_arquivo_com_acesso), group=1)
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, mensagem_livre_com_acesso),  group=1)
+    app.add_handler(CallbackQueryHandler(callback_botoes),                                        group=1)
 
     iniciar_scheduler()
 

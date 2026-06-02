@@ -153,4 +153,6 @@ def conversation_handler():
         },
         fallbacks=[CommandHandler("cancelar", cmd_cancelar)],
         allow_reentry=True,
+        per_message=False,
+        per_chat=True,
     )
