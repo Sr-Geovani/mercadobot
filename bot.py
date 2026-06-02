@@ -358,6 +358,34 @@ Não use traços, asteriscos ou markdown."""
     )
     return msg.content[0].text.strip()
 
+def normalizar_vendas(df: pd.DataFrame) -> pd.DataFrame:
+    """Garante tipos corretos nas colunas do relatório de vendas."""
+    df = df.copy()
+    # Colunas de texto
+    for col in ["nomeFilial", "FormaRecebimento", "StatusCupom", "Operador"]:
+        if col in df.columns:
+            df[col] = df[col].astype(str).str.strip()
+    # Colunas numéricas
+    for col in ["valor", "acrescimo", "desconto", "faturado", "ValorItensCancelados"]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
+    # Colunas booleanas
+    for col in ["PossuiItemCancelado", "Estornado"]:
+        if col in df.columns:
+            df[col] = df[col].astype(str).str.upper().isin(["TRUE","1","SIM","YES"])
+    return df
+
+def normalizar_produtos(df: pd.DataFrame) -> pd.DataFrame:
+    """Garante tipos corretos nas colunas do relatório de produtos."""
+    df = df.copy()
+    for col in ["produto", "nomeloja", "grupo"]:
+        if col in df.columns:
+            df[col] = df[col].astype(str).str.strip()
+    for col in ["quantidade", "valor"]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
+    return df
+
 def resumo_dados(chat_id: int) -> str:
     d = dados_usuario.get(chat_id, {})
     vendas   = d.get("vendas")
@@ -471,14 +499,14 @@ async def receber_arquivo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if chat_id not in dados_usuario:
             dados_usuario[chat_id] = {}
         if "nomefilial" in colunas and "formarecebimento" in colunas:
-            dados_usuario[chat_id]["vendas"] = df
+            dados_usuario[chat_id]["vendas"] = normalizar_vendas(df)
             await update.message.reply_text(
                 f"✅ {b('Resumo de Vendas carregado')}\n📊 {len(df)} transações encontradas.\n\n"
                 "Envie agora os <i>Produtos Mais Vendidos</i> ou use o menu abaixo.",
                 parse_mode="HTML", reply_markup=kb_menu()
             )
         elif "produto" in colunas and "quantidade" in colunas:
-            dados_usuario[chat_id]["produtos"] = df
+            dados_usuario[chat_id]["produtos"] = normalizar_produtos(df)
             await update.message.reply_text(
                 f"✅ {b('Produtos carregados')}\n📦 {df['produto'].nunique()} SKUs encontrados.\n\n"
                 "Tudo pronto! Escolha uma análise:",
@@ -725,8 +753,8 @@ async def executar_atualizacao(msg, chat_id: int, data_ini: str, data_fim: str, 
             f"⏳ Processando e gerando análises..."
         )
 
-        vendas   = pd.read_excel(path_vendas)
-        produtos = pd.read_excel(path_produtos)
+        vendas   = normalizar_vendas(pd.read_excel(path_vendas))
+        produtos = normalizar_produtos(pd.read_excel(path_produtos))
 
         if chat_id not in dados_usuario:
             dados_usuario[chat_id] = {}
