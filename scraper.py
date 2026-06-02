@@ -68,13 +68,21 @@ async def exportar_vendas(page, context, data_ini: str, data_fim: str) -> Path:
     await download.save_as(destino)
     logger.info(f"Vendas baixado: {destino}")
 
-    # DEBUG — inspeciona estrutura do arquivo
+    # DEBUG — inspeciona todas as abas e skiprows
     import pandas as pd
-    df_debug = pd.read_excel(destino)
-    logger.info(f"VENDAS shape: {df_debug.shape}")
-    logger.info(f"VENDAS colunas: {list(df_debug.columns)}")
-    logger.info(f"VENDAS tipos:\n{df_debug.dtypes.to_string()}")
-    logger.info(f"VENDAS amostra:\n{df_debug.head(3).to_string()}")
+    from openpyxl import load_workbook
+    wb = load_workbook(destino, read_only=True)
+    logger.info(f"VENDAS abas: {wb.sheetnames}")
+    wb.close()
+
+    for skip in range(0, 8):
+        df_test = pd.read_excel(destino, skiprows=skip)
+        nao_nulos = df_test.dropna(how="all")
+        tem_dados = "nomeFilial" in df_test.columns or "valor" in df_test.columns
+        logger.info(f"skiprows={skip}: {len(nao_nulos)} linhas não-nulas, colunas={list(df_test.columns)[:4]}, tem_dados={tem_dados}")
+        if tem_dados and len(nao_nulos) > 5:
+            logger.info(f"✅ skiprows={skip} é o correto")
+            break
 
     return destino
 
