@@ -8,8 +8,14 @@ import logging
 import asyncio
 from datetime import datetime, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 logger = logging.getLogger(__name__)
+
+BRASILIA = ZoneInfo("America/Sao_Paulo")
+
+def agora_brasilia():
+    return datetime.now(BRASILIA)
 
 PDV_URL      = "https://pdvlegal.com.br/loginpdvlegal.aspx"
 PDV_EMAIL    = os.environ.get("PDV_EMAIL")
@@ -38,19 +44,26 @@ async def exportar_vendas(page, context, data_ini: str, data_fim: str) -> Path:
     await page.wait_for_timeout(1500)
     logger.info("Página de vendas carregada")
 
-    # Preenche datas clicando e digitando (datepicker reconhece input humano)
-    campo_ini = page.locator("#ContentPlaceHolder1_txtdatapadrao1")
-    await campo_ini.click(click_count=3)
-    await campo_ini.type(data_ini, delay=50)
+    # Preenche data início digitando e confirmando com Tab
+    await page.click("#ContentPlaceHolder1_txtdatapadrao1")
+    await page.wait_for_timeout(300)
+    await page.keyboard.press("Control+a")
+    await page.keyboard.type(data_ini, delay=80)
     await page.keyboard.press("Tab")
     await page.wait_for_timeout(500)
 
-    campo_fim = page.locator("#ContentPlaceHolder1_txtdatapadrao2")
-    await campo_fim.click(click_count=3)
-    await campo_fim.type(data_fim, delay=50)
-    await page.keyboard.press("Escape")
-    await page.wait_for_timeout(800)
-    logger.info(f"Datas preenchidas: {data_ini} → {data_fim}")
+    # Preenche data fim digitando e confirmando com Tab
+    await page.click("#ContentPlaceHolder1_txtdatapadrao2")
+    await page.wait_for_timeout(300)
+    await page.keyboard.press("Control+a")
+    await page.keyboard.type(data_fim, delay=80)
+    await page.keyboard.press("Tab")
+    await page.wait_for_timeout(500)
+
+    # Confirma valores
+    val_ini = await page.evaluate("document.getElementById('ContentPlaceHolder1_txtdatapadrao1').value")
+    val_fim = await page.evaluate("document.getElementById('ContentPlaceHolder1_txtdatapadrao2').value")
+    logger.info(f"Datas confirmadas: ini='{val_ini}' fim='{val_fim}'")
 
     # Seleciona todas as lojas
     await page.select_option("#ContentPlaceHolder1_ddlfilialpadrao", value="0")
@@ -160,8 +173,8 @@ async def _baixar_async(data_ini: str, data_fim: str) -> tuple:
 
 
 def baixar_relatorios() -> tuple:
-    """Baixa relatórios do dia anterior."""
-    ontem = (datetime.now() - timedelta(days=1)).strftime("%d/%m/%Y")
+    """Baixa relatórios do dia anterior no horário de Brasília."""
+    ontem = (agora_brasilia() - timedelta(days=1)).strftime("%d/%m/%Y")
     return baixar_relatorios_periodo(ontem, ontem)
 
 

@@ -844,7 +844,9 @@ async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ─── Atualizar: período escolhido ───────────────────────
     if acao.startswith("atualizar_"):
         from datetime import datetime, timedelta
-        hoje   = datetime.now()
+        from zoneinfo import ZoneInfo
+        brasilia = ZoneInfo("America/Sao_Paulo")
+        hoje   = datetime.now(brasilia)
         ontem  = hoje - timedelta(days=1)
         fmt    = "%d/%m/%Y"
 
