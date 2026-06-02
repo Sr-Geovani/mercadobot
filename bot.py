@@ -1051,23 +1051,23 @@ def main():
 
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).post_init(post_init).build()
 
-    # ConversationHandler do onboarding — grupo 0, tem prioridade total
+    # ConversationHandler PRIMEIRO — captura mensagens do onboarding
     app.add_handler(conversation_handler())
 
-    # Demais handlers — grupo 1, só processam após o conversation liberar
-    app.add_handler(CommandHandler("menu",       comando_menu),       group=1)
-    app.add_handler(CommandHandler("briefing",   comando_briefing),   group=1)
-    app.add_handler(CommandHandler("produtos",   comando_produtos),   group=1)
-    app.add_handler(CommandHandler("categorias", comando_categorias), group=1)
-    app.add_handler(CommandHandler("pagamentos", comando_pagamentos), group=1)
-    app.add_handler(CommandHandler("semana",     comando_semana),     group=1)
-    app.add_handler(CommandHandler("pico",       comando_pico),       group=1)
-    app.add_handler(CommandHandler("alertas",    comando_alertas),    group=1)
-    app.add_handler(CommandHandler("reposicao",  comando_reposicao),  group=1)
-    app.add_handler(CommandHandler("atualizar",  comando_atualizar),  group=1)
-    app.add_handler(MessageHandler(filters.Document.ALL,            receber_arquivo_com_acesso), group=1)
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, mensagem_livre_com_acesso),  group=1)
-    app.add_handler(CallbackQueryHandler(callback_botoes),                                        group=1)
+    # Demais handlers no mesmo grupo — só ativam quando conversation não está ativo
+    app.add_handler(CommandHandler("menu",       comando_menu))
+    app.add_handler(CommandHandler("briefing",   comando_briefing))
+    app.add_handler(CommandHandler("produtos",   comando_produtos))
+    app.add_handler(CommandHandler("categorias", comando_categorias))
+    app.add_handler(CommandHandler("pagamentos", comando_pagamentos))
+    app.add_handler(CommandHandler("semana",     comando_semana))
+    app.add_handler(CommandHandler("pico",       comando_pico))
+    app.add_handler(CommandHandler("alertas",    comando_alertas))
+    app.add_handler(CommandHandler("reposicao",  comando_reposicao))
+    app.add_handler(CommandHandler("atualizar",  comando_atualizar))
+    app.add_handler(MessageHandler(filters.Document.ALL,            receber_arquivo_com_acesso))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, mensagem_livre_com_acesso))
+    app.add_handler(CallbackQueryHandler(callback_botoes))
 
     iniciar_scheduler()
 

@@ -69,8 +69,12 @@ async def receber_pdv_email(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["pdv_email"] = pdv_email
 
     await update.message.reply_text(
-        f"✅ E-mail: {i(pdv_email)}\n\n"
-        f"Para emitir sua cobrança, preciso do seu {b('CPF ou CNPJ')} (só números):",
+        f"✅ E-mail registrado.\n\n"
+        f"Para emitir sua cobrança, preciso do seu {b('CPF ou CNPJ')} (só números).\n\n"
+        f"🎁 {b('Não se preocupe')} — você terá {b('7 dias de teste gratuito')} "
+        f"antes de qualquer cobrança. Pode cancelar a qualquer momento durante esse período "
+        f"sem pagar nada.\n\n"
+        f"Digite seu CPF ou CNPJ:",
         parse_mode="HTML"
     )
     return AGUARDA_CPF
@@ -124,13 +128,13 @@ async def receber_pdv_senha(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("⏳ Configurando sua conta, aguarde...")
 
     try:
-        # Cria usuário no banco
+        # Cria usuário no banco com status pendente até pagamento
         await criar_usuario(chat_id, nome, pdv_email)
         await atualizar_usuario(
             chat_id,
             pdv_email=pdv_email,
             pdv_senha=pdv_senha,
-            status="trial"
+            status="pendente"
         )
 
         # Cria cliente no Asaas com CPF
