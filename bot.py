@@ -955,7 +955,7 @@ async def cmd_cancelar_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     await cmd_cancelar_assinatura(update, context)
 
 async def cmd_configuracoes_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Abre menu de configurações."""
+    chat_id = update.effective_chat.id
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("🔑 Atualizar e-mail e senha do PDV Legal", callback_data="atualizar_credenciais")],
         [InlineKeyboardButton("🔍 Ver status da assinatura", callback_data="verificar_status")],
@@ -1041,8 +1041,14 @@ async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ─── Atualizar credenciais PDV Legal ─────────────────────
     if acao == "atualizar_credenciais":
-        from onboarding import iniciar_atualizacao_credenciais
-        await iniciar_atualizacao_credenciais(msg, chat_id)
+        if chat_id not in dados_usuario:
+            dados_usuario[chat_id] = {}
+        dados_usuario[chat_id]["aguardando"] = "novo_email"
+        await msg.reply_text(
+            f"⚙️ {b('Atualizar credenciais PDV Legal')}\n\n"
+            f"Digite seu novo {b('e-mail de login do PDV Legal')}:",
+            parse_mode="HTML"
+        )
         return
 
     # ─── Reativar assinatura ─────────────────────────────────
