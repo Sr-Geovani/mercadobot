@@ -709,6 +709,20 @@ async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
     acao = query.data
     msg  = query.message
 
+    # ─── Atualizar menu (deve vir ANTES do startswith) ──────
+    if acao == "atualizar_menu":
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("📅 Hoje",           callback_data="atualizar_hoje")],
+            [InlineKeyboardButton("📅 Ontem",          callback_data="atualizar_ontem")],
+            [InlineKeyboardButton("📅 Últimos 7 dias", callback_data="atualizar_7dias")],
+            [InlineKeyboardButton("📅 Mês atual",      callback_data="atualizar_mes")],
+        ])
+        await msg.reply_text(
+            f"🔄 {b('ATUALIZAR DADOS')}\n\nQual período deseja buscar agora?",
+            parse_mode="HTML", reply_markup=kb
+        )
+        return
+
     # ─── Atualizar: período escolhido ───────────────────────
     if acao.startswith("atualizar_"):
         from datetime import datetime, timedelta
@@ -717,8 +731,8 @@ async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
         fmt    = "%d/%m/%Y"
 
         periodos = {
-            "atualizar_hoje":   (hoje.strftime(fmt),  hoje.strftime(fmt),  hoje.strftime(fmt)),
-            "atualizar_ontem":  (ontem.strftime(fmt), ontem.strftime(fmt), ontem.strftime(fmt)),
+            "atualizar_hoje":   (hoje.strftime(fmt),  hoje.strftime(fmt),  "hoje"),
+            "atualizar_ontem":  (ontem.strftime(fmt), ontem.strftime(fmt), "ontem"),
             "atualizar_7dias":  ((hoje - timedelta(days=7)).strftime(fmt), hoje.strftime(fmt), "últimos 7 dias"),
             "atualizar_mes":    (hoje.strftime("01/%m/%Y"), hoje.strftime(fmt), f"mês de {hoje.strftime('%B')}"),
         }
@@ -727,7 +741,6 @@ async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ini, fim, label = periodos[acao]
             await executar_atualizacao(msg, chat_id, ini, fim, label)
         return
-    if acao.startswith("rep_"):
         modo = acao.split("_")[1]  # 'exato' ou 'estoque'
         d = dados_usuario.get(chat_id, {})
         produtos = d.get("produtos")
@@ -741,19 +754,6 @@ async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await enviar(msg, bloco)
         aguardando_dias.pop(chat_id, None)
         await abrir_menu(msg)
-        return
-
-    if acao == "atualizar_menu":
-        kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("📅 Hoje",           callback_data="atualizar_hoje")],
-            [InlineKeyboardButton("📅 Ontem",          callback_data="atualizar_ontem")],
-            [InlineKeyboardButton("📅 Últimos 7 dias", callback_data="atualizar_7dias")],
-            [InlineKeyboardButton("📅 Mês atual",      callback_data="atualizar_mes")],
-        ])
-        await msg.reply_text(
-            f"🔄 {b('ATUALIZAR DADOS')}\n\nQual período deseja buscar agora?",
-            parse_mode="HTML", reply_markup=kb
-        )
         return
 
     cmds = {

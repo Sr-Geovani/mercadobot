@@ -1,12 +1,2 @@
-[phases.setup]
-nixPkgs = ["python312"]
-
-[phases.install]
-cmds = [
-  "pip install -r requirements.txt",
-  "playwright install chromium",
-  "playwright install-deps chromium"
-]
-
 [start]
-cmd = "python bot.py"
+cmd = "bash start.sh"
