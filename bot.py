@@ -360,8 +360,13 @@ Não use traços, asteriscos ou markdown."""
     return msg.content[0].text.strip()
 
 def normalizar_vendas(df: pd.DataFrame) -> pd.DataFrame:
-    """Garante tipos corretos nas colunas do relatório de vendas."""
+    """Garante tipos corretos e remove linhas vazias do relatório de vendas."""
     df = df.copy()
+    # Remove linhas completamente vazias
+    df = df.dropna(how="all")
+    # Remove linhas sem idUnico (linhas de rodapé/cabeçalho extra)
+    if "idUnico" in df.columns:
+        df = df[df["idUnico"].notna() & (df["idUnico"].astype(str).str.strip() != "")]
     # Colunas de texto
     for col in ["nomeFilial", "FormaRecebimento", "StatusCupom", "Operador"]:
         if col in df.columns:
@@ -374,6 +379,7 @@ def normalizar_vendas(df: pd.DataFrame) -> pd.DataFrame:
     for col in ["PossuiItemCancelado", "Estornado"]:
         if col in df.columns:
             df[col] = df[col].astype(str).str.upper().isin(["TRUE","1","SIM","YES"])
+    logger.info(f"Vendas normalizadas: {len(df)} linhas válidas")
     return df
 
 def normalizar_produtos(df: pd.DataFrame) -> pd.DataFrame:
@@ -568,6 +574,7 @@ async def comando_produtos(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if produtos is None:
         await update.message.reply_text("📎 Envie o arquivo de Produtos Mais Vendidos primeiro.")
         return
+    await update.message.reply_text("⏳ Analisando produtos...")
     await enviar(update.message, bloco_top_produtos(produtos))
     await update.message.reply_photo(photo=g_top_produtos(produtos))
     ctx = resumo_dados(chat_id)
@@ -582,6 +589,7 @@ async def comando_categorias(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if produtos is None:
         await update.message.reply_text("📎 Envie o arquivo de Produtos Mais Vendidos primeiro.")
         return
+    await update.message.reply_text("⏳ Calculando receita por categoria...")
     await enviar(update.message, bloco_categorias(produtos))
     await update.message.reply_photo(photo=g_categorias(produtos))
     ctx = resumo_dados(chat_id)
@@ -596,6 +604,7 @@ async def comando_pagamentos(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if vendas is None:
         await update.message.reply_text("📎 Envie o arquivo de Vendas primeiro.")
         return
+    await update.message.reply_text("⏳ Analisando mix de pagamentos...")
     await enviar(update.message, bloco_pagamentos(vendas))
     await update.message.reply_photo(photo=g_pagamentos(vendas))
     ctx = resumo_dados(chat_id)
@@ -610,6 +619,7 @@ async def comando_semana(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if vendas is None:
         await update.message.reply_text("📎 Envie o arquivo de Vendas primeiro.")
         return
+    await update.message.reply_text("⏳ Calculando evolução semanal...")
     await enviar(update.message, bloco_semanal(vendas))
     await update.message.reply_photo(photo=g_semanal(vendas))
     ctx = resumo_dados(chat_id)
@@ -624,6 +634,7 @@ async def comando_pico(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if vendas is None:
         await update.message.reply_text("📎 Envie o arquivo de Vendas primeiro.")
         return
+    await update.message.reply_text("⏳ Analisando horários de pico...")
     await enviar(update.message, bloco_pico(vendas))
     await update.message.reply_photo(photo=g_pico(vendas))
     ctx = resumo_dados(chat_id)
@@ -757,15 +768,21 @@ async def executar_atualizacao(msg, chat_id: int, data_ini: str, data_fim: str, 
         vendas_raw   = pd.read_excel(path_vendas)
         produtos_raw = pd.read_excel(path_produtos)
 
-        # DEBUG — loga estrutura dos arquivos baixados
-        logger.info(f"VENDAS shape: {vendas_raw.shape}")
-        logger.info(f"VENDAS colunas: {list(vendas_raw.columns)}")
-        logger.info(f"VENDAS primeiras linhas:\n{vendas_raw.head(3).to_string()}")
-        logger.info(f"PRODUTOS shape: {produtos_raw.shape}")
-        logger.info(f"PRODUTOS colunas: {list(produtos_raw.columns)}")
-
         vendas   = normalizar_vendas(vendas_raw)
         produtos = normalizar_produtos(produtos_raw)
+
+        # Valida se vieram dados reais
+        if len(vendas) == 0:
+            await atualizar_status(
+                f"🔄 Buscando dados — {b(label)}\n\n"
+                f"⚠️ O relatório de vendas veio sem dados para esse período.\n\n"
+                f"Possíveis causas:\n"
+                f"• Não houve vendas nesse dia\n"
+                f"• O filtro de data não foi reconhecido\n\n"
+                f"Tente outro período ou importe o arquivo manualmente."
+            )
+            await abrir_menu(msg)
+            return
 
         if chat_id not in dados_usuario:
             dados_usuario[chat_id] = {}
@@ -822,10 +839,25 @@ async def mensagem_livre(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    await query.answer()
     chat_id = query.message.chat_id
     acao = query.data
     msg  = query.message
+
+    # Mapa de textos para o popup instantâneo
+    textos_popup = {
+        "briefing":       "📊 Gerando briefing...",
+        "produtos":       "📦 Analisando produtos...",
+        "categorias":     "🗂 Calculando categorias...",
+        "pagamentos":     "💳 Analisando pagamentos...",
+        "semana":         "📅 Calculando semanas...",
+        "pico":           "🕐 Analisando horários...",
+        "alertas":        "⚠️ Verificando alertas...",
+        "reposicao":      "🛒 Abrindo reposição...",
+        "atualizar_menu": "🔄 Carregando períodos...",
+    }
+
+    popup = textos_popup.get(acao, "⏳ Processando...")
+    await query.answer(popup)
 
     # ─── Atualizar menu (deve vir ANTES do startswith) ──────
     if acao == "atualizar_menu":
