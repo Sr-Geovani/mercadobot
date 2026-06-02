@@ -965,6 +965,26 @@ async def comando_alertas(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await enviar(update.message, "\n".join(linhas))
     await abrir_menu(update.message)
 
+
+async def comando_reposicao(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    d = dados_usuario.get(chat_id, {})
+    if d.get("produtos") is None:
+        await pedir_periodo(update.message)
+        return
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("\u2705 Repor exatamente o que saiu", callback_data="rep_exato")],
+        [InlineKeyboardButton("\U0001f4e6 Repor + estoque de seguran\u00e7a (30%)", callback_data="rep_estoque")],
+    ])
+    await update.message.reply_text(
+        f"\U0001f6d2 {b('LISTA DE REPOSI\u00c7\u00c3O')}\n\n"
+        f"A lista \u00e9 baseada em tudo que saiu da loja no per\u00edodo importado.\n\n"
+        f"Como deseja repor?",
+        parse_mode="HTML",
+        reply_markup=kb
+    )
+
+
 async def comando_comparativo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     d = dados_usuario.get(chat_id, {})
