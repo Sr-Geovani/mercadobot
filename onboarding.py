@@ -13,6 +13,7 @@ logger = logging.getLogger(__name__)
 # Estados da conversa
 AGUARDA_PDV_EMAIL = 1
 AGUARDA_PDV_SENHA = 2
+AGUARDA_CPF      = 3
 
 def b(t): return f"<b>{t}</b>"
 def i(t): return f"<i>{t}</i>"
@@ -69,6 +70,25 @@ async def receber_pdv_email(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(
         f"✅ E-mail: {i(pdv_email)}\n\n"
+        f"Para emitir sua cobrança, preciso do seu {b('CPF ou CNPJ')} (só números):",
+        parse_mode="HTML"
+    )
+    return AGUARDA_CPF
+
+
+async def receber_cpf(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    cpf = "".join(filter(str.isdigit, update.message.text.strip()))
+
+    if len(cpf) not in (11, 14):
+        await update.message.reply_text(
+            "⚠️ CPF ou CNPJ inválido. Digite apenas os números (11 dígitos para CPF, 14 para CNPJ):"
+        )
+        return AGUARDA_CPF
+
+    context.user_data["cpf"] = cpf
+
+    await update.message.reply_text(
+        f"✅ Documento registrado.\n\n"
         f"🔐 {b('Sobre a segurança das suas credenciais:')}\n\n"
         f"Sua senha é usada {b('exclusivamente')} para acessar o PDV Legal e baixar seus relatórios automaticamente — da mesma forma que você faz hoje manualmente.\n\n"
         f"• Não compartilhamos suas credenciais com terceiros\n"
@@ -86,6 +106,7 @@ async def receber_pdv_senha(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user      = update.effective_user
     nome      = user.first_name or "Operador"
     pdv_email = context.user_data["pdv_email"]
+    cpf       = context.user_data.get("cpf", "")
     pdv_senha = update.message.text.strip()
 
     # Apaga a mensagem com a senha por segurança
@@ -106,8 +127,8 @@ async def receber_pdv_senha(update: Update, context: ContextTypes.DEFAULT_TYPE):
             status="trial"
         )
 
-        # Cria cliente no Asaas
-        cliente  = await criar_cliente_asaas(nome, pdv_email)
+        # Cria cliente no Asaas com CPF
+        cliente  = await criar_cliente_asaas(nome, pdv_email, cpf)
         asaas_id = cliente.get("id")
         await atualizar_usuario(chat_id, asaas_id=asaas_id)
 
@@ -158,6 +179,7 @@ def conversation_handler():
         entry_points=[CommandHandler("start", cmd_start)],
         states={
             AGUARDA_PDV_EMAIL: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_pdv_email)],
+            AGUARDA_CPF:       [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_cpf)],
             AGUARDA_PDV_SENHA: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_pdv_senha)],
         },
         fallbacks=[CommandHandler("cancelar", cmd_cancelar)],

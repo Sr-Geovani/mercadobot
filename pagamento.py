@@ -27,7 +27,7 @@ def _headers():
 
 
 async def criar_cliente_asaas(nome: str, email: str, cpf: str = None) -> dict:
-    """Cria ou busca cliente no Asaas."""
+    """Cria ou busca cliente no Asaas, atualizando CPF se necessário."""
     async with httpx.AsyncClient() as client:
         # Verifica se já existe
         resp = await client.get(
@@ -37,8 +37,17 @@ async def criar_cliente_asaas(nome: str, email: str, cpf: str = None) -> dict:
         )
         data = resp.json()
         if data.get("data"):
+            cliente = data["data"][0]
             logger.info(f"Cliente já existe no Asaas: {email}")
-            return data["data"][0]
+            # Atualiza CPF se ainda não tinha
+            if cpf and not cliente.get("cpfCnpj"):
+                await client.post(
+                    f"{ASAAS_URL}/customers/{cliente['id']}",
+                    json={"cpfCnpj": cpf},
+                    headers=_headers()
+                )
+                logger.info(f"CPF atualizado para cliente {cliente['id']}")
+            return cliente
 
         # Cria novo
         payload = {"name": nome, "email": email}
