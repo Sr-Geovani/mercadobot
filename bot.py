@@ -1422,6 +1422,12 @@ async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
     popup = textos_popup.get(acao, "⏳ Processando...")
     await query.answer(popup)
 
+    # ─── Admin callbacks ─────────────────────────────────────
+    if acao.startswith("admin_"):
+        from admin import callback_admin
+        await callback_admin(update, context)
+        return
+
     # ─── Menu principal ──────────────────────────────────────
     if acao == "menu_principal":
         await abrir_menu(msg)
@@ -1647,6 +1653,7 @@ def main():
     from onboarding import conversation_handler
     from webhook_server import iniciar_servidor_webhook, set_bot
     from database import inicializar_banco
+    from admin import cmd_admin, callback_admin
 
     async def post_init(app):
         await inicializar_banco()
@@ -1677,6 +1684,7 @@ def main():
     app.add_handler(CommandHandler("score",       comando_score))
     app.add_handler(CommandHandler("produto_mes", comando_produto_mes))
     app.add_handler(CommandHandler("giro",        comando_giro))
+    app.add_handler(CommandHandler("admin",         cmd_admin))
     app.add_handler(CommandHandler("status",        cmd_status_handler))
     app.add_handler(CommandHandler("reativar",      cmd_reativar_handler))
     app.add_handler(CommandHandler("configuracoes", cmd_configuracoes_handler))
