@@ -698,6 +698,7 @@ async def configurar_menu(app):
         BotCommand("produto_mes", "🏆 Produto destaque"),
         BotCommand("giro",        "📦 Giro de produtos"),
         BotCommand("status",        "🔍 Status da assinatura"),
+        BotCommand("reativar",      "🔄 Reativar assinatura"),
         BotCommand("configuracoes", "⚙️ Atualizar credenciais"),
         BotCommand("cancelar",      "❌ Cancelar assinatura"),
         BotCommand("menu",       "🔄 Menu"),
@@ -1273,6 +1274,64 @@ async def cmd_status_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
     from onboarding import cmd_status
     await cmd_status(update, context)
 
+async def cmd_reativar_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Comando /reativar — reabre fluxo de reativação."""
+    from database import buscar_usuario
+    from pagamento import gerar_link_pagamento, buscar_assinatura_ativa
+    chat_id = update.effective_chat.id
+    usuario = await buscar_usuario(chat_id)
+
+    if not usuario:
+        await update.message.reply_text(
+            "Você não tem cadastro. Use /start para criar uma conta."
+        )
+        return
+
+    if usuario["status"] in ("trial", "ativo"):
+        await update.message.reply_text(
+            f"✅ Sua assinatura já está ativa!\n\nUse /menu para acessar o bot.",
+            parse_mode="HTML",
+            reply_markup=kb_menu()
+        )
+        return
+
+    await update.message.reply_text("⏳ Gerando link de reativação...")
+
+    try:
+        asaas_id = usuario.get("asaas_id")
+        if not asaas_id:
+            await update.message.reply_text(
+                "Use /start para reativar sua conta.",
+            )
+            return
+
+        # Verifica se já tem assinatura ativa
+        assinatura_id = await buscar_assinatura_ativa(asaas_id)
+        if not assinatura_id:
+            from pagamento import buscar_link_assinatura
+            link, assinatura_id = await gerar_link_pagamento(asaas_id, chat_id)
+        else:
+            from pagamento import buscar_link_assinatura
+            link = await buscar_link_assinatura(assinatura_id)
+
+        if link:
+            kb = InlineKeyboardMarkup([
+                [InlineKeyboardButton("💳 Reativar assinatura", url=link)],
+                [InlineKeyboardButton("🔍 Verificar status", callback_data="verificar_status")],
+            ])
+            await update.message.reply_text(
+                f"🔄 {b('Reativar MercadoBot')}\n\n"
+                f"Clique abaixo para reativar sua assinatura de {b('R$ 29,90/mês')}:",
+                parse_mode="HTML",
+                reply_markup=kb
+            )
+        else:
+            await update.message.reply_text("❌ Erro ao gerar link. Tente novamente ou use /start.")
+    except Exception as e:
+        logger.error(f"Erro no reativar: {e}")
+        await update.message.reply_text("❌ Erro ao processar. Use /start para reativar.")
+
+
 async def cmd_cancelar_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     from onboarding import cmd_cancelar_assinatura
     await cmd_cancelar_assinatura(update, context)
@@ -1613,6 +1672,7 @@ def main():
     app.add_handler(CommandHandler("produto_mes", comando_produto_mes))
     app.add_handler(CommandHandler("giro",        comando_giro))
     app.add_handler(CommandHandler("status",        cmd_status_handler))
+    app.add_handler(CommandHandler("reativar",      cmd_reativar_handler))
     app.add_handler(CommandHandler("configuracoes", cmd_configuracoes_handler))
     app.add_handler(CommandHandler("cancelar",      cmd_cancelar_handler))
     app.add_handler(MessageHandler(filters.Document.ALL,            receber_arquivo_com_acesso))

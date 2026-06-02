@@ -247,7 +247,7 @@ async def receber_pdv_senha(update: Update, context: ContextTypes.DEFAULT_TYPE):
             status="pendente"
         )
 
-        cliente  = await criar_cliente_asaas(nome, pdv_email, cpf)
+        cliente  = await criar_cliente_asaas(nome, pdv_email, cpf, nome_mercadinho)
         asaas_id = cliente.get("id")
         await atualizar_usuario(chat_id, asaas_id=asaas_id)
 

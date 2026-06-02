@@ -39,10 +39,9 @@ async def buscar_cliente_por_email(email: str) -> dict | None:
         return clientes[0] if clientes else None
 
 
-async def criar_cliente_asaas(nome: str, email: str, cpf: str = None) -> dict:
-    """Cria ou busca cliente no Asaas, atualizando CPF se necessário."""
+async def criar_cliente_asaas(nome: str, email: str, cpf: str = None, empresa: str = None) -> dict:
+    """Cria ou busca cliente no Asaas, atualizando CPF e empresa se necessário."""
     async with httpx.AsyncClient() as client:
-        # Verifica se já existe
         resp = await client.get(
             f"{ASAAS_URL}/customers",
             params={"email": email},
@@ -52,20 +51,26 @@ async def criar_cliente_asaas(nome: str, email: str, cpf: str = None) -> dict:
         if data.get("data"):
             cliente = data["data"][0]
             logger.info(f"Cliente já existe no Asaas: {email}")
-            # Atualiza CPF se ainda não tinha
+            # Atualiza campos faltantes
+            update_payload = {}
             if cpf and not cliente.get("cpfCnpj"):
-                await client.post(
+                update_payload["cpfCnpj"] = cpf
+            if empresa and not cliente.get("company"):
+                update_payload["company"] = empresa
+            if update_payload:
+                await client.put(
                     f"{ASAAS_URL}/customers/{cliente['id']}",
-                    json={"cpfCnpj": cpf},
+                    json=update_payload,
                     headers=_headers()
                 )
-                logger.info(f"CPF atualizado para cliente {cliente['id']}")
+                logger.info(f"Cliente atualizado: {update_payload}")
             return cliente
 
-        # Cria novo
         payload = {"name": nome, "email": email}
         if cpf:
             payload["cpfCnpj"] = cpf
+        if empresa:
+            payload["company"] = empresa
 
         resp = await client.post(
             f"{ASAAS_URL}/customers",
