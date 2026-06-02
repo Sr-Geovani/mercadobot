@@ -192,10 +192,96 @@ def iniciar_scheduler():
         replace_existing=True,
     )
 
+    # Fechamento semanal domingo 23h59 — após o pico das 22h
+    scheduler.add_job(
+        enviar_fechamento_semanal,
+        trigger="cron",
+        day_of_week="sun",
+        hour=23,
+        minute=59,
+        id="fechamento_semanal",
+        replace_existing=True,
+    )
+
     scheduler.start()
     logger.info(f"Briefing agendado para {HORARIO_HORA:02d}:{HORARIO_MINUTO:02d} (Brasília)")
     logger.info("Alertas proativos agendados para 13h e 19h")
     return scheduler
+
+
+async def enviar_fechamento_semanal():
+    """Envia resumo da semana todo domingo às 23h59."""
+    from database import listar_usuarios_ativos
+    usuarios = await listar_usuarios_ativos()
+    if not usuarios:
+        return
+
+    bot   = Bot(token=TELEGRAM_TOKEN)
+    agora = datetime.now(BRASILIA)
+
+    # Período: segunda a domingo desta semana
+    inicio_semana = (agora - pd.Timedelta(days=agora.weekday())).strftime("%d/%m/%Y")
+    fim_semana    = agora.strftime("%d/%m/%Y")
+
+    logger.info(f"Fechamento semanal — {inicio_semana} a {fim_semana}")
+
+    for usuario in usuarios:
+        chat_id   = usuario["chat_id"]
+        pdv_email = usuario.get("pdv_email")
+        pdv_senha = usuario.get("pdv_senha")
+        nome      = usuario.get("nome_mercadinho") or usuario.get("nome", "Operador")
+        if not pdv_email or not pdv_senha:
+            continue
+        try:
+            from scraper import baixar_relatorios_periodo
+            path_vendas, path_produtos = await asyncio.get_event_loop().run_in_executor(
+                None, baixar_relatorios_periodo, inicio_semana, fim_semana, pdv_email, pdv_senha
+            )
+            vendas   = pd.read_excel(path_vendas)
+            produtos = pd.read_excel(path_produtos)
+
+            from bot import (normalizar_vendas, normalizar_produtos,
+                             bloco_faturamento, bloco_comparativo,
+                             bloco_produto_mes, bloco_score,
+                             bloco_projecao_mes, kb_menu, b)
+
+            vendas   = normalizar_vendas(vendas)
+            produtos = normalizar_produtos(produtos)
+
+            if len(vendas) == 0:
+                continue
+
+            # Cabeçalho do fechamento
+            total = vendas["valor"].sum()
+            await bot.send_message(
+                chat_id=chat_id,
+                text=(
+                    f"📋 {b(f'Fechamento da Semana — {nome}')}\n\n"
+                    f"Semana de {inicio_semana} a {fim_semana}\n"
+                    f"💰 Total da semana: {b(f'R$ {total:,.2f}')}"
+                ),
+                parse_mode="HTML"
+            )
+
+            # Blocos analíticos
+            await bot.send_message(chat_id=chat_id, text=bloco_comparativo(vendas), parse_mode="HTML")
+            await bot.send_message(chat_id=chat_id, text=bloco_produto_mes(produtos), parse_mode="HTML")
+            await bot.send_message(chat_id=chat_id, text=bloco_score(vendas), parse_mode="HTML")
+
+            projecao = bloco_projecao_mes(vendas)
+            if projecao:
+                await bot.send_message(chat_id=chat_id, text=projecao, parse_mode="HTML")
+
+            await bot.send_message(
+                chat_id=chat_id,
+                text="Boa semana! 🚀",
+                reply_markup=kb_menu()
+            )
+
+            await asyncio.sleep(10)
+
+        except Exception as e:
+            logger.error(f"Erro no fechamento semanal para {chat_id}: {e}")
 
 
 async def enviar_alertas_proativos():

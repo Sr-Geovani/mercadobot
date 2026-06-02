@@ -190,6 +190,232 @@ def b(t): return f"<b>{t}</b>"          # negrito
 def c(t): return f"<code>{t}</code>"    # destaque monoespaçado (cinza)
 def i(t): return f"<i>{t}</i>"          # itálico
 
+def bloco_comparativo(vendas: pd.DataFrame) -> str:
+    """Comparativo de performance entre unidades."""
+    filiais = vendas.groupby("nomeFilial").agg(
+        fat=("valor","sum"),
+        qtd=("valor","count"),
+        tk=("valor","mean"),
+        canc=("ValorItensCancelados","sum")
+    ).sort_values("fat", ascending=False)
+
+    total = filiais["fat"].sum()
+    linhas = [f"📈 {b('COMPARATIVO DE PERFORMANCE')}\n"]
+
+    medalhas = ["🥇","🥈","🥉"]
+    for idx, (filial, row) in enumerate(filiais.iterrows()):
+        nome  = filial.split()[-1].title()
+        med   = medalhas[idx] if idx < 3 else "•"
+        pct   = row.fat / total * 100 if total else 0
+        pct_c = row.canc / row.fat * 100 if row.fat else 0
+        linhas.append(f"{med} {b(nome)}")
+        linhas.append(f"   💰 R$ {row.fat:,.2f} ({pct:.0f}% do total)")
+        linhas.append(f"   🛒 {row.qtd} vendas | Ticket R$ {row.tk:.2f}")
+        linhas.append(f"   ⚠️ Cancelamentos: {pct_c:.1f}%\n")
+
+    # Destaque de liderança
+    melhor = filiais.index[0].split()[-1].title()
+    linhas.append(f"🏆 {b(melhor)} lidera em faturamento este período.")
+    return "\n".join(linhas)
+
+
+def bloco_produto_mes(produtos: pd.DataFrame) -> str:
+    """Produto com maior destaque — mais vendido e maior receita."""
+    top_qtd = produtos.sort_values("quantidade", ascending=False).head(1).iloc[0]
+    top_val = produtos.sort_values("valor", ascending=False).head(1).iloc[0]
+
+    linhas = [f"🏆 {b('PRODUTO DESTAQUE DO PERÍODO')}\n"]
+    linhas.append(f"📦 {b('Mais vendido em unidades:')}")
+    linhas.append(f"   {top_qtd['produto']} — {b(f'{int(top_qtd.quantidade)} un')}")
+    linhas.append(f"   Receita: R$ {top_qtd.valor:,.2f}\n")
+
+    if top_val['produto'] != top_qtd['produto']:
+        linhas.append(f"💰 {b('Maior receita gerada:')}")
+        linhas.append(f"   {top_val['produto']} — {b(f'R$ {top_val.valor:,.2f}')}")
+        linhas.append(f"   Unidades: {int(top_val.quantidade)}\n")
+
+    # Por filial
+    linhas.append(f"📍 {b('Top produto por unidade:')}")
+    for filial in produtos["nomeloja"].unique():
+        nome = filial.split()[-1].title()
+        top  = produtos[produtos["nomeloja"]==filial].sort_values("quantidade", ascending=False).iloc[0]
+        linhas.append(f"   {nome}: {top['produto']} ({int(top.quantidade)} un)")
+
+    return "\n".join(linhas)
+
+
+def bloco_giro_produtos(produtos: pd.DataFrame) -> str:
+    """Classifica produtos por padrão de giro — âncora vs ocasional."""
+    v = produtos.copy()
+    media_qtd = v["quantidade"].mean()
+    media_num = v["numvendas"].mean() if "numvendas" in v.columns else None
+
+    linhas = [f"📦 {b('GIRO DE PRODUTOS')}\n"]
+
+    # Âncoras: alta quantidade E alta frequência de compra
+    if media_num:
+        ancoras = v[(v["quantidade"] >= media_qtd) & (v["numvendas"] >= media_num)]
+    else:
+        ancoras = v[v["quantidade"] >= media_qtd * 1.5]
+
+    ancoras = ancoras.sort_values("quantidade", ascending=False).head(5)
+    linhas.append(f"⚓ {b('Produtos Âncora')} {i('(alta frequência e volume):')}")
+    for _, row in ancoras.iterrows():
+        linhas.append(f"   • {row['produto']} — {int(row.quantidade)} un")
+
+    linhas.append("")
+
+    # Ocasionais: baixa frequência mas aparecem
+    ocasionais = v[v["quantidade"] <= media_qtd * 0.3].sort_values("valor", ascending=False).head(5)
+    linhas.append(f"🎯 {b('Produtos Ocasionais')} {i('(baixo volume, compra esporádica):')}")
+    for _, row in ocasionais.iterrows():
+        linhas.append(f"   • {row['produto']} — {int(row.quantidade)} un")
+
+    linhas.append(f"\n💡 {i('Âncoras garantem o fluxo. Ocasionais indicam oportunidade de mix.')}")
+    return "\n".join(linhas)
+
+
+def bloco_projecao_mes(vendas: pd.DataFrame) -> str:
+    """Projeta o faturamento do mês com base nos dias já rodados."""
+    v = vendas.copy()
+    v["DataAbertura"] = pd.to_datetime(v["DataAbertura"], dayfirst=True)
+
+    dias_com_venda = v["DataAbertura"].dt.date.nunique()
+    if dias_com_venda == 0:
+        return ""
+
+    fat_total    = v["valor"].sum()
+    media_diaria = fat_total / dias_com_venda
+
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    brasilia   = ZoneInfo("America/Sao_Paulo")
+    hoje       = datetime.now(brasilia)
+    dias_mes   = (hoje.replace(month=hoje.month % 12 + 1, day=1) - pd.Timedelta(days=1)).day if hoje.month < 12 else 31
+    dias_rest  = dias_mes - hoje.day
+    projecao   = fat_total + (media_diaria * dias_rest)
+
+    # Referência do mês anterior (se houver dados)
+    mes_atual  = hoje.month
+    fat_ate_hoje_pct = (hoje.day / dias_mes) * 100
+
+    linhas = [f"📈 {b('PROJEÇÃO DO MÊS')}\n"]
+    linhas.append(f"📅 Dias com dados: {b(str(dias_com_venda))}")
+    linhas.append(f"📊 Média diária: {b(f'R$ {media_diaria:,.2f}')}")
+    linhas.append(f"💰 Faturado até agora: {b(f'R$ {fat_total:,.2f}')}")
+    linhas.append(f"   {i(f'({fat_ate_hoje_pct:.0f}% do mês transcorrido)')}\n")
+    linhas.append(f"🎯 {b(f'Projeção para o mês: R$ {projecao:,.2f}')}")
+    linhas.append(f"   {i(f'Média de R$ {media_diaria:,.2f}/dia × {dias_mes} dias')}")
+
+    return "\n".join(linhas)
+
+
+def calcular_score(vendas: pd.DataFrame) -> tuple:
+    """
+    Calcula o Score de Saúde da Operação (0-10) por filial.
+    Retorna (score_geral, detalhes_por_componente)
+    """
+    v = vendas.copy()
+    v["DataAbertura"] = pd.to_datetime(v["DataAbertura"], dayfirst=True)
+    v["semana"] = v["DataAbertura"].dt.isocalendar().week
+
+    scores = {}
+    for filial in v["nomeFilial"].unique():
+        df = v[v["nomeFilial"] == filial]
+        nome = filial.split()[-1].title()
+
+        # 1. Faturamento vs média (peso 40%)
+        fat_semanas = df.groupby("semana")["valor"].sum()
+        if len(fat_semanas) >= 2:
+            media_hist  = fat_semanas.iloc[:-1].mean()
+            fat_atual   = fat_semanas.iloc[-1]
+            var_pct     = ((fat_atual - media_hist) / media_hist * 100) if media_hist else 0
+            if var_pct >= 10:   s_fat = 10
+            elif var_pct >= -5: s_fat = 7
+            elif var_pct >= -20: s_fat = 5
+            else:               s_fat = 2
+        else:
+            s_fat = 7  # sem histórico suficiente
+
+        # 2. Taxa de cancelamento (peso 25%)
+        total  = df["valor"].sum()
+        cancel = df["ValorItensCancelados"].sum()
+        pct_c  = (cancel / total * 100) if total else 0
+        if pct_c <= 2:   s_canc = 10
+        elif pct_c <= 5: s_canc = 7
+        elif pct_c <= 10: s_canc = 4
+        else:             s_canc = 1
+
+        # 3. Ticket médio vs histórico (peso 20%)
+        tk_semanas = df.groupby("semana")["valor"].mean()
+        if len(tk_semanas) >= 2:
+            tk_media = tk_semanas.iloc[:-1].mean()
+            tk_atual = tk_semanas.iloc[-1]
+            var_tk   = ((tk_atual - tk_media) / tk_media * 100) if tk_media else 0
+            if var_tk >= 3:    s_tk = 10
+            elif var_tk >= -3: s_tk = 7
+            else:              s_tk = 4
+        else:
+            s_tk = 7
+
+        # 4. Consistência de vendas (peso 15%)
+        dias_com_venda  = df["DataAbertura"].dt.date.nunique()
+        total_dias      = (df["DataAbertura"].max() - df["DataAbertura"].min()).days + 1
+        pct_dias        = (dias_com_venda / total_dias * 100) if total_dias else 100
+        if pct_dias >= 85:   s_cons = 10
+        elif pct_dias >= 70: s_cons = 7
+        elif pct_dias >= 50: s_cons = 4
+        else:                s_cons = 1
+
+        score = (s_fat * 0.40) + (s_canc * 0.25) + (s_tk * 0.20) + (s_cons * 0.15)
+        scores[nome] = {
+            "score": round(score, 1),
+            "faturamento": s_fat,
+            "cancelamentos": s_canc,
+            "ticket": s_tk,
+            "consistencia": s_cons,
+            "pct_cancel": pct_c,
+        }
+
+    return scores
+
+
+def barra(nota: float) -> str:
+    """Gera barra visual de progresso para o score."""
+    cheias  = int(nota)
+    vazias  = 10 - cheias
+    return "█" * cheias + "░" * vazias
+
+
+def bloco_score(vendas: pd.DataFrame) -> str:
+    scores = calcular_score(vendas)
+    linhas = [f"⭐ {b('SCORE DE SAÚDE DA OPERAÇÃO')}\n"]
+
+    score_geral = sum(s["score"] for s in scores.values()) / len(scores)
+    emoji_geral = "🟢" if score_geral >= 7 else "🟡" if score_geral >= 5 else "🔴"
+    linhas.append(f"{emoji_geral} Score geral: {b(f'{score_geral:.1f} / 10.0')}\n")
+
+    for nome, s in scores.items():
+        sc   = s["score"]
+        emoji = "🟢" if sc >= 7 else "🟡" if sc >= 5 else "🔴"
+        linhas.append(f"📍 {b(nome)} — {emoji} {b(f'{sc:.1f}')}")
+        linhas.append(f"   📊 Faturamento:    {barra(s['faturamento'])}  {s['faturamento']:.0f}")
+        linhas.append(f"   ⚠️ Cancelamentos:  {barra(s['cancelamentos'])}  {s['cancelamentos']:.0f}")
+        linhas.append(f"   🎯 Ticket médio:   {barra(s['ticket'])}  {s['ticket']:.0f}")
+        linhas.append(f"   📅 Consistência:   {barra(s['consistencia'])}  {s['consistencia']:.0f}")
+
+        ponto_fraco = min(
+            [("faturamento","📊 Faturamento"), ("cancelamentos","⚠️ Cancelamentos"),
+             ("ticket","🎯 Ticket médio"), ("consistencia","📅 Consistência")],
+            key=lambda x: s[x[0]]
+        )
+        if s[ponto_fraco[0]] <= 5:
+            linhas.append(f"   💡 {i(f'Atenção: {ponto_fraco[1]} puxando o score para baixo.')}")
+        linhas.append("")
+
+    return "\n".join(linhas)
+
+
 def bloco_faturamento(vendas: pd.DataFrame) -> str:
     total = vendas["valor"].sum()
     ticket = vendas["valor"].mean()
@@ -464,8 +690,13 @@ async def configurar_menu(app):
         BotCommand("semana",     "📅 Evolução semanal"),
         BotCommand("pico",       "🕐 Horários de pico"),
         BotCommand("alertas",    "⚠️ Alertas"),
-        BotCommand("reposicao",  "🛒 Lista de reposição"),
-        BotCommand("atualizar",  "🔄 Buscar dados agora"),
+        BotCommand("reposicao",   "🛒 Lista de reposição"),
+        BotCommand("atualizar",   "🔄 Buscar dados agora"),
+        BotCommand("comparativo", "📈 Comparativo de unidades"),
+        BotCommand("projecao",    "🎯 Projeção do mês"),
+        BotCommand("score",       "⭐ Score de saúde"),
+        BotCommand("produto_mes", "🏆 Produto destaque"),
+        BotCommand("giro",        "📦 Giro de produtos"),
         BotCommand("status",        "🔍 Status da assinatura"),
         BotCommand("configuracoes", "⚙️ Atualizar credenciais"),
         BotCommand("cancelar",      "❌ Cancelar assinatura"),
@@ -476,14 +707,19 @@ async def configurar_menu(app):
 
 def kb_menu():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📊 Briefing",    callback_data="briefing"),
-         InlineKeyboardButton("⚠️ Alertas",     callback_data="alertas")],
-        [InlineKeyboardButton("📦 Produtos",    callback_data="produtos"),
-         InlineKeyboardButton("🗂 Categorias",  callback_data="categorias")],
-        [InlineKeyboardButton("💳 Pagamentos",  callback_data="pagamentos"),
-         InlineKeyboardButton("🕐 Pico",        callback_data="pico")],
-        [InlineKeyboardButton("📅 Semanal",     callback_data="semana")],
-        [InlineKeyboardButton("🛒 Lista de Reposição", callback_data="reposicao")],
+        [InlineKeyboardButton("📊 Briefing",      callback_data="briefing"),
+         InlineKeyboardButton("⚠️ Alertas",       callback_data="alertas")],
+        [InlineKeyboardButton("📦 Produtos",      callback_data="produtos"),
+         InlineKeyboardButton("🗂 Categorias",    callback_data="categorias")],
+        [InlineKeyboardButton("💳 Pagamentos",    callback_data="pagamentos"),
+         InlineKeyboardButton("🕐 Pico",          callback_data="pico")],
+        [InlineKeyboardButton("📅 Semanal",       callback_data="semana"),
+         InlineKeyboardButton("📈 Comparativo",   callback_data="comparativo")],
+        [InlineKeyboardButton("🏆 Produto Mês",   callback_data="produto_mes"),
+         InlineKeyboardButton("📦 Giro",          callback_data="giro")],
+        [InlineKeyboardButton("🎯 Projeção Mês",  callback_data="projecao"),
+         InlineKeyboardButton("⭐ Score Saúde",   callback_data="score")],
+        [InlineKeyboardButton("🛒 Lista de Reposição",    callback_data="reposicao")],
         [InlineKeyboardButton("🔄 Atualizar dados agora", callback_data="atualizar_menu")],
     ])
 
@@ -729,7 +965,73 @@ async def comando_alertas(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await enviar(update.message, "\n".join(linhas))
     await abrir_menu(update.message)
 
-async def comando_reposicao(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def comando_comparativo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    d = dados_usuario.get(chat_id, {})
+    vendas = d.get("vendas")
+    if vendas is None or vendas.empty:
+        await pedir_periodo(update.message)
+        return
+    await update.message.reply_text("⏳ Comparando unidades...")
+    await enviar(update.message, bloco_comparativo(vendas))
+    ctx = resumo_dados(chat_id)
+    insight = await insight_ia(ctx, "comparativo entre unidades — qual tem melhor desempenho e por quê")
+    await enviar(update.message, f"💡 {b('INSIGHT')}\n\n{insight}")
+    await abrir_menu(update.message)
+
+async def comando_produto_mes(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    d = dados_usuario.get(chat_id, {})
+    produtos = d.get("produtos")
+    if produtos is None or produtos.empty:
+        await pedir_periodo(update.message)
+        return
+    await update.message.reply_text("⏳ Analisando produtos destaque...")
+    await enviar(update.message, bloco_produto_mes(produtos))
+    await abrir_menu(update.message)
+
+async def comando_giro(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    d = dados_usuario.get(chat_id, {})
+    produtos = d.get("produtos")
+    if produtos is None or produtos.empty:
+        await pedir_periodo(update.message)
+        return
+    await update.message.reply_text("⏳ Classificando giro de produtos...")
+    await enviar(update.message, bloco_giro_produtos(produtos))
+    ctx = resumo_dados(chat_id)
+    insight = await insight_ia(ctx, "estratégia de estoque baseada no giro dos produtos")
+    await enviar(update.message, f"💡 {b('INSIGHT')}\n\n{insight}")
+    await abrir_menu(update.message)
+
+async def comando_projecao(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    d = dados_usuario.get(chat_id, {})
+    vendas = d.get("vendas")
+    if vendas is None or vendas.empty:
+        await pedir_periodo(update.message)
+        return
+    await update.message.reply_text("⏳ Calculando projeção do mês...")
+    bloco = bloco_projecao_mes(vendas)
+    if bloco:
+        await enviar(update.message, bloco)
+    else:
+        await update.message.reply_text("⚠️ Dados insuficientes para projeção.")
+    await abrir_menu(update.message)
+
+async def comando_score(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    d = dados_usuario.get(chat_id, {})
+    vendas = d.get("vendas")
+    if vendas is None or vendas.empty:
+        await pedir_periodo(update.message)
+        return
+    await update.message.reply_text("⏳ Calculando score de saúde...")
+    await enviar(update.message, bloco_score(vendas))
+    ctx = resumo_dados(chat_id)
+    insight = await insight_ia(ctx, "principais ações para melhorar o score de saúde da operação")
+    await enviar(update.message, f"💡 {b('COMO MELHORAR')}\n\n{insight}")
+    await abrir_menu(update.message)
     chat_id = update.effective_chat.id
     d = dados_usuario.get(chat_id, {})
     if d.get("produtos") is None:
@@ -1156,6 +1458,11 @@ async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "pico":       comando_pico,
         "alertas":    comando_alertas,
         "reposicao":  comando_reposicao,
+        "comparativo":comando_comparativo,
+        "projecao":   comando_projecao,
+        "score":      comando_score,
+        "produto_mes":comando_produto_mes,
+        "giro":       comando_giro,
     }
 
     if acao == "briefing":
@@ -1267,8 +1574,13 @@ def main():
     app.add_handler(CommandHandler("semana",     comando_semana))
     app.add_handler(CommandHandler("pico",       comando_pico))
     app.add_handler(CommandHandler("alertas",    comando_alertas))
-    app.add_handler(CommandHandler("reposicao",  comando_reposicao))
-    app.add_handler(CommandHandler("atualizar",  comando_atualizar))
+    app.add_handler(CommandHandler("reposicao",   comando_reposicao))
+    app.add_handler(CommandHandler("atualizar",   comando_atualizar))
+    app.add_handler(CommandHandler("comparativo", comando_comparativo))
+    app.add_handler(CommandHandler("projecao",    comando_projecao))
+    app.add_handler(CommandHandler("score",       comando_score))
+    app.add_handler(CommandHandler("produto_mes", comando_produto_mes))
+    app.add_handler(CommandHandler("giro",        comando_giro))
     app.add_handler(CommandHandler("status",        cmd_status_handler))
     app.add_handler(CommandHandler("configuracoes", cmd_configuracoes_handler))
     app.add_handler(CommandHandler("cancelar",      cmd_cancelar_handler))
