@@ -172,11 +172,21 @@ def iniciar_scheduler():
         replace_existing=True,
     )
 
-    # Alertas proativos às 19h
+    # Alerta de início de pico às 20h (não mais 19h)
+    scheduler.add_job(
+        enviar_alerta_pico,
+        trigger="cron",
+        hour=20,
+        minute=0,
+        id="alerta_pico",
+        replace_existing=True,
+    )
+
+    # Alertas proativos às 22h
     scheduler.add_job(
         enviar_alertas_proativos,
         trigger="cron",
-        hour=19,
+        hour=22,
         minute=0,
         id="alertas_noite",
         replace_existing=True,
@@ -361,14 +371,45 @@ async def enviar_alertas_proativos():
             logger.error(f"Erro no alerta proativo para {chat_id}: {e}")
 
 
+async def enviar_alerta_pico():
+    """Avisa às 20h que entrou no horário de pico e pede checkup."""
+    from database import listar_usuarios_ativos
+    usuarios = await listar_usuarios_ativos()
+    if not usuarios:
+        return
+
+    bot = Bot(token=TELEGRAM_TOKEN)
+    for usuario in usuarios:
+        chat_id = usuario["chat_id"]
+        nome    = usuario.get("nome_mercadinho") or usuario.get("nome", "Operador")
+        try:
+            kb = InlineKeyboardMarkup([
+                [InlineKeyboardButton("✅ Tudo funcionando", callback_data="pico_ok")],
+                [InlineKeyboardButton("⚠️ Tem algo errado",  callback_data="pico_problema")],
+            ])
+            await bot.send_message(
+                chat_id=chat_id,
+                text=(
+                    f"🕐 {b('Horário de pico iniciando!')}\n\n"
+                    f"São 20h — seus moradores estão chegando em casa.\n\n"
+                    f"Checkup rápido: suas operações estão funcionando normalmente?"
+                ),
+                parse_mode="HTML",
+                reply_markup=kb
+            )
+            await asyncio.sleep(3)
+        except Exception as e:
+            logger.error(f"Erro no alerta de pico para {chat_id}: {e}")
+
+
 async def enviar_onboarding_guiado():
     """
-    Mensagens automáticas nos primeiros dias do trial.
-    Dia 2: mostra reposição
-    Dia 3: mostra alertas
-    Dia 5: lembrete do trial
+    Mensagens automáticas ao longo do trial e do mês.
+    Trial: dias 1, 2, 4 e 2 dias antes do fim (só valor)
+    Mês: engajamento nos dias 10, 15, 20, 25
     """
     from database import listar_usuarios_ativos
+    from telegram import InlineKeyboardMarkup, InlineKeyboardButton
     usuarios = await listar_usuarios_ativos()
     if not usuarios:
         return
@@ -377,75 +418,144 @@ async def enviar_onboarding_guiado():
     agora = datetime.now(BRASILIA)
 
     for usuario in usuarios:
-        chat_id  = usuario["chat_id"]
-        status   = usuario.get("status")
+        chat_id   = usuario["chat_id"]
+        status    = usuario.get("status")
         trial_fim = usuario.get("trial_fim")
-        nome     = usuario.get("nome", "Operador")
+        nome      = usuario.get("nome_mercadinho") or usuario.get("nome", "Operador")
 
-        if status != "trial" or not trial_fim:
+        if status not in ("trial", "ativo"):
             continue
 
         try:
-            fim  = datetime.fromisoformat(trial_fim)
-            dias_restantes = (fim - agora).days
-            dias_no_trial  = 7 - dias_restantes
+            # ─── Mensagens do trial ──────────────────────────
+            if status == "trial" and trial_fim:
+                fim           = datetime.fromisoformat(trial_fim)
+                dias_rest     = (fim - agora).days
+                dias_no_trial = 7 - dias_rest
 
-            if dias_no_trial == 1:
+                if dias_no_trial == 1:
+                    await bot.send_message(
+                        chat_id=chat_id,
+                        text=(
+                            f"👋 <b>{nome}, bem-vindo ao MercadoBot!</b>\n\n"
+                            f"💡 <b>Dica do dia — Lista de Reposição</b>\n\n"
+                            f"Use /reposicao para gerar automaticamente o que precisa "
+                            f"comprar em cada unidade — baseado no que realmente saiu "
+                            f"da prateleira. Você pode baixar em Excel por loja ou unificado."
+                        ),
+                        parse_mode="HTML"
+                    )
+
+                elif dias_no_trial == 2:
+                    await bot.send_message(
+                        chat_id=chat_id,
+                        text=(
+                            f"📊 <b>Dica — Consulte qualquer período</b>\n\n"
+                            f"Use /atualizar e escolha:\n"
+                            f"• Hoje\n"
+                            f"• Ontem\n"
+                            f"• Últimos 7 dias\n"
+                            f"• Mês atual ou anterior\n\n"
+                            f"O MercadoBot busca tudo direto no PDV Legal — "
+                            f"sem exportar nenhum arquivo."
+                        ),
+                        parse_mode="HTML"
+                    )
+
+                elif dias_no_trial == 4:
+                    await bot.send_message(
+                        chat_id=chat_id,
+                        text=(
+                            f"⚡ <b>Alertas proativos ativos!</b>\n\n"
+                            f"Às 13h, 20h e 22h o MercadoBot verifica suas operações "
+                            f"automaticamente. Você só recebe mensagem se houver algo "
+                            f"relevante — cancelamentos altos, totem parado, queda de vendas.\n\n"
+                            f"Se não tiver nada, silêncio total. Só o que importa."
+                        ),
+                        parse_mode="HTML"
+                    )
+
+                elif dias_rest == 2:
+                    # Só valor — sem mencionar fim ou cancelamento
+                    await bot.send_message(
+                        chat_id=chat_id,
+                        text=(
+                            f"⭐ <b>{nome}, o MercadoBot está trabalhando por você!</b>\n\n"
+                            f"Nas últimas semanas você teve:\n"
+                            f"• Briefing automático todo dia às 7h\n"
+                            f"• Alertas proativos sem precisar pedir\n"
+                            f"• Análises completas com um toque\n"
+                            f"• Lista de reposição inteligente\n\n"
+                            f"Tudo isso por menos de <b>R$ 1 por dia</b>. 🚀"
+                        ),
+                        parse_mode="HTML"
+                    )
+
+            # ─── Engajamento ao longo do mês ─────────────────
+            dia_do_mes = agora.day
+            hora_atual = agora.hour
+
+            if hora_atual != 9:
+                continue
+
+            if dia_do_mes == 10:
                 await bot.send_message(
                     chat_id=chat_id,
                     text=(
-                        f"👋 {nome}, bem-vindo ao MercadoBot!\n\n"
-                        f"💡 <b>Dica do dia:</b> Use o botão "
-                        f"<b>🛒 Lista de Reposição</b> no menu para gerar automaticamente "
-                        f"a lista do que precisa repor em cada unidade — baseado no que "
-                        f"realmente saiu da prateleira.\n\n"
-                        f"Experimente agora! 👇"
+                        f"💡 <b>Você conhece o Score de Saúde?</b>\n\n"
+                        f"Use /score para ver a nota das suas operações — "
+                        f"de 0 a 10, calculada por faturamento, cancelamentos, "
+                        f"ticket médio e consistência.\n\n"
+                        f"É a forma mais rápida de saber se sua operação "
+                        f"está saudável ou precisa de atenção."
                     ),
                     parse_mode="HTML"
                 )
 
-            elif dias_no_trial == 2:
+            elif dia_do_mes == 15:
+                kb = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("📊 Sim, quero ver a parcial", callback_data="atualizar_mes")],
+                    [InlineKeyboardButton("Agora não",                   callback_data="menu_principal")],
+                ])
                 await bot.send_message(
                     chat_id=chat_id,
                     text=(
-                        f"📊 <b>Sabia que você pode consultar qualquer período?</b>\n\n"
-                        f"Clique em <b>🔄 Atualizar dados agora</b> e escolha: "
-                        f"hoje, ontem, últimos 7 dias ou o mês inteiro.\n\n"
-                        f"O MercadoBot busca tudo direto no PDV Legal — sem você "
-                        f"precisar exportar nenhum arquivo."
+                        f"📅 <b>Meio do mês!</b>\n\n"
+                        f"Quer ver como estão suas operações na primeira "
+                        f"quinzena? Posso gerar uma parcial agora com "
+                        f"faturamento, produtos e projeção do mês. 👇"
+                    ),
+                    parse_mode="HTML",
+                    reply_markup=kb
+                )
+
+            elif dia_do_mes == 20:
+                await bot.send_message(
+                    chat_id=chat_id,
+                    text=(
+                        f"📈 <b>Dica — Compare suas unidades</b>\n\n"
+                        f"Use /comparativo para ver um ranking lado a lado "
+                        f"de todas as suas unidades — faturamento, ticket médio "
+                        f"e cancelamentos em uma só tela.\n\n"
+                        f"Ótimo para identificar qual unidade precisa de atenção."
                     ),
                     parse_mode="HTML"
                 )
 
-            elif dias_no_trial == 4:
+            elif dia_do_mes == 25:
+                kb = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🎯 Sim, ver projeção", callback_data="projecao")],
+                    [InlineKeyboardButton("Agora não",            callback_data="menu_principal")],
+                ])
                 await bot.send_message(
                     chat_id=chat_id,
                     text=(
-                        f"⚡ <b>Alertas proativos ativados!</b>\n\n"
-                        f"Às 13h e 19h o MercadoBot verifica automaticamente "
-                        f"se há algo importante nas suas operações — cancelamentos "
-                        f"acima do normal, totem parado, queda de vendas.\n\n"
-                        f"Se não tiver nada relevante, não enviamos nada. "
-                        f"Só o que importa, no momento certo."
+                        f"🎯 <b>Faltam ~5 dias para fechar o mês!</b>\n\n"
+                        f"Quer ver a projeção de fechamento com base "
+                        f"no ritmo atual das suas operações?"
                     ),
-                    parse_mode="HTML"
-                )
-
-            elif dias_restantes == 2:
-                await bot.send_message(
-                    chat_id=chat_id,
-                    text=(
-                        f"⭐ <b>Seu trial termina em 2 dias</b>\n\n"
-                        f"Esperamos que o MercadoBot esteja transformando a forma "
-                        f"como você gerencia suas operações!\n\n"
-                        f"A partir do dia {fim.strftime('%d/%m')}, sua assinatura de "
-                        f"<b>R$ 29,90/mês</b> continua automaticamente — "
-                        f"menos de R$ 1 por dia para ter um gestor inteligente "
-                        f"trabalhando por você 24h.\n\n"
-                        f"📊 Amanhã você recebe seu último briefing do trial. "
-                        f"Aproveite para explorar tudo que o bot oferece!"
-                    ),
-                    parse_mode="HTML"
+                    parse_mode="HTML",
+                    reply_markup=kb
                 )
 
             await asyncio.sleep(3)

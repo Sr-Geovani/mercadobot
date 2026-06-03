@@ -495,26 +495,40 @@ def bloco_semanal(vendas: pd.DataFrame) -> str:
     v = vendas.copy()
     v["DataAbertura"] = pd.to_datetime(v["DataAbertura"], dayfirst=True)
     v["semana"] = v["DataAbertura"].dt.isocalendar().week.astype(str).apply(lambda x: f"S{x}")
+    v["dia_semana"] = v["DataAbertura"].dt.day_name()
+
     sem = v.groupby(["semana","nomeFilial"])["valor"].sum().unstack(fill_value=0)
+    sem_qtd = v.groupby(["semana","nomeFilial"])["valor"].count().unstack(fill_value=0)
 
     linhas = [f"📅 {b('EVOLUÇÃO SEMANAL')}\n"]
+
     for semana, row in sem.iterrows():
-        linhas.append(f"📌 {b(semana)}")
+        # Datas da semana
+        dias_semana = v[v["semana"] == semana]["DataAbertura"]
+        if not dias_semana.empty:
+            d_ini = dias_semana.min().strftime("%d/%m")
+            d_fim = dias_semana.max().strftime("%d/%m")
+            periodo = f"{d_ini} a {d_fim}"
+        else:
+            periodo = semana
+
+        total_semana = row.sum()
+        linhas.append(f"📌 {b(semana)} {i(f'({periodo})')} — {b(f'R$ {total_semana:,.2f}')}")
+
         for filial, val in row.items():
             nome = filial.split()[-1].title()
-            linhas.append(f"   {nome}: {b(f'R$ {val:,.2f}')}")
+            qtd  = sem_qtd.loc[semana, filial] if filial in sem_qtd.columns else 0
+            linhas.append(f"   {nome}: {b(f'R$ {val:,.2f}')} {i(f'({int(qtd)} vendas)')}")
         linhas.append("")
 
-    # Variação última semana
+    # Variação última vs penúltima semana
     if len(sem) >= 2:
-        linhas.append(f"📉 {b('Variação última semana:')}")
-        ultima = sem.iloc[-1]
+        linhas.append(f"📊 {b('Variação vs semana anterior:')}")
+        ultima    = sem.iloc[-1]
         penultima = sem.iloc[-2]
         for filial in sem.columns:
             nome = filial.split()[-1].title()
-            var = ultima[filial] - penultima[filial]
-            sinal = "▲" if var >= 0 else "▼"
-            cor_tag = "" if var >= 0 else i(f"{sinal} R$ {abs(var):,.2f}")
+            var  = ultima[filial] - penultima[filial]
             if var >= 0:
                 linhas.append(f"   {nome}: {b(f'▲ R$ {var:,.2f}')}")
             else:
@@ -981,13 +995,15 @@ async def comando_reposicao(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await pedir_periodo(update.message)
         return
     kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("\u2705 Repor exatamente o que saiu", callback_data="rep_exato")],
-        [InlineKeyboardButton("\U0001f4e6 Repor + estoque de seguran\u00e7a (30%)", callback_data="rep_estoque")],
+        [InlineKeyboardButton("✅ Repor exatamente o que saiu",        callback_data="rep_exato")],
+        [InlineKeyboardButton("📦 Repor + estoque de segurança (30%)", callback_data="rep_estoque")],
+        [InlineKeyboardButton("📊 Gerar Excel por loja",               callback_data="rep_excel_loja")],
+        [InlineKeyboardButton("📊 Gerar Excel unificado",              callback_data="rep_excel_unificado")],
     ])
     await update.message.reply_text(
-        f"\U0001f6d2 {b('LISTA DE REPOSI\u00c7\u00c3O')}\n\n"
-        f"A lista \u00e9 baseada em tudo que saiu da loja no per\u00edodo importado.\n\n"
-        f"Como deseja repor?",
+        f"🛒 {b('LISTA DE REPOSIÇÃO')}\n\n"
+        f"A lista é baseada em tudo que saiu da loja no período importado.\n\n"
+        f"Como deseja receber?",
         parse_mode="HTML",
         reply_markup=kb
     )
@@ -1428,6 +1444,22 @@ async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await callback_admin(update, context)
         return
 
+    if acao == "pico_ok":
+        await query.answer("✅ Ótimo! Boas vendas nessa noite! 🚀")
+        return
+
+    if acao == "pico_problema":
+        await msg.reply_text(
+            f"⚠️ {b('Entendido — registramos o problema.')}\n\n"
+            f"Verifique:\n"
+            f"• Conexão com a internet no totem\n"
+            f"• Sistema PDV Legal funcionando\n"
+            f"• Totem com energia e tela ativa\n\n"
+            f"Use /atualizar após resolver para confirmar que voltou ao normal.",
+            parse_mode="HTML"
+        )
+        return
+
     # ─── Menu principal ──────────────────────────────────────
     if acao == "menu_principal":
         await abrir_menu(msg)
@@ -1542,6 +1574,78 @@ async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if produtos is None:
             await msg.reply_text("📎 Envie o arquivo de Produtos primeiro.")
             return
+
+        # Excel por loja ou unificado
+        if modo in ("excel",):
+            pass  # tratado abaixo por rep_excel_loja e rep_excel_unificado
+
+        if acao == "rep_excel_loja":
+            await msg.reply_text("⏳ Gerando Excel por loja...")
+            import openpyxl
+            from openpyxl.styles import Font, PatternFill, Alignment
+            from io import BytesIO
+
+            wb = openpyxl.Workbook()
+            wb.remove(wb.active)
+
+            for filial in produtos["nomeloja"].unique():
+                nome_aba = filial.split()[-1].title()[:31]
+                ws = wb.create_sheet(title=nome_aba)
+                df = produtos[produtos["nomeloja"]==filial].sort_values("quantidade", ascending=False)
+
+                # Cabeçalho
+                ws.append(["Produto", "Vendido (un)", "Repor (un)"])
+                for cell in ws[1]:
+                    cell.font = Font(bold=True)
+                    cell.fill = PatternFill("solid", fgColor="1E2027")
+
+                for _, row in df.iterrows():
+                    ws.append([row["produto"], int(row["quantidade"]), int(row["quantidade"])])
+
+                ws.append(["TOTAL", df["quantidade"].sum(), df["quantidade"].sum()])
+
+                for col in ws.columns:
+                    ws.column_dimensions[col[0].column_letter].width = 30
+
+            bio = BytesIO()
+            wb.save(bio)
+            bio.seek(0)
+            await msg.reply_document(document=bio, filename="reposicao_por_loja.xlsx",
+                                     caption="📊 Lista de reposição por loja")
+            await abrir_menu(msg)
+            return
+
+        if acao == "rep_excel_unificado":
+            await msg.reply_text("⏳ Gerando Excel unificado...")
+            import openpyxl
+            from openpyxl.styles import Font, PatternFill
+            from io import BytesIO
+
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws.title = "Reposição Unificada"
+
+            ws.append(["Loja", "Produto", "Vendido (un)", "Repor (un)"])
+            for cell in ws[1]:
+                cell.font = Font(bold=True)
+
+            df_sorted = produtos.sort_values(["nomeloja","quantidade"], ascending=[True, False])
+            for _, row in df_sorted.iterrows():
+                nome_loja = row["nomeloja"].split()[-1].title()
+                ws.append([nome_loja, row["produto"], int(row["quantidade"]), int(row["quantidade"])])
+
+            for col in ws.columns:
+                ws.column_dimensions[col[0].column_letter].width = 30
+
+            bio = BytesIO()
+            wb.save(bio)
+            bio.seek(0)
+            await msg.reply_document(document=bio, filename="reposicao_unificada.xlsx",
+                                     caption="📊 Lista de reposição unificada")
+            await abrir_menu(msg)
+            return
+
+        # Modo texto (exato ou estoque)
         label = "exata do que saiu" if modo == "exato" else "com estoque de segurança (+30%)"
         await msg.reply_text(f"⏳ Gerando lista de reposição {label}...")
         blocos = bloco_reposicao(produtos, modo)

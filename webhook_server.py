@@ -55,9 +55,18 @@ async def handle_webhook(request: web.Request) -> web.Response:
                     text=(
                         "✅ <b>Pagamento confirmado! Bem-vindo ao MercadoBot!</b>\n\n"
                         "Seu trial de 7 dias está ativo.\n\n"
-                        "Para começar, clique em <b>🔄 Atualizar dados agora</b> "
-                        "para buscar seus relatórios do PDV Legal automaticamente.\n\n"
-                        "Use /menu para ver todas as opções disponíveis."
+                        "Para começar, use /atualizar para buscar seus dados do PDV Legal.\n\n"
+                        "<b>Comandos disponíveis:</b>\n"
+                        "/briefing — resumo completo do período\n"
+                        "/atualizar — buscar dados por período\n"
+                        "/reposicao — lista de reposição inteligente\n"
+                        "/score — score de saúde da operação\n"
+                        "/projecao — projeção do mês\n"
+                        "/comparativo — comparativo entre unidades\n"
+                        "/alertas — alertas e pontos de atenção\n"
+                        "/configuracoes — atualizar credenciais\n"
+                        "/status — status da assinatura\n\n"
+                        "Ou use o /menu para ver todas as opções com um toque. 👇"
                     ),
                     parse_mode="HTML"
                 )
