@@ -503,7 +503,6 @@ def bloco_semanal(vendas: pd.DataFrame) -> str:
     linhas = [f"📅 {b('EVOLUÇÃO SEMANAL')}\n"]
 
     for semana, row in sem.iterrows():
-        # Datas da semana
         dias_semana = v[v["semana"] == semana]["DataAbertura"]
         if not dias_semana.empty:
             d_ini = dias_semana.min().strftime("%d/%m")
@@ -521,7 +520,7 @@ def bloco_semanal(vendas: pd.DataFrame) -> str:
             linhas.append(f"   {nome}: {b(f'R$ {val:,.2f}')} {i(f'({int(qtd)} vendas)')}")
         linhas.append("")
 
-    # Variação última vs penúltima semana
+    # Variação só quando tem 2+ semanas
     if len(sem) >= 2:
         linhas.append(f"📊 {b('Variação vs semana anterior:')}")
         ultima    = sem.iloc[-1]
@@ -533,6 +532,8 @@ def bloco_semanal(vendas: pd.DataFrame) -> str:
                 linhas.append(f"   {nome}: {b(f'▲ R$ {var:,.2f}')}")
             else:
                 linhas.append(f"   {nome}: {i(f'▼ R$ {abs(var):,.2f}')}")
+    else:
+        linhas.append(f"{i('Comparativo semanal disponível a partir da segunda semana de uso.')}")
 
     return "\n".join(linhas)
 

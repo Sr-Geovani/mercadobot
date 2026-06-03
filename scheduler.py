@@ -172,10 +172,11 @@ def iniciar_scheduler():
         replace_existing=True,
     )
 
-    # Alerta de início de pico às 20h (não mais 19h)
+    # Alerta de pico quinta a domingo às 20h
     scheduler.add_job(
         enviar_alerta_pico,
         trigger="cron",
+        day_of_week="thu,fri,sat,sun",
         hour=20,
         minute=0,
         id="alerta_pico",
