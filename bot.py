@@ -1603,19 +1603,17 @@ async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # ── Passo 2: escolha do período ──────────────────────
         if acao.startswith("rep_per_"):
-            from datetime import timedelta
-            from zoneinfo import ZoneInfo
             brasilia = ZoneInfo("America/Sao_Paulo")
-            hoje     = datetime.now(brasilia)
+            hoje_dt  = datetime.now(brasilia)
             fmt      = "%d/%m/%Y"
 
             periodos = {
-                "rep_per_hoje":   (hoje.strftime(fmt),                   hoje.strftime(fmt),   "hoje"),
-                "rep_per_ontem":  ((hoje-timedelta(days=1)).strftime(fmt),(hoje-timedelta(days=1)).strftime(fmt), "ontem"),
-                "rep_per_7dias":  ((hoje-timedelta(days=7)).strftime(fmt), hoje.strftime(fmt),  "últimos 7 dias"),
-                "rep_per_15dias": ((hoje-timedelta(days=15)).strftime(fmt),hoje.strftime(fmt),  "últimos 15 dias"),
-                "rep_per_30dias": ((hoje-timedelta(days=30)).strftime(fmt),hoje.strftime(fmt),  "últimos 30 dias"),
-                "rep_per_mes":    (hoje.strftime("01/%m/%Y"),             hoje.strftime(fmt),   f"mês de {nome_mes(hoje.month)}"),
+                "rep_per_hoje":   (hoje_dt.strftime(fmt),                              hoje_dt.strftime(fmt),   "hoje"),
+                "rep_per_ontem":  ((hoje_dt-timedelta(days=1)).strftime(fmt),          (hoje_dt-timedelta(days=1)).strftime(fmt), "ontem"),
+                "rep_per_7dias":  ((hoje_dt-timedelta(days=7)).strftime(fmt),          hoje_dt.strftime(fmt),   "últimos 7 dias"),
+                "rep_per_15dias": ((hoje_dt-timedelta(days=15)).strftime(fmt),         hoje_dt.strftime(fmt),   "últimos 15 dias"),
+                "rep_per_30dias": ((hoje_dt-timedelta(days=30)).strftime(fmt),         hoje_dt.strftime(fmt),   "últimos 30 dias"),
+                "rep_per_mes":    (hoje_dt.strftime("01/%m/%Y"),                       hoje_dt.strftime(fmt),   f"mês de {nome_mes(hoje_dt.month)}"),
             }
 
             if acao not in periodos:
