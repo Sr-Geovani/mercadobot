@@ -202,13 +202,13 @@ def iniciar_scheduler():
         replace_existing=True,
     )
 
-    # Fechamento semanal domingo 23h59 — após o pico das 22h
+    # Fechamento semanal domingo 21h30
     scheduler.add_job(
         enviar_fechamento_semanal,
         trigger="cron",
         day_of_week="sun",
-        hour=23,
-        minute=59,
+        hour=21,
+        minute=30,
         id="fechamento_semanal",
         replace_existing=True,
     )
@@ -372,7 +372,7 @@ async def enviar_alertas_proativos():
 
 
 async def enviar_alerta_pico():
-    """Avisa às 20h que entrou no horário de pico e pede checkup."""
+    """Avisa às 20h que entrou no horário de pico — informativo, sem pedir interação."""
     from database import listar_usuarios_ativos
     usuarios = await listar_usuarios_ativos()
     if not usuarios:
@@ -381,21 +381,18 @@ async def enviar_alerta_pico():
     bot = Bot(token=TELEGRAM_TOKEN)
     for usuario in usuarios:
         chat_id = usuario["chat_id"]
-        nome    = usuario.get("nome_mercadinho") or usuario.get("nome", "Operador")
         try:
-            kb = InlineKeyboardMarkup([
-                [InlineKeyboardButton("✅ Tudo funcionando", callback_data="pico_ok")],
-                [InlineKeyboardButton("⚠️ Tem algo errado",  callback_data="pico_problema")],
-            ])
             await bot.send_message(
                 chat_id=chat_id,
                 text=(
-                    f"🕐 {b('Horário de pico iniciando!')}\n\n"
-                    f"São 20h — seus moradores estão chegando em casa.\n\n"
-                    f"Checkup rápido: suas operações estão funcionando normalmente?"
+                    "🕐 <b>Horário de pico iniciando!</b>\n\n"
+                    "São 20h — seus moradores estão chegando em casa.\n\n"
+                    "✅ Garanta que os totens estão operando\n"
+                    "✅ Produtos âncora repostos (bebidas, snacks)\n"
+                    "✅ Conexão com internet estável\n\n"
+                    "Boas vendas nessa noite! 🚀"
                 ),
-                parse_mode="HTML",
-                reply_markup=kb
+                parse_mode="HTML"
             )
             await asyncio.sleep(3)
         except Exception as e:
