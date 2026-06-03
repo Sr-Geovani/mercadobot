@@ -817,6 +817,22 @@ async def receber_arquivo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ Erro: {str(e)}")
 
 # ─── FLUXO BRIEFING ──────────────────────────────────────────
+async def buscar_usuario_db(chat_id: int) -> dict:
+    from database import buscar_usuario
+    return await buscar_usuario(chat_id)
+
+async def comando_reposicao_msg(msg):
+    """Versão da reposição que aceita objeto msg diretamente."""
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("✅ Repor exatamente o que saiu",        callback_data="rep_modo_exato")],
+        [InlineKeyboardButton("📦 Repor + estoque de segurança (30%)", callback_data="rep_modo_estoque")],
+    ])
+    await msg.reply_text(
+        f"🛒 {b('LISTA DE REPOSIÇÃO')}\n\nComo deseja repor?",
+        parse_mode="HTML",
+        reply_markup=kb
+    )
+
 async def pedir_periodo(msg):
     """Quando não há dados em memória, oferece busca automática por período."""
     kb = InlineKeyboardMarkup([
@@ -990,21 +1006,15 @@ async def comando_alertas(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def comando_reposicao(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = update.effective_chat.id
-    d = dados_usuario.get(chat_id, {})
-    if d.get("produtos") is None:
-        await pedir_periodo(update.message)
-        return
+    """Passo 1: escolha do modo de reposição."""
+    msg = update.message if update.message else update.callback_query.message
     kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("✅ Repor exatamente o que saiu",        callback_data="rep_exato")],
-        [InlineKeyboardButton("📦 Repor + estoque de segurança (30%)", callback_data="rep_estoque")],
-        [InlineKeyboardButton("📊 Gerar Excel por loja",               callback_data="rep_excel_loja")],
-        [InlineKeyboardButton("📊 Gerar Excel unificado",              callback_data="rep_excel_unificado")],
+        [InlineKeyboardButton("✅ Repor exatamente o que saiu",         callback_data="rep_modo_exato")],
+        [InlineKeyboardButton("📦 Repor + estoque de segurança (30%)",  callback_data="rep_modo_estoque")],
     ])
-    await update.message.reply_text(
+    await msg.reply_text(
         f"🛒 {b('LISTA DE REPOSIÇÃO')}\n\n"
-        f"A lista é baseada em tudo que saiu da loja no período importado.\n\n"
-        f"Como deseja receber?",
+        f"Como deseja repor?",
         parse_mode="HTML",
         reply_markup=kb
     )
@@ -1569,91 +1579,192 @@ async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if acao.startswith("rep_"):
-        modo = acao.split("_")[1]
-        d = dados_usuario.get(chat_id, {})
-        produtos = d.get("produtos")
-        if produtos is None:
-            await msg.reply_text("📎 Envie o arquivo de Produtos primeiro.")
+
+        # ── Passo 1: escolha do modo ─────────────────────────
+        if acao in ("rep_modo_exato", "rep_modo_estoque"):
+            modo = "exato" if acao == "rep_modo_exato" else "estoque"
+            dados_usuario.setdefault(chat_id, {})["rep_modo"] = modo
+            label = "exatamente o que saiu" if modo == "exato" else "com estoque de segurança (+30%)"
+            kb = InlineKeyboardMarkup([
+                [InlineKeyboardButton("📅 Hoje",            callback_data="rep_per_hoje")],
+                [InlineKeyboardButton("📅 Ontem",           callback_data="rep_per_ontem")],
+                [InlineKeyboardButton("📅 Últimos 7 dias",  callback_data="rep_per_7dias")],
+                [InlineKeyboardButton("📅 Últimos 15 dias", callback_data="rep_per_15dias")],
+                [InlineKeyboardButton("📅 Últimos 30 dias", callback_data="rep_per_30dias")],
+                [InlineKeyboardButton("📅 Mês atual",       callback_data="rep_per_mes")],
+            ])
+            await msg.reply_text(
+                f"✅ Modo: {b(label)}\n\n"
+                f"Qual período deseja usar para calcular a reposição?",
+                parse_mode="HTML",
+                reply_markup=kb
+            )
             return
 
-        # Excel por loja ou unificado
-        if modo in ("excel",):
-            pass  # tratado abaixo por rep_excel_loja e rep_excel_unificado
+        # ── Passo 2: escolha do período ──────────────────────
+        if acao.startswith("rep_per_"):
+            from datetime import timedelta
+            from zoneinfo import ZoneInfo
+            brasilia = ZoneInfo("America/Sao_Paulo")
+            hoje     = datetime.now(brasilia)
+            fmt      = "%d/%m/%Y"
 
-        if acao == "rep_excel_loja":
-            await msg.reply_text("⏳ Gerando Excel por loja...")
-            import openpyxl
-            from openpyxl.styles import Font, PatternFill, Alignment
-            from io import BytesIO
+            periodos = {
+                "rep_per_hoje":   (hoje.strftime(fmt),                   hoje.strftime(fmt),   "hoje"),
+                "rep_per_ontem":  ((hoje-timedelta(days=1)).strftime(fmt),(hoje-timedelta(days=1)).strftime(fmt), "ontem"),
+                "rep_per_7dias":  ((hoje-timedelta(days=7)).strftime(fmt), hoje.strftime(fmt),  "últimos 7 dias"),
+                "rep_per_15dias": ((hoje-timedelta(days=15)).strftime(fmt),hoje.strftime(fmt),  "últimos 15 dias"),
+                "rep_per_30dias": ((hoje-timedelta(days=30)).strftime(fmt),hoje.strftime(fmt),  "últimos 30 dias"),
+                "rep_per_mes":    (hoje.strftime("01/%m/%Y"),             hoje.strftime(fmt),   f"mês de {nome_mes(hoje.month)}"),
+            }
 
-            wb = openpyxl.Workbook()
-            wb.remove(wb.active)
+            if acao not in periodos:
+                return
 
-            for filial in produtos["nomeloja"].unique():
-                nome_aba = filial.split()[-1].title()[:31]
-                ws = wb.create_sheet(title=nome_aba)
-                df = produtos[produtos["nomeloja"]==filial].sort_values("quantidade", ascending=False)
+            ini, fim, label_per = periodos[acao]
+            dados_usuario.setdefault(chat_id, {})["rep_periodo"] = (ini, fim, label_per)
 
-                # Cabeçalho
-                ws.append(["Produto", "Vendido (un)", "Repor (un)"])
-                for cell in ws[1]:
-                    cell.font = Font(bold=True)
-                    cell.fill = PatternFill("solid", fgColor="1E2027")
-
-                for _, row in df.iterrows():
-                    ws.append([row["produto"], int(row["quantidade"]), int(row["quantidade"])])
-
-                ws.append(["TOTAL", df["quantidade"].sum(), df["quantidade"].sum()])
-
-                for col in ws.columns:
-                    ws.column_dimensions[col[0].column_letter].width = 30
-
-            bio = BytesIO()
-            wb.save(bio)
-            bio.seek(0)
-            await msg.reply_document(document=bio, filename="reposicao_por_loja.xlsx",
-                                     caption="📊 Lista de reposição por loja")
-            await abrir_menu(msg)
+            kb = InlineKeyboardMarkup([
+                [InlineKeyboardButton("💬 Receber no chat",        callback_data="rep_fmt_chat")],
+                [InlineKeyboardButton("📊 Excel por loja",         callback_data="rep_fmt_excel_loja")],
+                [InlineKeyboardButton("📊 Excel unificado",        callback_data="rep_fmt_excel_unificado")],
+            ])
+            await msg.reply_text(
+                f"📅 Período: {b(label_per)}\n\n"
+                f"Como deseja receber a lista?",
+                parse_mode="HTML",
+                reply_markup=kb
+            )
             return
 
-        if acao == "rep_excel_unificado":
-            await msg.reply_text("⏳ Gerando Excel unificado...")
+        # ── Passo 3: gerar a reposição ───────────────────────
+        if acao.startswith("rep_fmt_"):
+            d        = dados_usuario.get(chat_id, {})
+            modo     = d.get("rep_modo", "exato")
+            periodo  = d.get("rep_periodo")
+            formato  = acao.replace("rep_fmt_", "")
+
+            if not periodo:
+                await msg.reply_text("⚠️ Selecione o modo e período primeiro.")
+                await comando_reposicao_msg(msg)
+                return
+
+            ini, fim, label_per = periodo
+            label_modo = "exata do que saiu" if modo == "exato" else "com estoque de segurança (+30%)"
+
+            await msg.reply_text(
+                f"⏳ Buscando dados de {b(label_per)} e gerando lista de reposição {label_modo}...",
+                parse_mode="HTML"
+            )
+
+            # Busca os dados do período escolhido
+            try:
+                usuario_db = await buscar_usuario_db(chat_id)
+                pdv_email  = usuario_db.get("pdv_email") if usuario_db else None
+                pdv_senha  = usuario_db.get("pdv_senha") if usuario_db else None
+
+                from scraper import baixar_relatorios_periodo
+                import asyncio as _asyncio
+                loop = _asyncio.get_event_loop()
+                _, path_produtos = await loop.run_in_executor(
+                    None, baixar_relatorios_periodo, ini, fim, pdv_email, pdv_senha
+                )
+                produtos = pd.read_excel(path_produtos)
+                produtos = normalizar_produtos(produtos)
+
+                if produtos.empty:
+                    await msg.reply_text("⚠️ Nenhum produto encontrado para o período selecionado.")
+                    await abrir_menu(msg)
+                    return
+
+                # Aplica margem de segurança se necessário
+                if modo == "estoque":
+                    produtos = produtos.copy()
+                    produtos["quantidade"] = (produtos["quantidade"] * 1.3).round().astype(int)
+
+            except Exception as e:
+                await msg.reply_text(
+                    f"❌ Erro ao buscar dados do PDV Legal.\n\n{i(str(e)[:200])}",
+                    parse_mode="HTML"
+                )
+                await abrir_menu(msg)
+                return
+
+            # Formato: chat
+            if formato == "chat":
+                blocos = bloco_reposicao(produtos, "exato")  # modo já aplicado acima
+                for bloco in blocos:
+                    await enviar(msg, bloco)
+                await abrir_menu(msg)
+                return
+
+            # Formato: Excel
             import openpyxl
             from openpyxl.styles import Font, PatternFill
             from io import BytesIO
 
             wb = openpyxl.Workbook()
-            ws = wb.active
-            ws.title = "Reposição Unificada"
 
-            ws.append(["Loja", "Produto", "Vendido (un)", "Repor (un)"])
-            for cell in ws[1]:
-                cell.font = Font(bold=True)
+            if formato == "excel_loja":
+                wb.remove(wb.active)
+                for filial in produtos["nomeloja"].unique():
+                    nome_aba = filial.split()[-1].title()[:31]
+                    ws = wb.create_sheet(title=nome_aba)
+                    df = produtos[produtos["nomeloja"]==filial].sort_values("quantidade", ascending=False)
+                    ws.append(["Produto", "Qtd vendida", "Repor"])
+                    for cell in ws[1]:
+                        cell.font = Font(bold=True)
+                    for _, row in df.iterrows():
+                        ws.append([row["produto"], int(row["quantidade"]), int(row["quantidade"])])
+                    for col in ws.columns:
+                        ws.column_dimensions[col[0].column_letter].width = 32
+                filename = f"reposicao_por_loja_{label_per.replace(' ','_')}.xlsx"
 
-            df_sorted = produtos.sort_values(["nomeloja","quantidade"], ascending=[True, False])
-            for _, row in df_sorted.iterrows():
-                nome_loja = row["nomeloja"].split()[-1].title()
-                ws.append([nome_loja, row["produto"], int(row["quantidade"]), int(row["quantidade"])])
-
-            for col in ws.columns:
-                ws.column_dimensions[col[0].column_letter].width = 30
+            else:  # excel_unificado
+                ws = wb.active
+                ws.title = "Reposição"
+                ws.append(["Loja", "Produto", "Qtd vendida", "Repor"])
+                for cell in ws[1]:
+                    cell.font = Font(bold=True)
+                df_sorted = produtos.sort_values(["nomeloja","quantidade"], ascending=[True,False])
+                for _, row in df_sorted.iterrows():
+                    nome_loja = row["nomeloja"].split()[-1].title()
+                    ws.append([nome_loja, row["produto"], int(row["quantidade"]), int(row["quantidade"])])
+                for col in ws.columns:
+                    ws.column_dimensions[col[0].column_letter].width = 32
+                filename = f"reposicao_unificada_{label_per.replace(' ','_')}.xlsx"
 
             bio = BytesIO()
             wb.save(bio)
             bio.seek(0)
-            await msg.reply_document(document=bio, filename="reposicao_unificada.xlsx",
-                                     caption="📊 Lista de reposição unificada")
+            await msg.reply_document(
+                document=bio,
+                filename=filename,
+                caption=f"📊 Lista de reposição {label_modo} — {label_per}"
+            )
             await abrir_menu(msg)
             return
 
-        # Modo texto (exato ou estoque)
-        label = "exata do que saiu" if modo == "exato" else "com estoque de segurança (+30%)"
-        await msg.reply_text(f"⏳ Gerando lista de reposição {label}...")
-        blocos = bloco_reposicao(produtos, modo)
-        for bloco in blocos:
-            await enviar(msg, bloco)
-        aguardando_dias.pop(chat_id, None)
-        await abrir_menu(msg)
+        # Fallback para callbacks antigos rep_exato / rep_estoque
+        if acao in ("rep_exato", "rep_estoque"):
+            dados_usuario.setdefault(chat_id, {})["rep_modo"] = acao.replace("rep_", "")
+            modo  = acao.replace("rep_", "")
+            label = "exatamente o que saiu" if modo == "exato" else "com estoque de segurança (+30%)"
+            kb = InlineKeyboardMarkup([
+                [InlineKeyboardButton("📅 Hoje",            callback_data="rep_per_hoje")],
+                [InlineKeyboardButton("📅 Ontem",           callback_data="rep_per_ontem")],
+                [InlineKeyboardButton("📅 Últimos 7 dias",  callback_data="rep_per_7dias")],
+                [InlineKeyboardButton("📅 Últimos 15 dias", callback_data="rep_per_15dias")],
+                [InlineKeyboardButton("📅 Últimos 30 dias", callback_data="rep_per_30dias")],
+                [InlineKeyboardButton("📅 Mês atual",       callback_data="rep_per_mes")],
+            ])
+            await msg.reply_text(
+                f"✅ Modo: {b(label)}\n\nQual período deseja usar?",
+                parse_mode="HTML",
+                reply_markup=kb
+            )
+            return
+
         return
 
     cmds = {
