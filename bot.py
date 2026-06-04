@@ -523,35 +523,32 @@ def bloco_top_produtos(produtos: pd.DataFrame) -> str:
 def bloco_semanal(vendas: pd.DataFrame) -> str:
     v = vendas.copy()
     v["DataAbertura"] = pd.to_datetime(v["DataAbertura"], dayfirst=True)
-    v["semana"] = v["DataAbertura"].dt.isocalendar().week.astype(str).apply(lambda x: f"S{x}")
-    v["dia_semana"] = v["DataAbertura"].dt.day_name()
+    # Agrupa por semana segunda-domingo
+    v["semana_ini"] = v["DataAbertura"] - pd.to_timedelta(v["DataAbertura"].dt.weekday, unit="D")
+    v["semana_key"] = v["semana_ini"].dt.strftime("%d/%m")
 
-    sem = v.groupby(["semana","nomeFilial"])["valor"].sum().unstack(fill_value=0)
-    sem_qtd = v.groupby(["semana","nomeFilial"])["valor"].count().unstack(fill_value=0)
+    sem     = v.groupby(["semana_key","nomeFilial"])["valor"].sum().unstack(fill_value=0)
+    sem_qtd = v.groupby(["semana_key","nomeFilial"])["valor"].count().unstack(fill_value=0)
+    sem_ini = v.groupby("semana_key")["DataAbertura"].min()
+    sem_fim = v.groupby("semana_key")["DataAbertura"].max()
 
-    linhas = [f"📅 {b('EVOLUÇÃO SEMANAL')}\n"]
+    linhas = [f"\U0001f4c5 {b('EVOLUÇÃO SEMANAL')}\n"]
 
-    for semana, row in sem.iterrows():
-        dias_semana = v[v["semana"] == semana]["DataAbertura"]
-        if not dias_semana.empty:
-            d_ini = dias_semana.min().strftime("%d/%m")
-            d_fim = dias_semana.max().strftime("%d/%m")
-            periodo = f"{d_ini} a {d_fim}"
-        else:
-            periodo = semana
-
-        total_semana = row.sum()
-        linhas.append(f"📌 {b(semana)} {i(f'({periodo})')} — {b(f'R$ {total_semana:,.2f}')}")
+    for semana_key, row in sem.iterrows():
+        d_ini   = sem_ini[semana_key].strftime("%d/%m")
+        d_fim   = sem_fim[semana_key].strftime("%d/%m")
+        periodo = f"{d_ini} a {d_fim}"
+        total   = row.sum()
+        linhas.append(f"\U0001f4cc {b(f'Semana {semana_key}')} {i(f'({periodo})')} — {b(f'R$ {total:,.2f}')}")
 
         for filial, val in row.items():
             nome = filial.split()[-1].title()
-            qtd  = sem_qtd.loc[semana, filial] if filial in sem_qtd.columns else 0
-            linhas.append(f"   {nome}: {b(f'R$ {val:,.2f}')} {i(f'({int(qtd)} vendas)')}")
+            qtd  = int(sem_qtd.loc[semana_key, filial]) if filial in sem_qtd.columns else 0
+            linhas.append(f"   {nome}: {b(f'R$ {val:,.2f}')} {i(f'({qtd} vendas)')}")
         linhas.append("")
 
-    # Variação só quando tem 2+ semanas
     if len(sem) >= 2:
-        linhas.append(f"📊 {b('Variação vs semana anterior:')}")
+        linhas.append(f"\U0001f4ca {b('Variação vs semana anterior:')}")
         ultima    = sem.iloc[-1]
         penultima = sem.iloc[-2]
         for filial in sem.columns:
@@ -562,9 +559,10 @@ def bloco_semanal(vendas: pd.DataFrame) -> str:
             else:
                 linhas.append(f"   {nome}: {i(f'▼ R$ {abs(var):,.2f}')}")
     else:
-        linhas.append(f"{i('Comparativo semanal disponível a partir da segunda semana de uso.')}")
+        linhas.append(i("Comparativo semanal disponível a partir da segunda semana de uso."))
 
     return "\n".join(linhas)
+
 
 def bloco_pico(vendas: pd.DataFrame) -> str:
     v = vendas.copy()
@@ -584,12 +582,13 @@ def bloco_pico(vendas: pd.DataFrame) -> str:
 
 def bloco_reposicao(produtos: pd.DataFrame, modo: str) -> list:
     v = produtos.copy()
-    # Remove linhas com nomeloja vazio ou NaN
     v = v[v["nomeloja"].notna() & (v["nomeloja"].astype(str).str.strip() != "")]
     v["nomeloja"] = v["nomeloja"].astype(str)
 
     fator      = 1.3 if modo == "estoque" else 1.0
-    label_modo = "Reposição + 30% de estoque de segurança" if modo == "estoque" else "Reposição exata do que saiu"
+    label_modo = "Reposição + 30% estoque de segurança" if modo == "estoque" else "Reposição exata do que saiu"
+
+    tem_grupo = "grupo" in v.columns and v["grupo"].notna().any()
 
     blocos = []
     for filial in v["nomeloja"].unique():
@@ -597,70 +596,30 @@ def bloco_reposicao(produtos: pd.DataFrame, modo: str) -> list:
         df   = v[v["nomeloja"] == filial].sort_values("quantidade", ascending=False)
 
         linhas = [
-            f"🛒 {b(f'LISTA DE REPOSIÇÃO — {nome.upper()}')}",
-            f"{i(label_modo)}\n"
+            f"🛒 {b(f'REPOSIÇÃO — {nome}')}",
+            f"{i(label_modo)}\n",
         ]
 
-        total_itens = 0
-        for _, row in df.iterrows():
-            repor = max(1, round(row["quantidade"] * fator))
-            total_itens += repor
-            sufixo = f"+30% = {repor}" if modo == "estoque" else f"{repor}"
-            linhas.append(f"• {row['produto']}")
-            linhas.append(f"  {b(f'{sufixo} un')}  {i(f'vendido: {int(row.quantidade)} un')}")
+        if tem_grupo:
+            # Agrupa por categoria
+            for grupo, df_g in df.groupby("grupo"):
+                if str(grupo) in ("nan", ""):
+                    continue
+                linhas.append(f"📂 {b(str(grupo))}")
+                for _, row in df_g.iterrows():
+                    qtd = int(round(row["quantidade"] * fator))
+                    linhas.append(f"   • {row['produto']} — {b(f'{qtd} un')}")
+                linhas.append("")
+        else:
+            for _, row in df.iterrows():
+                qtd = int(round(row["quantidade"] * fator))
+                linhas.append(f"   • {row['produto']} — {b(f'{qtd} un')}")
 
-        linhas.append(f"\n📦 {b(f'Total: {total_itens} unidades')}")
+        total = int(df["quantidade"].sum() * fator)
+        linhas.append(f"\n📦 Total: {b(f'{total} unidades')}")
         blocos.append("\n".join(linhas))
 
     return blocos
-
-# ─── INSIGHT IA (curto) ───────────────────────────────────────
-import random
-
-TEMAS_INSIGHT = [
-    ("mix_pagamento", "Analise o mix de pagamento (PIX, Débito, Crédito). Calcule o custo estimado de taxas com base em 1.5% no débito e 2.5% no crédito. Sugira ação concreta para migrar para PIX e o quanto economizaria por mês."),
-    ("ruptura", "Identifique produtos que venderam bem em semanas anteriores mas com queda brusca recente. Calcule a perda estimada de receita se esse produto entrou em ruptura. Sugira ação imediata."),
-    ("horario_morto", "Identifique os 3 horários com menos vendas. Calcule quanto de receita potencial está sendo perdida nesses horários comparado ao horário de pico. Sugira ação para aumentar vendas nesses períodos."),
-    ("comparativo_filiais", "Compare as duas filiais: qual tem maior ticket médio, qual tem maior volume, qual tem mais cancelamentos. Identifique o que a filial melhor pode ensinar para a outra."),
-    ("categoria_oculta", "Identifique a categoria com maior crescimento proporcional e a com maior queda. Sugira ajuste de mix de produtos baseado nesses dados."),
-    ("cancelamentos", "Analise os cancelamentos em detalhe: valor total, percentual do faturamento, comparativo entre filiais. Se estiver acima de 5%, calcule o impacto anual e sugira investigação."),
-    ("produto_ancora", "Identifique o produto âncora de cada filial (maior contribuição de receita). Calcule o risco se esse produto entrar em falta e sugira política de estoque de segurança."),
-    ("dia_semana", "Identifique o melhor e pior dia da semana em faturamento. Calcule a diferença e sugira ação para melhorar o dia mais fraco (promoção, reposição extra, comunicação no condomínio)."),
-    ("ticket_medio", "Analise o ticket médio por filial e por período. Se estiver abaixo de R$ 15, sugira estratégias para aumentá-lo (cross-sell, posicionamento de produtos, combos)."),
-    ("tendencia_semanal", "Identifique a tendência das últimas semanas: o negócio está crescendo ou caindo? Calcule a taxa de variação e projete o faturamento para as próximas 2 semanas se a tendência continuar."),
-]
-
-async def insight_ia(contexto: str, tema: str = None) -> str:
-    client = anthropic.Anthropic(api_key=ANTHROPIC_KEY)
-
-    # Seleciona tema aleatório se não especificado
-    if tema is None or tema == "geral":
-        _, descricao_tema = random.choice(TEMAS_INSIGHT)
-    else:
-        descricao_tema = tema
-
-    prompt = f"""Você é um consultor especialista em mercadinhos autônomos de condomínio no Brasil.
-
-Dados reais do operador:
-{contexto}
-
-TAREFA: {descricao_tema}
-
-REGRAS:
-• Responda em 3-5 linhas no máximo
-• Use os números reais dos dados — nunca invente valores
-• Comece com um emoji relevante
-• Seja direto e prático — o operador precisa saber O QUE FAZER
-• Se não houver dados suficientes para esse tema, escolha outro ângulo relevante
-• Não use traços, asteriscos ou markdown
-• Use bullet • para listar no máximo 2 itens de ação"""
-
-    msg = client.messages.create(
-        model="claude-sonnet-4-6",
-        max_tokens=300,
-        messages=[{"role": "user", "content": prompt}]
-    )
-    return msg.content[0].text.strip()
 
 def normalizar_vendas(df: pd.DataFrame) -> pd.DataFrame:
     """Garante tipos corretos e remove linhas vazias do relatório de vendas."""
@@ -780,11 +739,7 @@ def kb_menu():
     ])
 
 async def abrir_menu(msg):
-    """Envia menu principal. Remove botões da mensagem anterior se possível."""
-    try:
-        await msg.edit_reply_markup(reply_markup=None)
-    except Exception:
-        pass
+    """Envia menu principal."""
     await msg.reply_text("O que deseja analisar agora?", reply_markup=kb_menu())
 
 # ─── ENVIO HTML ──────────────────────────────────────────────
@@ -1513,12 +1468,11 @@ async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
     acao    = query.data
     msg     = query.message
 
-    # Ignora callbacks de mensagens com mais de 10 minutos
-    import time as _time
-    msg_age = _time.time() - query.message.date.timestamp()
-    if msg_age > 600:
-        await query.answer("⏱ Esse botão expirou. Use o menu abaixo.")
-        return
+    # Remove os botões da mensagem que foi clicada
+    try:
+        await query.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
 
     # Imports fixos no topo — evita UnboundLocalError por imports locais conflitantes
     from datetime import datetime as _datetime, timedelta as _timedelta
