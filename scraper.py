@@ -125,16 +125,46 @@ async def exportar_produtos(page, context, data_ini: str, data_fim: str) -> Path
         (d7,      hoje):  "Ultimos 7 dias",
         (d15,     hoje):  "Ultimos 15 dias",
         (d30,     hoje):  "Ultimos 30 dias",
-        (mes_ini, hoje):  "Este mes",
     }
-    range_key = mapa.get((data_ini, data_fim), "Ontem")
-    logger.info(f"Produtos — range_key: '{range_key}'")
+    range_key = mapa.get((data_ini, data_fim))
+    logger.info(f"Produtos — range_key: '{range_key or 'Intervalo customizado'}'")
 
-    # Abre o date picker e seleciona opção
+    # Abre o date picker
     await page.click("#reportrange")
     await page.wait_for_timeout(500)
-    await page.click(f"li[data-range-key='{range_key}']")
-    await page.wait_for_timeout(500)
+
+    if range_key:
+        # Opção pré-definida — clica direto
+        await page.click(f"li[data-range-key='{range_key}']")
+        await page.wait_for_timeout(500)
+    else:
+        # Período customizado (mês atual, mês anterior, etc.)
+        # Clica em "Intervalo" para digitar datas manualmente
+        await page.click("li[data-range-key='Intervalo']")
+        await page.wait_for_timeout(800)
+
+        # Converte data de dd/mm/yyyy para mm/dd/yyyy (formato do datepicker)
+        def br_to_us(d):
+            dd, mm, yyyy = d.split("/")
+            return f"{mm}/{dd}/{yyyy}"
+
+        # Preenche data início
+        campo_ini = page.locator("input.daterangepicker_start_input, input[name='daterangepicker_start']").first
+        await campo_ini.click(click_count=3)
+        await campo_ini.type(br_to_us(data_ini))
+        await page.keyboard.press("Tab")
+        await page.wait_for_timeout(300)
+
+        # Preenche data fim
+        campo_fim = page.locator("input.daterangepicker_end_input, input[name='daterangepicker_end']").first
+        await campo_fim.click(click_count=3)
+        await campo_fim.type(br_to_us(data_fim))
+        await page.keyboard.press("Tab")
+        await page.wait_for_timeout(300)
+
+        # Confirma o intervalo
+        await page.click("button.applyBtn, .applyBtn")
+        await page.wait_for_timeout(500)
 
     # Clica em Filtrar
     await page.click("#btnFiltro")
