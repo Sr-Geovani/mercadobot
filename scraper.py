@@ -141,7 +141,9 @@ async def exportar_produtos(page, context, data_ini: str, data_fim: str) -> Path
 
     # Clica em Filtrar
     await page.click("#btnFiltro")
-    await page.wait_for_timeout(3000)
+    # Meses têm mais dados — timeout maior
+    wait_ms = 8000 if (data_ini != data_fim) else 3000
+    await page.wait_for_timeout(wait_ms)
 
     # Abre modal de download
     await page.click("#imgDownload")

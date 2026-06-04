@@ -523,27 +523,29 @@ def bloco_top_produtos(produtos: pd.DataFrame) -> str:
 def bloco_semanal(vendas: pd.DataFrame) -> str:
     v = vendas.copy()
     v["DataAbertura"] = pd.to_datetime(v["DataAbertura"], dayfirst=True)
-    # Agrupa por semana segunda-domingo
-    v["semana_ini"] = v["DataAbertura"] - pd.to_timedelta(v["DataAbertura"].dt.weekday, unit="D")
-    v["semana_key"] = v["semana_ini"].dt.strftime("%d/%m")
 
-    sem     = v.groupby(["semana_key","nomeFilial"])["valor"].sum().unstack(fill_value=0)
-    sem_qtd = v.groupby(["semana_key","nomeFilial"])["valor"].count().unstack(fill_value=0)
-    sem_ini = v.groupby("semana_key")["DataAbertura"].min()
-    sem_fim = v.groupby("semana_key")["DataAbertura"].max()
+    # Agrupa por semana real (segunda a domingo)
+    v["seg"] = v["DataAbertura"] - pd.to_timedelta(v["DataAbertura"].dt.weekday, unit="D")
+    v["seg"] = v["seg"].dt.normalize()
+
+    sem     = v.groupby(["seg","nomeFilial"])["valor"].sum().unstack(fill_value=0)
+    sem_qtd = v.groupby(["seg","nomeFilial"])["valor"].count().unstack(fill_value=0)
+    sem_max = v.groupby("seg")["DataAbertura"].max()
 
     linhas = [f"\U0001f4c5 {b('EVOLUÇÃO SEMANAL')}\n"]
 
-    for semana_key, row in sem.iterrows():
-        d_ini   = sem_ini[semana_key].strftime("%d/%m")
-        d_fim   = sem_fim[semana_key].strftime("%d/%m")
-        periodo = f"{d_ini} a {d_fim}"
+    for seg, row in sem.iterrows():
+        dom     = seg + pd.Timedelta(days=6)
+        fim_real = sem_max[seg]
+        d_ini   = seg.strftime("%d/%m")
+        # Fim é o menor entre domingo e o último dia com dado
+        d_fim   = min(dom, fim_real).strftime("%d/%m")
         total   = row.sum()
-        linhas.append(f"\U0001f4cc {b(f'Semana {semana_key}')} {i(f'({periodo})')} — {b(f'R$ {total:,.2f}')}")
+        linhas.append(f"\U0001f4cc {b(f'{d_ini} a {d_fim}')} — {b(f'R$ {total:,.2f}')}")
 
         for filial, val in row.items():
-            nome = filial.split()[-1].title()
-            qtd  = int(sem_qtd.loc[semana_key, filial]) if filial in sem_qtd.columns else 0
+            nome = str(filial).split()[-1].title()
+            qtd  = int(sem_qtd.loc[seg, filial]) if filial in sem_qtd.columns else 0
             linhas.append(f"   {nome}: {b(f'R$ {val:,.2f}')} {i(f'({qtd} vendas)')}")
         linhas.append("")
 
@@ -552,16 +554,17 @@ def bloco_semanal(vendas: pd.DataFrame) -> str:
         ultima    = sem.iloc[-1]
         penultima = sem.iloc[-2]
         for filial in sem.columns:
-            nome = filial.split()[-1].title()
+            nome = str(filial).split()[-1].title()
             var  = ultima[filial] - penultima[filial]
             if var >= 0:
-                linhas.append(f"   {nome}: {b(f'▲ R$ {var:,.2f}')}")
+                linhas.append(f"   {nome}: {b(f'\u25b2 R$ {var:,.2f}')}")
             else:
-                linhas.append(f"   {nome}: {i(f'▼ R$ {abs(var):,.2f}')}")
+                linhas.append(f"   {nome}: {i(f'\u25bc R$ {abs(var):,.2f}')}")
     else:
-        linhas.append(i("Comparativo semanal disponível a partir da segunda semana de uso."))
+        linhas.append(i("Comparativo disponível a partir da segunda semana."))
 
     return "\n".join(linhas)
+
 
 
 def bloco_pico(vendas: pd.DataFrame) -> str:
