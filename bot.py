@@ -1385,7 +1385,12 @@ async def cmd_reativar_handler(update: Update, context: ContextTypes.DEFAULT_TYP
 
         trial_usado           = usuario.get("trial_usado", False)
         dias_trial_restantes  = calcular_dias_trial_restantes(usuario) if trial_usado else 0
-        assinatura_id         = await buscar_assinatura_ativa(asaas_id)
+        assinatura_id = await buscar_assinatura_ativa(asaas_id)
+        if assinatura_id:
+            from pagamento import buscar_link_assinatura
+            link = await buscar_link_assinatura(assinatura_id)
+            if not link:
+                assinatura_id = None
 
         if not assinatura_id:
             from pagamento import buscar_link_assinatura
@@ -1394,9 +1399,6 @@ async def cmd_reativar_handler(update: Update, context: ContextTypes.DEFAULT_TYP
                 reativacao=trial_usado,
                 dias_trial_restantes=dias_trial_restantes
             )
-        else:
-            from pagamento import buscar_link_assinatura
-            link = await buscar_link_assinatura(assinatura_id)
 
         if trial_usado and dias_trial_restantes > 0:
             aviso = f"\n\n{i(f'Você ainda tem {dias_trial_restantes} dia(s) de trial restantes.')}"
@@ -1574,7 +1576,11 @@ async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
             assinatura_id = await buscar_assinatura_ativa(asaas_id)
             if assinatura_id:
                 link = await buscar_link_assinatura(assinatura_id)
-            else:
+                # Se não retornou link, a assinatura está cancelada/sem cobrança pendente
+                if not link:
+                    assinatura_id = None
+
+            if not assinatura_id:
                 link, assinatura_id = await gerar_link_pagamento(
                     asaas_id, chat_id,
                     reativacao=trial_usado,
