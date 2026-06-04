@@ -1288,6 +1288,16 @@ async def mensagem_livre(update: Update, context: ContextTypes.DEFAULT_TYPE):
     texto   = update.message.text.strip()
     d       = dados_usuario.get(chat_id, {})
 
+    # ─── Admin: aguardando texto de notificação ──────────────
+    if context.user_data.get("admin_aguardando_notif") and chat_id == int(os.environ.get("ADMIN_CHAT_ID", "0")):
+        from admin import admin_executar_notificacao
+        from database import get_pool
+        grupo = context.user_data.pop("admin_notif_grupo", "todos")
+        context.user_data.pop("admin_aguardando_notif", None)
+        pool  = await get_pool()
+        await admin_executar_notificacao(update.message, pool, grupo, texto)
+        return
+
     # ─── Fluxo de atualização de credenciais ─────────────────
     aguardando = d.get("aguardando")
 
