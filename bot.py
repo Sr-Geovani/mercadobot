@@ -442,12 +442,9 @@ def bloco_faturamento(vendas: pd.DataFrame) -> str:
 
     for filial, row in filiais.iterrows():
         nome = filial.split()[-1].title()
-        # Conta itens totais vendidos (soma das quantidades dos produtos)
-        itens_filial = vendas[vendas["nomeFilial"]==filial]["QtdItens"].sum() if "QtdItens" in vendas.columns else row.qtd
         linhas.append(f"📍 {b(nome)}")
         linhas.append(f"   Faturamento: {b(f'R$ {row.fat:,.2f}')}")
-        linhas.append(f"   Transações: {row.qtd} | Itens vendidos: {b(str(int(itens_filial)))}")
-        linhas.append(f"   Ticket médio: R$ {row.tk:.2f}")
+        linhas.append(f"   Transações: {b(str(row.qtd))} | Ticket médio: R$ {row.tk:.2f}")
         linhas.append(f"   Cancelamentos: {c(f'R$ {row.canc:,.2f}')}\n")
 
     return "\n".join(linhas)
@@ -486,11 +483,16 @@ def bloco_categorias(produtos: pd.DataFrame) -> str:
 def bloco_top_produtos(produtos: pd.DataFrame) -> str:
     linhas = [f"📦 {b('TOP PRODUTOS POR UNIDADE')}\n"]
     for filial in produtos["nomeloja"].unique():
-        nome = filial.split()[-1].title()
-        top = produtos[produtos["nomeloja"]==filial].sort_values("quantidade", ascending=False).head(5)
-        linhas.append(f"📍 {b(nome)}")
+        nome        = filial.split()[-1].title()
+        df_filial   = produtos[produtos["nomeloja"]==filial]
+        total_itens = int(df_filial["quantidade"].sum())
+        total_val   = df_filial["valor"].sum()
+        top         = df_filial.sort_values("quantidade", ascending=False).head(5)
+
+        linhas.append(f"📍 {b(nome)} — {b(str(total_itens))} itens / R$ {total_val:,.2f}")
         for pos, (_, row) in enumerate(top.iterrows(), 1):
-            linhas.append(f"   {pos}. {row['produto']} — {b(f'{int(row.quantidade)} un')} / R$ {row.valor:,.2f}")
+            pct = row["quantidade"] / total_itens * 100 if total_itens else 0
+            linhas.append(f"   {pos}. {row['produto']} — {b(f'{int(row.quantidade)} un')} {i(f'({pct:.1f}%)')}")
         linhas.append("")
     return "\n".join(linhas)
 
