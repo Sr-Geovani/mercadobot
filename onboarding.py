@@ -25,7 +25,7 @@ def i(t): return f"<i>{t}</i>"
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     user    = update.effective_user
-    nome    = user.first_name or "Operador"
+    nome    = user.first_name or "Operador(a)"
 
     usuario = await buscar_usuario(chat_id)
 
@@ -39,7 +39,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 [InlineKeyboardButton("⚙️ Atualizar credenciais PDV Legal", callback_data="atualizar_credenciais")],
             ])
             await update.message.reply_text(
-                f"👋 Bem-vindo de volta, {b(nome)}!\n\n"
+                f"👋 Bem-vindo(a) de volta, {b(nome)}!\n\n"
                 f"Sua assinatura está ativa. O que deseja fazer?",
                 parse_mode="HTML",
                 reply_markup=kb
@@ -59,7 +59,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await atualizar_usuario(chat_id, status="trial", trial_fim=trial_fim, assinatura_fim=assin_fim)
                     from bot import kb_menu
                     await update.message.reply_text(
-                        f"👋 Bem-vindo de volta, {b(nome)}!\n\n"
+                        f"👋 Bem-vindo(a) de volta, {b(nome)}!\n\n"
                         f"✅ Pagamento identificado. Acesso liberado!\n\n"
                         f"Use o menu abaixo para começar 👇",
                         parse_mode="HTML",
@@ -91,7 +91,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Usuário não está no banco — pede email para buscar no Asaas
     await update.message.reply_text(
-        f"👋 Olá, {b(nome)}! Bem-vindo ao {b('MercadoBot')}!\n\n"
+        f"👋 Olá, {b(nome)}! Bem-vindo(a) ao {b('MercadoBot')}!\n\n"
         f"Sou o assistente de inteligência para mercadinhos autônomos em condomínios. "
         f"Conecto direto ao seu PDV Legal e entrego análises, alertas e insights no Telegram — sem você abrir nenhum relatório.\n\n"
         f"🎁 {b('7 dias grátis')} para experimentar tudo.\n"
@@ -106,7 +106,7 @@ async def receber_pdv_email(update: Update, context: ContextTypes.DEFAULT_TYPE):
     pdv_email = update.message.text.strip().lower()
     chat_id   = update.effective_chat.id
     user      = update.effective_user
-    nome      = user.first_name or "Operador"
+    nome      = user.first_name or "Operador(a)"
 
     if "@" not in pdv_email or "." not in pdv_email:
         await update.message.reply_text(
@@ -209,7 +209,7 @@ async def receber_cpf(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def receber_pdv_senha(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id   = update.effective_chat.id
     user      = update.effective_user
-    nome      = user.first_name or "Operador"
+    nome      = user.first_name or "Operador(a)"
     pdv_email         = context.user_data["pdv_email"]
     cpf               = context.user_data.get("cpf", "")
     nome_mercadinho   = context.user_data.get("nome_mercadinho", "")
@@ -231,11 +231,12 @@ async def receber_pdv_senha(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         if not login_ok:
             await update.message.reply_text(
-                f"❌ {b('E-mail ou senha incorretos no PDV Legal.')}\n\n"
-                f"Verifique suas credenciais e tente novamente com /start.",
+                f"⚠️ {b('E-mail ou senha não reconhecidos pelo PDV Legal.')}\n\n"
+                f"Você poderá corrigir isso facilmente pelo comando /configuracoes "
+                f"assim que finalizar o cadastro.",
                 parse_mode="HTML"
             )
-            return ConversationHandler.END
+            # Continua o cadastro mesmo assim — usuário corrige depois
     except Exception as e:
         logger.warning(f"Erro ao validar login: {e}")
         # Se não conseguir validar (site fora), continua o cadastro

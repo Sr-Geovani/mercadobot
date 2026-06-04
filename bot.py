@@ -402,13 +402,21 @@ def bloco_score(vendas: pd.DataFrame) -> str:
     linhas.append(f"{emoji_geral} Score geral: {b(f'{score_geral:.1f} / 10.0')}\n")
 
     for nome, s in scores.items():
-        sc   = s["score"]
+        sc    = s["score"]
         emoji = "🟢" if sc >= 7 else "🟡" if sc >= 5 else "🔴"
         linhas.append(f"📍 {b(nome)} — {emoji} {b(f'{sc:.1f}')}")
-        linhas.append(f"   📊 Faturamento:    {barra(s['faturamento'])}  {s['faturamento']:.0f}")
-        linhas.append(f"   ⚠️ Cancelamentos:  {barra(s['cancelamentos'])}  {s['cancelamentos']:.0f}")
-        linhas.append(f"   🎯 Ticket médio:   {barra(s['ticket'])}  {s['ticket']:.0f}")
-        linhas.append(f"   📅 Consistência:   {barra(s['consistencia'])}  {s['consistencia']:.0f}")
+        linhas.append(f"")
+        linhas.append(f"   📊 Faturamento")
+        linhas.append(f"   {barra(s['faturamento'])}  {s['faturamento']:.0f}/10")
+        linhas.append(f"")
+        linhas.append(f"   ⚠️ Cancelamentos")
+        linhas.append(f"   {barra(s['cancelamentos'])}  {s['cancelamentos']:.0f}/10")
+        linhas.append(f"")
+        linhas.append(f"   🎯 Ticket médio")
+        linhas.append(f"   {barra(s['ticket'])}  {s['ticket']:.0f}/10")
+        linhas.append(f"")
+        linhas.append(f"   📅 Consistência")
+        linhas.append(f"   {barra(s['consistencia'])}  {s['consistencia']:.0f}/10")
 
         ponto_fraco = min(
             [("faturamento","📊 Faturamento"), ("cancelamentos","⚠️ Cancelamentos"),
@@ -416,6 +424,7 @@ def bloco_score(vendas: pd.DataFrame) -> str:
             key=lambda x: s[x[0]]
         )
         if s[ponto_fraco[0]] <= 5:
+            linhas.append(f"")
             linhas.append(f"   💡 {i(f'Atenção: {ponto_fraco[1]} puxando o score para baixo.')}")
         linhas.append("")
 
@@ -663,7 +672,7 @@ def normalizar_vendas(df: pd.DataFrame) -> pd.DataFrame:
     if "idUnico" in df.columns:
         df = df[df["idUnico"].notna() & (df["idUnico"].astype(str).str.strip() != "")]
     # Colunas de texto
-    for col in ["nomeFilial", "FormaRecebimento", "StatusCupom", "Operador"]:
+    for col in ["nomeFilial", "FormaRecebimento", "StatusCupom", "Operador(a)"]:
         if col in df.columns:
             df[col] = df[col].astype(str).str.strip()
     # Colunas numéricas
@@ -784,7 +793,7 @@ async def enviar(msg, texto: str):
 # ─── HANDLERS ────────────────────────────────────────────────
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        f"👋 {b('Bem-vindo ao MercadoBot!')}\n\n"
+        f"👋 {b('Bem-vindo(a) ao MercadoBot!')}\n\n"
         "Seu assistente de inteligência para mercadinhos autônomos.\n\n"
         f"{b('Como começar:')}\n"
         "1. Exporte o <i>Resumo Geral de Vendas</i> do PDV Legal em Excel\n"
@@ -1239,16 +1248,16 @@ async def executar_atualizacao(msg, chat_id: int, data_ini: str, data_fim: str, 
         # Erro de login inválido
         if "login inválido" in erro.lower():
             kb_cred = InlineKeyboardMarkup([
-                [InlineKeyboardButton("⚙️ Atualizar credenciais", callback_data="atualizar_credenciais")],
+                [InlineKeyboardButton("⚙️ Atualizar credenciais PDV Legal", callback_data="atualizar_credenciais")],
             ])
-            await status.edit_text(
-                f"🔄 Buscando dados — {b(label)}\n\n"
-                f"❌ {b('E-mail ou senha incorretos')}\n\n"
-                f"Suas credenciais do PDV Legal não foram aceitas.\n\n"
-                f"Clique abaixo para atualizar:",
+            await msg.reply_text(
+                f"❌ {b('E-mail ou senha incorretos no PDV Legal')}\n\n"
+                f"Suas credenciais não foram aceitas.\n"
+                f"Clique abaixo para corrigir:",
                 parse_mode="HTML",
                 reply_markup=kb_cred
             )
+            return
 
         # Erro externo — site fora, manutenção
         elif any(x in erro.lower() for x in ["timeout", "manutenção", "maintenance",
@@ -1542,22 +1551,48 @@ async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ─── Confirmar cancelamento de assinatura ────────────────
     if acao == "confirmar_cancelamento":
         from database import buscar_usuario, atualizar_usuario
-        from pagamento import cancelar_assinatura
+        from pagamento import cancelar_assinatura, cancelar_cobrancas_futuras
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+
         usuario = await buscar_usuario(chat_id)
+        brasilia = ZoneInfo("America/Sao_Paulo")
+        agora    = datetime.now(brasilia)
+
+        # Verifica se está no período de trial (7 dias)
+        dentro_do_trial = False
+        if usuario and usuario.get("trial_fim"):
+            trial_fim = datetime.fromisoformat(usuario["trial_fim"])
+            dentro_do_trial = agora <= trial_fim
+
         if usuario:
-            # Cancela pelo ID da assinatura (não do cliente)
             assinatura_id = usuario.get("assinatura_asaas_id")
             if assinatura_id:
-                sucesso = await cancelar_assinatura(assinatura_id)
-                logger.info(f"Assinatura {assinatura_id} cancelada: {sucesso}")
+                # Cancela a assinatura (para cobranças recorrentes)
+                await cancelar_assinatura(assinatura_id)
+                # Cancela cobranças futuras pendentes
+                await cancelar_cobrancas_futuras(usuario.get("asaas_id", ""))
+
         await atualizar_usuario(chat_id, status="cancelado")
-        await msg.reply_text(
-            f"✅ Assinatura cancelada.\n\n"
-            f"Seu acesso foi encerrado e não haverá novas cobranças.\n"
-            f"Obrigado por usar o MercadoBot!\n\n"
-            f"Use /start para reativar quando quiser.",
-            parse_mode="HTML"
-        )
+
+        if dentro_do_trial:
+            await msg.reply_text(
+                f"✅ {b('Assinatura cancelada com sucesso.')}\n\n"
+                f"Como o cancelamento ocorreu dentro do período de trial, "
+                f"{b('nenhum valor será cobrado')}.\n\n"
+                f"Obrigado por experimentar o MercadoBot!\n"
+                f"Use /start para reativar quando quiser.",
+                parse_mode="HTML"
+            )
+        else:
+            await msg.reply_text(
+                f"✅ {b('Assinatura cancelada.')}\n\n"
+                f"Seu acesso foi encerrado e não haverá novas cobranças.\n"
+                f"Cobranças com vencimento futuro foram canceladas.\n\n"
+                f"Obrigado por usar o MercadoBot!\n"
+                f"Use /start para reativar quando quiser.",
+                parse_mode="HTML"
+            )
         return
 
     # ─── Atualizar menu (deve vir ANTES do startswith) ──────
