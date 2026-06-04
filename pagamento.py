@@ -224,6 +224,48 @@ async def buscar_link_assinatura(assinatura_id: str) -> str:
         return ""
 
 
+async def cancelar_cobrancas_futuras(asaas_cliente_id: str) -> int:
+    """
+    Cancela cobranças pendentes E confirmadas com vencimento futuro.
+    Usado no cancelamento dentro do trial para evitar cobrança indevida.
+    """
+    if not asaas_cliente_id:
+        return 0
+
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    hoje = datetime.now(ZoneInfo("America/Sao_Paulo")).strftime("%Y-%m-%d")
+
+    canceladas = 0
+    async with httpx.AsyncClient() as client:
+        # Busca PENDING e CONFIRMED com vencimento >= hoje
+        for status in ("PENDING", "CONFIRMED"):
+            resp = await client.get(
+                f"{ASAAS_URL}/payments",
+                params={
+                    "customer":       asaas_cliente_id,
+                    "status":         status,
+                    "dueDateStart":   hoje,
+                },
+                headers=_headers()
+            )
+            data = resp.json()
+            for pagamento in data.get("data", []):
+                pid = pagamento.get("id")
+                if pid:
+                    r = await client.delete(
+                        f"{ASAAS_URL}/payments/{pid}",
+                        headers=_headers()
+                    )
+                    if r.status_code in (200, 204):
+                        canceladas += 1
+                        logger.info(f"Cobrança cancelada ({status}): {pid}")
+                    else:
+                        logger.warning(f"Falha ao cancelar {pid}: {r.status_code} {r.text}")
+
+    return canceladas
+
+
 async def cancelar_assinatura(asaas_id: str) -> bool:
     """Cancela assinatura no Asaas."""
     async with httpx.AsyncClient() as client:
