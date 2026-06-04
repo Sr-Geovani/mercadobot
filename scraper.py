@@ -125,35 +125,49 @@ async def exportar_produtos(page, context, data_ini: str, data_fim: str) -> Path
         (d7,      hoje):  "Ultimos 7 dias",
         (d15,     hoje):  "Ultimos 15 dias",
         (d30,     hoje):  "Ultimos 30 dias",
-        (mes_ini, hoje):  "Este mes",
+        (mes_ini, hoje):  "Este mês",
     }
     range_key = mapa.get((data_ini, data_fim))
 
-    # Fallback inteligente baseado no intervalo de dias
     if not range_key:
         try:
             d_ini_dt = datetime.strptime(data_ini, "%d/%m/%Y")
             d_fim_dt = datetime.strptime(data_fim, "%d/%m/%Y")
             delta    = (d_fim_dt - d_ini_dt).days
-            hoje_dt  = agora_br.replace(tzinfo=None)
-            # Se fim é hoje ou ontem
             if data_fim == hoje:
-                if delta <= 1:   range_key = "Hoje"
+                if delta <= 1:    range_key = "Hoje"
                 elif delta <= 7:  range_key = "Ultimos 7 dias"
                 elif delta <= 15: range_key = "Ultimos 15 dias"
+                elif delta <= 31: range_key = "Este mês"
                 else:             range_key = "Ultimos 30 dias"
             elif data_fim == ontem and delta == 0:
                 range_key = "Ontem"
             else:
-                range_key = "Este mes"
+                range_key = "Este mês"
         except Exception:
             range_key = "Ontem"
         logger.warning(f"Período ({data_ini} → {data_fim}) não mapeado — usando '{range_key}'")
 
-    # Abre o date picker e seleciona opção
+    logger.info(f"Produtos — range_key selecionado: '{range_key}'")
+
+    # Abre o date picker e loga as opções disponíveis para debug
     await page.click("#reportrange")
-    await page.wait_for_timeout(500)
-    await page.click(f"li[data-range-key='{range_key}']")
+    await page.wait_for_timeout(800)
+    try:
+        opcoes = await page.eval_on_selector_all(
+            "li[data-range-key]",
+            "els => els.map(e => e.getAttribute('data-range-key'))"
+        )
+        logger.info(f"Opções do datepicker PDV Legal: {opcoes}")
+    except Exception:
+        pass
+
+    # Tenta clicar no range_key, com fallback
+    try:
+        await page.click(f"li[data-range-key='{range_key}']", timeout=5000)
+    except Exception:
+        logger.warning(f"range_key '{range_key}' não encontrado — tentando 'Ontem'")
+        await page.click("li[data-range-key='Ontem']", timeout=5000)
     await page.wait_for_timeout(500)
 
     # Clica em Filtrar

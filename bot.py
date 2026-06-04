@@ -919,15 +919,7 @@ async def fluxo_briefing(msg, chat_id: int):
     await abrir_menu(msg)
 
 async def comando_briefing(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = update.effective_chat.id
-    d = dados_usuario.get(chat_id, {})
-    vendas   = d.get("vendas")
-    produtos = d.get("produtos")
-    if (vendas is None or vendas.empty) and (produtos is None or produtos.empty):
-        await pedir_periodo(update.message)
-        return
-    await update.message.reply_text("⏳ Gerando briefing completo...")
-    await fluxo_briefing(update.message, chat_id)
+    await pedir_periodo(update.message)
 
 async def comando_produtos(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id  = update.effective_chat.id
