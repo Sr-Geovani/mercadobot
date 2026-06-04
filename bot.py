@@ -442,9 +442,12 @@ def bloco_faturamento(vendas: pd.DataFrame) -> str:
 
     for filial, row in filiais.iterrows():
         nome = filial.split()[-1].title()
+        # Conta itens totais vendidos (soma das quantidades dos produtos)
+        itens_filial = vendas[vendas["nomeFilial"]==filial]["QtdItens"].sum() if "QtdItens" in vendas.columns else row.qtd
         linhas.append(f"📍 {b(nome)}")
         linhas.append(f"   Faturamento: {b(f'R$ {row.fat:,.2f}')}")
-        linhas.append(f"   Vendas: {row.qtd} | Ticket: R$ {row.tk:.2f}")
+        linhas.append(f"   Transações: {row.qtd} | Itens vendidos: {b(str(int(itens_filial)))}")
+        linhas.append(f"   Ticket médio: R$ {row.tk:.2f}")
         linhas.append(f"   Cancelamentos: {c(f'R$ {row.canc:,.2f}')}\n")
 
     return "\n".join(linhas)
