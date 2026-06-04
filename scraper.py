@@ -1,9 +1,7 @@
 """
 scraper.py — Automação PDV Legal com Playwright
-Mais estável que Selenium no Railway.
 """
 import os
-import time
 import logging
 import asyncio
 from datetime import datetime, timedelta
@@ -12,15 +10,34 @@ from zoneinfo import ZoneInfo
 
 logger = logging.getLogger(__name__)
 
-BRASILIA = ZoneInfo("America/Sao_Paulo")
-
-def agora_brasilia():
-    return datetime.now(BRASILIA)
-
 PDV_URL      = "https://pdvlegal.com.br/loginpdvlegal.aspx"
 PDV_EMAIL    = os.environ.get("PDV_EMAIL")
 PDV_SENHA    = os.environ.get("PDV_SENHA")
 DOWNLOAD_DIR = Path("/tmp/pdvlegal")
+BRASILIA     = ZoneInfo("America/Sao_Paulo")
+
+
+def agora_brasilia():
+    return datetime.now(BRASILIA)
+
+
+def testar_login(email: str, senha: str) -> bool:
+    """Testa se as credenciais são válidas."""
+    async def _testar():
+        from playwright.async_api import async_playwright
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
+            page = await browser.new_page()
+            try:
+                await fazer_login(page, email, senha)
+                return True
+            except ValueError:
+                return False
+            except Exception:
+                raise
+            finally:
+                await browser.close()
+    return asyncio.run(_testar())
 
 
 async def fazer_login(page, email: str, senha: str):
@@ -29,54 +46,42 @@ async def fazer_login(page, email: str, senha: str):
     await page.fill("#txtEmail", email)
     await page.fill("#txtSenha", senha)
     await page.click("#btnEntrar")
-
     try:
         await page.wait_for_url(lambda url: "loginpdvlegal" not in url, timeout=10000)
     except Exception:
-        # Verifica se apareceu mensagem de erro na tela
         try:
-            erro_visivel = await page.locator(".alert, .error, .msg-error").text_content(timeout=2000)
-            if erro_visivel:
-                raise ValueError(f"Login inválido: {erro_visivel.strip()}")
+            erro = await page.locator(".alert, .error, .msg-error").text_content(timeout=2000)
+            if erro:
+                raise ValueError(f"Login inválido: {erro.strip()}")
         except ValueError:
             raise
         except Exception:
             pass
         raise ValueError("Login inválido — verifique seu e-mail e senha do PDV Legal.")
-
     logger.info("Login realizado.")
 
 
-async def exportar_vendas(page, context, data_ini: str, data_fim: str) -> Path:
+async def exportar_vendas(page, data_ini: str, data_fim: str) -> Path:
     logger.info(f"Exportando Vendas: {data_ini} → {data_fim}")
     DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
-    await page.goto(
-        "https://pdvlegal.com.br/relatorios.aspx?relatorio=1",
-        wait_until="networkidle"
-    )
+    await page.goto("https://pdvlegal.com.br/relatorios.aspx?relatorio=1", wait_until="networkidle")
     await page.wait_for_timeout(1500)
     logger.info("Página de vendas carregada")
 
-    # Preenche data início digitando e confirmando com Tab
-    await page.click("#ContentPlaceHolder1_txtdatapadrao1")
-    await page.wait_for_timeout(300)
-    await page.keyboard.press("Control+a")
-    await page.keyboard.type(data_ini, delay=80)
-    await page.keyboard.press("Tab")
-    await page.wait_for_timeout(500)
+    # Preenche datas com click triplo + type (quirk do PDV Legal)
+    for field_id, value in [
+        ("ContentPlaceHolder1_txtdatapadrao1", data_ini),
+        ("ContentPlaceHolder1_txtdatapadrao2", data_fim),
+    ]:
+        await page.click(f"#{field_id}", click_count=3)
+        await page.type(f"#{field_id}", value)
+        await page.keyboard.press("Tab")
+        await page.wait_for_timeout(200)
 
-    # Preenche data fim digitando e confirmando com Tab
-    await page.click("#ContentPlaceHolder1_txtdatapadrao2")
-    await page.wait_for_timeout(300)
-    await page.keyboard.press("Control+a")
-    await page.keyboard.type(data_fim, delay=80)
-    await page.keyboard.press("Tab")
-    await page.wait_for_timeout(500)
-
-    # Confirma valores
-    val_ini = await page.evaluate("document.getElementById('ContentPlaceHolder1_txtdatapadrao1').value")
-    val_fim = await page.evaluate("document.getElementById('ContentPlaceHolder1_txtdatapadrao2').value")
+    # Verifica datas preenchidas
+    val_ini = await page.input_value("#ContentPlaceHolder1_txtdatapadrao1")
+    val_fim = await page.input_value("#ContentPlaceHolder1_txtdatapadrao2")
     logger.info(f"Datas confirmadas: ini='{val_ini}' fim='{val_fim}'")
 
     # Seleciona todas as lojas
@@ -84,12 +89,10 @@ async def exportar_vendas(page, context, data_ini: str, data_fim: str) -> Path:
     await page.wait_for_timeout(500)
     logger.info("Todas as lojas selecionadas")
 
-    # Clica em Gerar Relatório via JS
+    # Clica em Gerar Relatório
     logger.info("Clicando em Gerar Relatório...")
     async with page.expect_download(timeout=45000) as download_info:
-        await page.evaluate(
-            "document.getElementById('ContentPlaceHolder1_btnGerarRelatorio').click()"
-        )
+        await page.evaluate("document.getElementById('ContentPlaceHolder1_btnGerarRelatorio').click()")
 
     download = await download_info.value
     destino = DOWNLOAD_DIR / "vendas.xlsx"
@@ -98,72 +101,69 @@ async def exportar_vendas(page, context, data_ini: str, data_fim: str) -> Path:
     return destino
 
 
-async def exportar_produtos(page, context, data_ini: str, data_fim: str) -> Path:
+async def exportar_produtos(page, data_ini: str, data_fim: str) -> Path:
     logger.info(f"Exportando Produtos: {data_ini} → {data_fim}")
     DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
-    await page.goto(
-        "https://pdvlegal.com.br/dashboard_produtos.aspx?relatorio=dp",
-        wait_until="networkidle"
-    )
+    await page.goto("https://pdvlegal.com.br/dashboard_produtos.aspx?relatorio=dp", wait_until="networkidle")
     await page.wait_for_timeout(1500)
 
-    # Mapeia período para o data-range-key do PDV Legal
-    from zoneinfo import ZoneInfo
-    brasilia  = ZoneInfo("America/Sao_Paulo")
-    agora_br  = datetime.now(brasilia)
-    hoje      = agora_br.strftime("%d/%m/%Y")
-    ontem     = (agora_br - timedelta(days=1)).strftime("%d/%m/%Y")
-    d7        = (agora_br - timedelta(days=7)).strftime("%d/%m/%Y")
-    d15       = (agora_br - timedelta(days=15)).strftime("%d/%m/%Y")
-    d30       = (agora_br - timedelta(days=30)).strftime("%d/%m/%Y")
-    mes_ini   = agora_br.replace(day=1).strftime("%d/%m/%Y")
+    # Mapa de períodos padrão
+    br = ZoneInfo("America/Sao_Paulo")
+    agora = datetime.now(br)
+    hoje  = agora.strftime("%d/%m/%Y")
+    ontem = (agora - timedelta(days=1)).strftime("%d/%m/%Y")
+    d7    = (agora - timedelta(days=7)).strftime("%d/%m/%Y")
+    d15   = (agora - timedelta(days=15)).strftime("%d/%m/%Y")
+    d30   = (agora - timedelta(days=30)).strftime("%d/%m/%Y")
+    d60   = (agora - timedelta(days=60)).strftime("%d/%m/%Y")
+    d90   = (agora - timedelta(days=90)).strftime("%d/%m/%Y")
 
     mapa = {
-        (hoje,    hoje):  "Hoje",
-        (ontem,   ontem): "Ontem",
-        (d7,      hoje):  "Ultimos 7 dias",
-        (d15,     hoje):  "Ultimos 15 dias",
-        (d30,     hoje):  "Ultimos 30 dias",
+        (hoje,  hoje):  "Hoje",
+        (ontem, ontem): "Ontem",
+        (d7,    hoje):  "Ultimos 7 dias",
+        (d15,   hoje):  "Ultimos 15 dias",
+        (d30,   hoje):  "Ultimos 30 dias",
+        (d60,   hoje):  "Ultimos 60 dias",
+        (d90,   hoje):  "Ultimos 90 dias",
     }
     range_key = mapa.get((data_ini, data_fim))
-    logger.info(f"Produtos — range_key: '{range_key or 'Intervalo customizado'}'")
 
     # Abre o date picker
     await page.click("#reportrange")
     await page.wait_for_timeout(500)
 
     if range_key:
-        # Opção pré-definida — clica direto
+        # Opção pré-definida
+        logger.info(f"Produtos — range_key: '{range_key}'")
         await page.click(f"li[data-range-key='{range_key}']")
         await page.wait_for_timeout(500)
     else:
-        # Período customizado (mês atual, mês anterior, etc.)
-        # Clica em "Intervalo" para digitar datas manualmente
+        # Período customizado via "Intervalo"
+        logger.info(f"Produtos — usando Intervalo customizado: {data_ini} → {data_fim}")
         await page.click("li[data-range-key='Intervalo']")
         await page.wait_for_timeout(800)
 
-        # Converte data de dd/mm/yyyy para mm/dd/yyyy (formato do datepicker)
+        # Converte dd/mm/yyyy → mm/dd/yyyy para o datepicker
         def br_to_us(d):
             dd, mm, yyyy = d.split("/")
             return f"{mm}/{dd}/{yyyy}"
 
-        # Preenche data início
-        campo_ini = page.locator("input.daterangepicker_start_input, input[name='daterangepicker_start']").first
-        await campo_ini.click(click_count=3)
-        await campo_ini.type(br_to_us(data_ini))
+        # Preenche campo de início
+        await page.locator("input.daterangepicker_start_input").first.click(click_count=3)
+        await page.keyboard.type(br_to_us(data_ini))
         await page.keyboard.press("Tab")
         await page.wait_for_timeout(300)
 
-        # Preenche data fim
-        campo_fim = page.locator("input.daterangepicker_end_input, input[name='daterangepicker_end']").first
-        await campo_fim.click(click_count=3)
-        await campo_fim.type(br_to_us(data_fim))
+        # Preenche campo de fim
+        await page.locator("input.daterangepicker_end_input").first.click(click_count=3)
+        await page.keyboard.type(br_to_us(data_fim))
         await page.keyboard.press("Tab")
         await page.wait_for_timeout(300)
 
-        # Confirma o intervalo
-        await page.click("button.applyBtn, .applyBtn")
+        # Confirma
+        await page.locator("button.applyBtn").click()
         await page.wait_for_timeout(500)
 
     # Clica em Filtrar
@@ -189,55 +189,25 @@ async def _baixar_async(data_ini: str, data_fim: str,
                         email: str = None, senha: str = None) -> tuple:
     from playwright.async_api import async_playwright
 
-    # Usa credenciais passadas ou fallback para variáveis de ambiente
     _email = email or PDV_EMAIL
     _senha = senha or PDV_SENHA
 
     async with async_playwright() as p:
-        browser = await p.chromium.launch(
-            headless=True,
-            args=["--no-sandbox", "--disable-dev-shm-usage"]
-        )
+        browser = await p.chromium.launch(headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
         context = await browser.new_context(accept_downloads=True)
         page    = await context.new_page()
-
         try:
             await fazer_login(page, _email, _senha)
-            path_vendas   = await exportar_vendas(page, context, data_ini, data_fim)
-            path_produtos = await exportar_produtos(page, context, data_ini, data_fim)
+            path_vendas   = await exportar_vendas(page, data_ini, data_fim)
+            path_produtos = await exportar_produtos(page, data_ini, data_fim)
             return path_vendas, path_produtos
         finally:
             await browser.close()
 
 
-def testar_login(email: str, senha: str) -> bool:
-    """Testa se as credenciais são válidas. Retorna True se OK."""
-    import asyncio as _asyncio
-
-    async def _testar():
-        from playwright.async_api import async_playwright
-        async with async_playwright() as p:
-            browser = await p.chromium.launch(
-                headless=True,
-                args=["--no-sandbox", "--disable-dev-shm-usage"]
-            )
-            page = await browser.new_page()
-            try:
-                await fazer_login(page, email, senha)
-                return True
-            except ValueError:
-                return False
-            except Exception:
-                raise  # Propaga erros de conectividade
-            finally:
-                await browser.close()
-
-    return _asyncio.run(_testar())
-
-
 def baixar_relatorios(email: str = None, senha: str = None) -> tuple:
     """Baixa relatórios do dia anterior no horário de Brasília."""
-    ontem = (agora_brasilia() - timedelta(days=1)).strftime("%d/%m/%Y")
+    ontem = (datetime.now(BRASILIA) - timedelta(days=1)).strftime("%d/%m/%Y")
     return baixar_relatorios_periodo(ontem, ontem, email, senha)
 
 
@@ -248,9 +218,17 @@ def baixar_relatorios_periodo(data_ini: str, data_fim: str,
     return asyncio.run(_baixar_async(data_ini, data_fim, email, senha))
 
 
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
-    v, p = baixar_relatorios()
-    print(f"Vendas:   {v}")
-    print(f"Produtos: {p}")
-# MercadoBot v1780365935
+def garantir_browser():
+    """Instala o Chromium do Playwright se necessário."""
+    import subprocess
+    try:
+        result = subprocess.run(
+            ["python", "-m", "playwright", "install", "chromium"],
+            capture_output=True, text=True, timeout=120
+        )
+        if result.returncode == 0:
+            logger.info("✅ Playwright Chromium instalado com sucesso.")
+        else:
+            logger.warning(f"Playwright install: {result.stderr[:200]}")
+    except Exception as e:
+        logger.error(f"Erro ao instalar Playwright: {e}")
