@@ -108,21 +108,26 @@ async def exportar_produtos(page, context, data_ini: str, data_fim: str) -> Path
     )
     await page.wait_for_timeout(1500)
 
-    # Mapeia período para o data-range-key
+    # Mapeia período para o data-range-key do PDV Legal
     hoje  = datetime.now().strftime("%d/%m/%Y")
     ontem = (datetime.now() - timedelta(days=1)).strftime("%d/%m/%Y")
     d7    = (datetime.now() - timedelta(days=7)).strftime("%d/%m/%Y")
     d15   = (datetime.now() - timedelta(days=15)).strftime("%d/%m/%Y")
     d30   = (datetime.now() - timedelta(days=30)).strftime("%d/%m/%Y")
+    mes_ini = datetime.now().replace(day=1).strftime("%d/%m/%Y")
 
     mapa = {
-        (hoje,  hoje):  "Hoje",
-        (ontem, ontem): "Ontem",
-        (d7,    hoje):  "Ultimos 7 dias",
-        (d15,   hoje):  "Ultimos 15 dias",
-        (d30,   hoje):  "Ultimos 30 dias",
+        (hoje,    hoje):  "Hoje",
+        (ontem,   ontem): "Ontem",
+        (d7,      hoje):  "Ultimos 7 dias",
+        (d15,     hoje):  "Ultimos 15 dias",
+        (d30,     hoje):  "Ultimos 30 dias",
+        (mes_ini, hoje):  "Este mes",
     }
-    range_key = mapa.get((data_ini, data_fim), "Ultimos 30 dias")
+    range_key = mapa.get((data_ini, data_fim))
+    if not range_key:
+        logger.warning(f"Período ({data_ini} → {data_fim}) não mapeado — usando Ultimos 30 dias")
+        range_key = "Ultimos 30 dias"
 
     # Abre o date picker e seleciona opção
     await page.click("#reportrange")

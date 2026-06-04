@@ -1613,7 +1613,7 @@ async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "rep_per_7dias":  ((_hoje-_timedelta(days=7)).strftime(_fmt),    _hoje.strftime(_fmt),                         "últimos 7 dias"),
                 "rep_per_15dias": ((_hoje-_timedelta(days=15)).strftime(_fmt),   _hoje.strftime(_fmt),                         "últimos 15 dias"),
                 "rep_per_30dias": ((_hoje-_timedelta(days=30)).strftime(_fmt),   _hoje.strftime(_fmt),                         "últimos 30 dias"),
-                "rep_per_mes":    (_hoje.strftime("01/%m/%Y"),                   _hoje.strftime(_fmt),                         f"mês de {nome_mes(_hoje.month)}"),
+                "rep_per_mes":    (_hoje.strftime("01/%m/%Y"),                   _hoje.strftime(_fmt),                         "mês atual"),
             }
 
             if acao not in periodos:
