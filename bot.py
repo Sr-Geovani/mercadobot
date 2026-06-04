@@ -869,17 +869,18 @@ async def comando_reposicao_msg(msg):
     )
 
 async def pedir_periodo(msg):
-    """Quando não há dados em memória, oferece busca automática por período."""
+    """Oferece seleção de período."""
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("📅 Hoje",            callback_data="atualizar_hoje")],
         [InlineKeyboardButton("📅 Ontem",           callback_data="atualizar_ontem")],
         [InlineKeyboardButton("📅 Últimos 7 dias",  callback_data="atualizar_7dias")],
+        [InlineKeyboardButton("📅 Últimos 15 dias", callback_data="atualizar_15dias")],
+        [InlineKeyboardButton("📅 Últimos 30 dias", callback_data="atualizar_30dias")],
         [InlineKeyboardButton("📅 Mês atual",       callback_data="atualizar_mes")],
         [InlineKeyboardButton("📅 Mês anterior",    callback_data="atualizar_mes_anterior")],
     ])
     await msg.reply_text(
-        f"📂 Nenhum dado carregado ainda.\n\n"
-        f"Escolha o período para buscar automaticamente no PDV Legal:",
+        f"📂 Escolha o período:",
         reply_markup=kb
     )
 
@@ -1117,11 +1118,12 @@ async def comando_score(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def comando_atualizar(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Dispara o download e briefing na hora, para o período escolhido."""
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("📅 Hoje",            callback_data="atualizar_hoje")],
         [InlineKeyboardButton("📅 Ontem",           callback_data="atualizar_ontem")],
         [InlineKeyboardButton("📅 Últimos 7 dias",  callback_data="atualizar_7dias")],
+        [InlineKeyboardButton("📅 Últimos 15 dias", callback_data="atualizar_15dias")],
+        [InlineKeyboardButton("📅 Últimos 30 dias", callback_data="atualizar_30dias")],
         [InlineKeyboardButton("📅 Mês atual",       callback_data="atualizar_mes")],
         [InlineKeyboardButton("📅 Mês anterior",    callback_data="atualizar_mes_anterior")],
     ])
@@ -1671,30 +1673,34 @@ async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("📅 Hoje",            callback_data="atualizar_hoje")],
             [InlineKeyboardButton("📅 Ontem",           callback_data="atualizar_ontem")],
             [InlineKeyboardButton("📅 Últimos 7 dias",  callback_data="atualizar_7dias")],
+            [InlineKeyboardButton("📅 Últimos 15 dias", callback_data="atualizar_15dias")],
+            [InlineKeyboardButton("📅 Últimos 30 dias", callback_data="atualizar_30dias")],
             [InlineKeyboardButton("📅 Mês atual",       callback_data="atualizar_mes")],
             [InlineKeyboardButton("📅 Mês anterior",    callback_data="atualizar_mes_anterior")],
         ])
         await msg.reply_text(
-            f"🔄 {b('ATUALIZAR DADOS')}\n\nQual período deseja buscar agora?",
+            f"🔄 {b('ATUALIZAR DADOS')}\n\nQual período deseja buscar?",
             parse_mode="HTML", reply_markup=kb
         )
         return
 
     # ─── Atualizar: período escolhido ───────────────────────
     if acao.startswith("atualizar_"):
-        # Calcula mês anterior
+        # Mês anterior
         if _hoje.month == 1:
-            mes_ant_ini = _hoje.replace(year=_hoje.year-1, month=12, day=1)
+            _mes_ant_ini = _hoje.replace(year=_hoje.year-1, month=12, day=1)
         else:
-            mes_ant_ini = _hoje.replace(month=_hoje.month-1, day=1)
-        mes_ant_fim = _hoje.replace(day=1) - _timedelta(days=1)
+            _mes_ant_ini = _hoje.replace(month=_hoje.month-1, day=1)
+        _mes_ant_fim = _hoje.replace(day=1) - _timedelta(days=1)
 
         periodos = {
-            "atualizar_hoje":         (_hoje.strftime(_fmt),             _hoje.strftime(_fmt),           "hoje"),
-            "atualizar_ontem":        ((_hoje-_timedelta(days=1)).strftime(_fmt), (_hoje-_timedelta(days=1)).strftime(_fmt), "ontem"),
-            "atualizar_7dias":        ((_hoje-_timedelta(days=7)).strftime(_fmt), _hoje.strftime(_fmt),  "últimos 7 dias"),
-            "atualizar_mes":          (_hoje.strftime("01/%m/%Y"),        _hoje.strftime(_fmt),           f"mês de {nome_mes(_hoje.month)}"),
-            "atualizar_mes_anterior": (mes_ant_ini.strftime(_fmt),        mes_ant_fim.strftime(_fmt),     f"{nome_mes(mes_ant_ini.month)} de {mes_ant_ini.year}"),
+            "atualizar_hoje":         (_hoje.strftime(_fmt),                          _hoje.strftime(_fmt),          "hoje"),
+            "atualizar_ontem":        ((_hoje-_timedelta(days=1)).strftime(_fmt),     (_hoje-_timedelta(days=1)).strftime(_fmt), "ontem"),
+            "atualizar_7dias":        ((_hoje-_timedelta(days=7)).strftime(_fmt),     _hoje.strftime(_fmt),          "últimos 7 dias"),
+            "atualizar_15dias":       ((_hoje-_timedelta(days=15)).strftime(_fmt),    _hoje.strftime(_fmt),          "últimos 15 dias"),
+            "atualizar_30dias":       ((_hoje-_timedelta(days=30)).strftime(_fmt),    _hoje.strftime(_fmt),          "últimos 30 dias"),
+            "atualizar_mes":          (_hoje.strftime("01/%m/%Y"),                    _hoje.strftime(_fmt),          f"mês de {nome_mes(_hoje.month)}"),
+            "atualizar_mes_anterior": (_mes_ant_ini.strftime(_fmt),                   _mes_ant_fim.strftime(_fmt),   f"{nome_mes(_mes_ant_ini.month)} de {_mes_ant_ini.year}"),
         }
 
         if acao in periodos:
@@ -1914,15 +1920,7 @@ async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
     }
 
     if acao == "briefing":
-        d        = dados_usuario.get(chat_id, {})
-        vendas   = d.get("vendas")
-        produtos = d.get("produtos")
-        sem_dados = (vendas is None or vendas.empty) and (produtos is None or produtos.empty)
-        if sem_dados:
-            await pedir_periodo(msg)
-            return
-        await msg.reply_text("⏳ Gerando briefing completo...")
-        await fluxo_briefing(msg, chat_id)
+        await pedir_periodo(msg)
         return
 
     fake = type("U", (), {"message": msg, "effective_chat": type("C", (), {"id": chat_id})()})()
