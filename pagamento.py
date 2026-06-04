@@ -232,9 +232,10 @@ async def cancelar_cobrancas_futuras(asaas_cliente_id: str) -> int:
     if not asaas_cliente_id:
         return 0
 
-    from datetime import datetime
+    from datetime import datetime, timedelta
     from zoneinfo import ZoneInfo
-    hoje = datetime.now(ZoneInfo("America/Sao_Paulo")).strftime("%Y-%m-%d")
+    brasilia = ZoneInfo("America/Sao_Paulo")
+    amanha   = (datetime.now(brasilia) + timedelta(days=1)).strftime("%Y-%m-%d")
 
     canceladas = 0
     async with httpx.AsyncClient() as client:
@@ -245,7 +246,7 @@ async def cancelar_cobrancas_futuras(asaas_cliente_id: str) -> int:
                 params={
                     "customer":       asaas_cliente_id,
                     "status":         status,
-                    "dueDateStart":   hoje,
+                    "dueDateStart":   amanha,
                 },
                 headers=_headers()
             )
