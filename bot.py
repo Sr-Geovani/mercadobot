@@ -1122,37 +1122,19 @@ async def comando_score(update: Update, context: ContextTypes.DEFAULT_TYPE):
     insight = await insight_ia(ctx, "principais ações para melhorar o score de saúde da operação")
     await enviar(update.message, f"💡 {b('COMO MELHORAR')}\n\n{insight}")
     await abrir_menu(update.message)
-    chat_id = update.effective_chat.id
-    d = dados_usuario.get(chat_id, {})
-    if d.get("produtos") is None:
-        await pedir_periodo(update.message)
-        return
-    kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("✅ Repor exatamente o que saiu", callback_data="rep_exato")],
-        [InlineKeyboardButton("📦 Repor + estoque de segurança (30%)", callback_data="rep_estoque")],
-    ])
-    await update.message.reply_text(
-        f"🛒 {b('LISTA DE REPOSIÇÃO')}\n\n"
-        f"A lista é baseada em tudo que saiu da loja no período importado.\n\n"
-        f"Como deseja repor?",
-        parse_mode="HTML",
-        reply_markup=kb
-    )
-    aguardando_dias[chat_id] = True
+
 
 async def comando_atualizar(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Dispara o download e briefing na hora, para o período escolhido."""
-    chat_id = update.effective_chat.id
-
     kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("📅 Hoje",          callback_data="atualizar_hoje")],
-        [InlineKeyboardButton("📅 Ontem",         callback_data="atualizar_ontem")],
-        [InlineKeyboardButton("📅 Últimos 7 dias", callback_data="atualizar_7dias")],
-        [InlineKeyboardButton("📅 Mês atual",     callback_data="atualizar_mes")],
+        [InlineKeyboardButton("📅 Hoje",            callback_data="atualizar_hoje")],
+        [InlineKeyboardButton("📅 Ontem",           callback_data="atualizar_ontem")],
+        [InlineKeyboardButton("📅 Últimos 7 dias",  callback_data="atualizar_7dias")],
+        [InlineKeyboardButton("📅 Mês atual",       callback_data="atualizar_mes")],
+        [InlineKeyboardButton("📅 Mês anterior",    callback_data="atualizar_mes_anterior")],
     ])
     await update.message.reply_text(
-        f"🔄 {b('ATUALIZAR DADOS')}\n\n"
-        f"Qual período deseja buscar agora?",
+        f"🔄 {b('ATUALIZAR DADOS')}\n\nQual período deseja buscar agora?",
         parse_mode="HTML",
         reply_markup=kb
     )
@@ -1848,18 +1830,25 @@ async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
             from io import BytesIO
 
             wb = openpyxl.Workbook()
+            tem_grupo = "grupo" in produtos.columns and produtos["grupo"].notna().any()
+            fator_rep = 1.3 if modo == "estoque" else 1.0
 
             if formato == "excel_loja":
                 wb.remove(wb.active)
                 for filial in produtos["nomeloja"].unique():
                     nome_aba = filial.split()[-1].title()[:31]
-                    ws = wb.create_sheet(title=nome_aba)
-                    df = produtos[produtos["nomeloja"]==filial].sort_values("quantidade", ascending=False)
-                    ws.append(["Produto", "Qtd vendida", "Repor"])
+                    ws  = wb.create_sheet(title=nome_aba)
+                    df  = produtos[produtos["nomeloja"]==filial].sort_values("quantidade", ascending=False)
+                    hdr = ["Categoria", "Produto", "Qtd vendida", "Repor"] if tem_grupo else ["Produto", "Qtd vendida", "Repor"]
+                    ws.append(hdr)
                     for cell in ws[1]:
                         cell.font = Font(bold=True)
                     for _, row in df.iterrows():
-                        ws.append([row["produto"], int(row["quantidade"]), int(row["quantidade"])])
+                        repor = int(round(row["quantidade"] * fator_rep))
+                        if tem_grupo:
+                            ws.append([str(row.get("grupo","")), row["produto"], int(row["quantidade"]), repor])
+                        else:
+                            ws.append([row["produto"], int(row["quantidade"]), repor])
                     for col in ws.columns:
                         ws.column_dimensions[col[0].column_letter].width = 32
                 filename = f"reposicao_por_loja_{label_per.replace(' ','_')}.xlsx"
@@ -1867,13 +1856,18 @@ async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:  # excel_unificado
                 ws = wb.active
                 ws.title = "Reposição"
-                ws.append(["Loja", "Produto", "Qtd vendida", "Repor"])
+                hdr = ["Loja", "Categoria", "Produto", "Qtd vendida", "Repor"] if tem_grupo else ["Loja", "Produto", "Qtd vendida", "Repor"]
+                ws.append(hdr)
                 for cell in ws[1]:
                     cell.font = Font(bold=True)
-                df_sorted = produtos.sort_values(["nomeloja","quantidade"], ascending=[True,False])
+                df_sorted = produtos.sort_values(["nomeloja", "grupo" if tem_grupo else "quantidade", "quantidade"], ascending=[True, True, False])
                 for _, row in df_sorted.iterrows():
                     nome_loja = row["nomeloja"].split()[-1].title()
-                    ws.append([nome_loja, row["produto"], int(row["quantidade"]), int(row["quantidade"])])
+                    repor = int(round(row["quantidade"] * fator_rep))
+                    if tem_grupo:
+                        ws.append([nome_loja, str(row.get("grupo","")), row["produto"], int(row["quantidade"]), repor])
+                    else:
+                        ws.append([nome_loja, row["produto"], int(row["quantidade"]), repor])
                 for col in ws.columns:
                     ws.column_dimensions[col[0].column_letter].width = 32
                 filename = f"reposicao_unificada_{label_per.replace(' ','_')}.xlsx"
