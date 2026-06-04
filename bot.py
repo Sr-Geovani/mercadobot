@@ -432,15 +432,24 @@ def bloco_score(vendas: pd.DataFrame) -> str:
 
 
 def bloco_faturamento(vendas: pd.DataFrame, produtos: pd.DataFrame = None) -> str:
-    total      = vendas["valor"].sum()
-    ticket     = vendas["valor"].mean()
-    n          = len(vendas)
-    cancel     = vendas["ValorItensCancelados"].sum()
-    pct_cancel = (cancel / total * 100) if total else 0
+    total  = vendas["valor"].sum()
+    ticket = vendas["valor"].mean()
+    n      = len(vendas)
+
+    # Cancelamentos: soma apenas linhas onde houve de fato cancelamento
+    cancel_mask = vendas["ValorItensCancelados"] > 0
+    cancel      = vendas.loc[cancel_mask, "ValorItensCancelados"].sum()
+    n_cancel    = cancel_mask.sum()
+    pct_cancel  = (cancel / total * 100) if total else 0
 
     filiais = vendas.groupby("nomeFilial").agg(
         fat=("valor","sum"), qtd=("valor","count"), tk=("valor","mean"),
-        canc=("ValorItensCancelados","sum")
+    )
+    # Cancelamentos por filial — só linhas com cancelamento
+    canc_filial = (
+        vendas[cancel_mask]
+        .groupby("nomeFilial")["ValorItensCancelados"]
+        .sum()
     )
 
     # Itens vendidos por filial (do relatório de produtos)
@@ -452,13 +461,16 @@ def bloco_faturamento(vendas: pd.DataFrame, produtos: pd.DataFrame = None) -> st
     linhas.append(f"💰 Total consolidado: {b(f'R$ {total:,.2f}')}")
     linhas.append(f"🛒 Transações: {b(str(n))}")
     linhas.append(f"🎯 Ticket médio: {b(f'R$ {ticket:.2f}')}")
-    linhas.append(f"⚠️ Cancelamentos: {c(f'R$ {cancel:,.2f}')} {i(f'({pct_cancel:.1f}% do faturamento)')}\n")
+    if cancel > 0:
+        linhas.append(f"⚠️ Cancelamentos: {c(f'R$ {cancel:,.2f}')} {i(f'({pct_cancel:.1f}% | {n_cancel} ocorrências)')}\n")
+    else:
+        linhas.append(f"✅ Sem cancelamentos no período\n")
 
     for filial, row in filiais.iterrows():
-        nome = filial.split()[-1].title()
+        nome       = filial.split()[-1].title()
+        canc_val   = canc_filial.get(filial, 0)
         linhas.append(f"📍 {b(nome)}")
         linhas.append(f"   Faturamento: {b(f'R$ {row.fat:,.2f}')}")
-        # Busca itens vendidos — tenta bater o nome da filial com nomeloja
         itens = 0
         for nomeloja, total_itens in itens_por_filial.items():
             if nome.lower() in nomeloja.lower() or nomeloja.lower() in filial.lower():
@@ -469,7 +481,10 @@ def bloco_faturamento(vendas: pd.DataFrame, produtos: pd.DataFrame = None) -> st
         else:
             linhas.append(f"   Transações: {b(str(row.qtd))}")
         linhas.append(f"   Ticket médio: R$ {row.tk:.2f}")
-        linhas.append(f"   Cancelamentos: {c(f'R$ {row.canc:,.2f}')}\n")
+        if canc_val > 0:
+            pct = (canc_val / row.fat * 100) if row.fat else 0
+            linhas.append(f"   Cancelamentos: {c(f'R$ {canc_val:,.2f}')} {i(f'({pct:.1f}%)')}")
+        linhas.append("")
 
     return "\n".join(linhas)
 
@@ -698,30 +713,42 @@ def resumo_dados(chat_id: int) -> str:
 
 
 TEMAS_INSIGHT = [
-    "cancelamentos e impacto no faturamento",
-    "horário de pico e oportunidade de receita",
-    "mix de produtos e ruptura de estoque",
-    "comparativo entre unidades",
-    "tendência semanal de faturamento",
-    "ticket médio e oportunidade de aumento",
-    "mix de pagamento e redução de taxas",
-    "produtos âncora e consistência de venda",
-    "sazonalidade e planejamento de estoque",
-    "eficiência operacional e cancelamentos",
+    "cancelamentos — causa provável e ação imediata",
+    "horário de pico — oportunidade de receita não explorada",
+    "produto com queda de venda — o que fazer",
+    "comparativo entre unidades — quem lidera e por quê",
+    "ticket médio — como aumentar em 10%",
+    "mix de pagamento — quanto economizar migrando para PIX",
+    "produto âncora — risco de ruptura e impacto",
+    "dia da semana mais fraco — como reverter",
+    "categoria com crescimento — apostar mais",
+    "categoria estagnada — substituir ou promover",
+    "tendência da última semana — positiva ou negativa",
+    "margem operacional — onde estão as perdas",
+    "faturamento abaixo da média — causa mais provável",
+    "produto que some do estoque rápido — o que fazer",
+    "horário morto — como ativar vendas",
+    "concentração de vendas em 1 unidade — risco",
+    "crescimento sustentável — próximo passo",
+    "cancelamento alto em uma unidade — investigar",
+    "mix de produto vs perfil do condomínio",
+    "oportunidade de bundle — produtos comprados juntos",
 ]
 
+
 async def insight_ia(ctx: str, tema: str = "") -> str:
-    """Gera insight usando Claude. Retorna texto curto e prático."""
+    """Gera insight curto e direto usando Claude."""
     import random
     if not tema:
         tema = random.choice(TEMAS_INSIGHT)
     try:
         client = anthropic.Anthropic(api_key=ANTHROPIC_KEY)
         prompt = (
-            f"Você é um consultor especialista em mercadinhos autônomos em condomínios no Brasil.\n"
-            f"Com base nos dados abaixo, gere um insight CURTO e PRÁTICO sobre: {tema}.\n"
-            f"Máximo 3 bullet points diretos. Sem introdução. Sem conclusão. Só o que importa.\n\n"
-            f"{ctx}"
+            f"Você é consultor de mercadinhos autônomos em condomínios no Brasil.\n"
+            f"Dados: {ctx}\n\n"
+            f"Tema: {tema}\n\n"
+            f"Escreva exatamente 2 bullets curtos (máx 15 palavras cada). "
+            f"Direto ao ponto. Sem introdução. Sem título."
         )
         resp = client.messages.create(
             model="claude-sonnet-4-5",
@@ -761,7 +788,8 @@ async def configurar_menu(app):
     await app.bot.set_my_commands(cmds)
     await app.bot.set_chat_menu_button(menu_button=MenuButtonCommands())
 
-def kb_menu():
+def kb_menu(periodo_label: str = ""):
+    label_periodo = f"📅 Analisar período" + (f" — {periodo_label}" if periodo_label else "")
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("📊 Briefing",      callback_data="briefing"),
          InlineKeyboardButton("⚠️ Alertas",       callback_data="alertas")],
@@ -775,13 +803,19 @@ def kb_menu():
          InlineKeyboardButton("📦 Giro",          callback_data="giro")],
         [InlineKeyboardButton("🎯 Projeção Mês",  callback_data="projecao"),
          InlineKeyboardButton("⭐ Score Saúde",   callback_data="score")],
-        [InlineKeyboardButton("🛒 Lista de Reposição",    callback_data="reposicao")],
-        [InlineKeyboardButton("🔄 Atualizar dados agora", callback_data="atualizar_menu")],
+        [InlineKeyboardButton("🛒 Lista de Reposição",  callback_data="reposicao")],
+        [InlineKeyboardButton(label_periodo,             callback_data="atualizar_menu")],
     ])
 
-async def abrir_menu(msg):
-    """Envia menu principal."""
-    await msg.reply_text("O que deseja analisar agora?", reply_markup=kb_menu())
+async def abrir_menu(msg, chat_id: int = None):
+    """Envia menu com período ativo."""
+    periodo_label = ""
+    if chat_id and chat_id in dados_usuario:
+        periodo_label = dados_usuario[chat_id].get("periodo_label", "")
+    await msg.reply_text(
+        "O que deseja analisar agora?",
+        reply_markup=kb_menu(periodo_label)
+    )
 
 # ─── ENVIO HTML ──────────────────────────────────────────────
 async def enviar(msg, texto: str):
@@ -1209,8 +1243,9 @@ async def executar_atualizacao(msg, chat_id: int, data_ini: str, data_fim: str, 
 
         if chat_id not in dados_usuario:
             dados_usuario[chat_id] = {}
-        dados_usuario[chat_id]["vendas"]   = vendas
-        dados_usuario[chat_id]["produtos"] = produtos
+        dados_usuario[chat_id]["vendas"]        = vendas
+        dados_usuario[chat_id]["produtos"]      = produtos
+        dados_usuario[chat_id]["periodo_label"] = label
 
         await atualizar_status(
             f"🔄 Buscando dados — {b(label)}\n\n"
