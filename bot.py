@@ -583,19 +583,18 @@ def bloco_pico(vendas: pd.DataFrame) -> str:
     return "\n".join(linhas)
 
 def bloco_reposicao(produtos: pd.DataFrame, modo: str) -> list:
-    """
-    Gera lista de reposição por filial.
-    modo: 'exato' = repor exatamente o que saiu
-          'estoque' = repor o que saiu + 30% de margem de segurança
-    """
     v = produtos.copy()
-    fator = 1.3 if modo == "estoque" else 1.0
+    # Remove linhas com nomeloja vazio ou NaN
+    v = v[v["nomeloja"].notna() & (v["nomeloja"].astype(str).str.strip() != "")]
+    v["nomeloja"] = v["nomeloja"].astype(str)
+
+    fator      = 1.3 if modo == "estoque" else 1.0
     label_modo = "Reposição + 30% de estoque de segurança" if modo == "estoque" else "Reposição exata do que saiu"
 
     blocos = []
     for filial in v["nomeloja"].unique():
         nome = filial.split()[-1].title()
-        df = v[v["nomeloja"] == filial].sort_values("quantidade", ascending=False)
+        df   = v[v["nomeloja"] == filial].sort_values("quantidade", ascending=False)
 
         linhas = [
             f"🛒 {b(f'LISTA DE REPOSIÇÃO — {nome.upper()}')}",
@@ -689,12 +688,18 @@ def normalizar_vendas(df: pd.DataFrame) -> pd.DataFrame:
 def normalizar_produtos(df: pd.DataFrame) -> pd.DataFrame:
     """Garante tipos corretos nas colunas do relatório de produtos."""
     df = df.copy()
+    df = df.dropna(how="all")
     for col in ["produto", "nomeloja", "grupo"]:
         if col in df.columns:
             df[col] = df[col].astype(str).str.strip()
+            df = df[df[col] != "nan"]
+            df = df[df[col] != ""]
     for col in ["quantidade", "valor"]:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
+    # Remove linhas sem produto ou sem loja válidos
+    if "produto" in df.columns:
+        df = df[df["produto"].str.len() > 1]
     return df
 
 def resumo_dados(chat_id: int) -> str:
