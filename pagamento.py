@@ -114,20 +114,27 @@ async def criar_assinatura_com_trial(
         return assinatura
 
 
-async def gerar_link_pagamento(asaas_cliente_id: str, chat_id: int, reativacao: bool = False) -> tuple:
+async def gerar_link_pagamento(asaas_cliente_id: str, chat_id: int, reativacao: bool = False, dias_trial_restantes: int = 0) -> tuple:
     """
     Cria assinatura mensal recorrente.
     - Primeiro cadastro: trial de 7 dias, cobrança no dia 8
-    - Reativação: sem trial, cobrança imediata (hoje)
+    - Reativação com dias restantes: usa os dias restantes do trial original
+    - Reativação sem dias restantes: cobrança imediata
     Retorna (link, assinatura_id).
     """
     async with httpx.AsyncClient() as client:
-        if reativacao:
-            # Reativação — sem trial, cobrança imediata
+        if reativacao and dias_trial_restantes <= 0:
+            # Trial esgotado — cobrança imediata
             primeiro_vencimento = datetime.now(BRASILIA).strftime("%Y-%m-%d")
             descricao = "MercadoBot — Reativação de assinatura"
+        elif reativacao and dias_trial_restantes > 0:
+            # Trial ainda tem saldo — usa os dias restantes
+            primeiro_vencimento = (
+                datetime.now(BRASILIA) + timedelta(days=dias_trial_restantes + 1)
+            ).strftime("%Y-%m-%d")
+            descricao = f"MercadoBot — Reativação ({dias_trial_restantes}d de trial restantes)"
         else:
-            # Primeiro cadastro — trial de 7 dias
+            # Primeiro cadastro — trial completo de 7 dias
             primeiro_vencimento = (
                 datetime.now(BRASILIA) + timedelta(days=TRIAL_DIAS + 1)
             ).strftime("%Y-%m-%d")

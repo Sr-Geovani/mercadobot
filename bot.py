@@ -1336,6 +1336,22 @@ async def cmd_status_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
     from onboarding import cmd_status
     await cmd_status(update, context)
 
+
+def calcular_dias_trial_restantes(usuario: dict) -> int:
+    """Retorna dias de trial restantes. 0 se expirado ou não havia trial."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    trial_fim = usuario.get("trial_fim")
+    if not trial_fim:
+        return 0
+    try:
+        fim   = datetime.fromisoformat(trial_fim)
+        agora = datetime.now(ZoneInfo("America/Sao_Paulo"))
+        dias  = (fim - agora).days
+        return max(0, dias)
+    except Exception:
+        return 0
+
 async def cmd_reativar_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Comando /reativar — reabre fluxo de reativação."""
     from database import buscar_usuario
@@ -1367,19 +1383,27 @@ async def cmd_reativar_handler(update: Update, context: ContextTypes.DEFAULT_TYP
             )
             return
 
-        trial_usado   = usuario.get("trial_usado", False)
-        assinatura_id = await buscar_assinatura_ativa(asaas_id)
+        trial_usado           = usuario.get("trial_usado", False)
+        dias_trial_restantes  = calcular_dias_trial_restantes(usuario) if trial_usado else 0
+        assinatura_id         = await buscar_assinatura_ativa(asaas_id)
 
         if not assinatura_id:
             from pagamento import buscar_link_assinatura
             link, assinatura_id = await gerar_link_pagamento(
-                asaas_id, chat_id, reativacao=trial_usado
+                asaas_id, chat_id,
+                reativacao=trial_usado,
+                dias_trial_restantes=dias_trial_restantes
             )
         else:
             from pagamento import buscar_link_assinatura
             link = await buscar_link_assinatura(assinatura_id)
 
-        aviso = f"\n\n{i('Trial já utilizado — cobrança imediata de R$ 29,90.')}" if trial_usado else ""
+        if trial_usado and dias_trial_restantes > 0:
+            aviso = f"\n\n{i(f'Você ainda tem {dias_trial_restantes} dia(s) de trial restantes.')}"
+        elif trial_usado and dias_trial_restantes <= 0:
+            aviso = f"\n\n{i('Trial já utilizado — cobrança imediata de R$ 29,90.')}"
+        else:
+            aviso = ""
 
         if link:
             kb = InlineKeyboardMarkup([
@@ -1543,22 +1567,28 @@ async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await msg.reply_text("⏳ Gerando link de reativação...")
 
         try:
-            asaas_id    = usuario["asaas_id"]
-            trial_usado = usuario.get("trial_usado", False)
+            asaas_id             = usuario["asaas_id"]
+            trial_usado          = usuario.get("trial_usado", False)
+            dias_trial_restantes = calcular_dias_trial_restantes(usuario) if trial_usado else 0
 
-            # Verifica se já tem assinatura ativa
             assinatura_id = await buscar_assinatura_ativa(asaas_id)
             if assinatura_id:
                 link = await buscar_link_assinatura(assinatura_id)
             else:
-                # Trial já usado — reativação sem trial
                 link, assinatura_id = await gerar_link_pagamento(
-                    asaas_id, chat_id, reativacao=trial_usado
+                    asaas_id, chat_id,
+                    reativacao=trial_usado,
+                    dias_trial_restantes=dias_trial_restantes
                 )
                 if assinatura_id:
                     await atualizar_usuario(chat_id, assinatura_asaas_id=assinatura_id, status="pendente")
 
-            aviso_trial = "" if trial_usado else f"\n\n{i('Trial já utilizado — cobrança imediata de R$ 29,90.')}"
+            if trial_usado and dias_trial_restantes > 0:
+                aviso_trial = f"\n\n{i(f'Você ainda tem {dias_trial_restantes} dia(s) de trial restantes.')}"
+            elif trial_usado and dias_trial_restantes <= 0:
+                aviso_trial = f"\n\n{i('Trial já utilizado — cobrança imediata de R$ 29,90.')}"
+            else:
+                aviso_trial = ""
 
             if link:
                 kb_reativar = InlineKeyboardMarkup([
