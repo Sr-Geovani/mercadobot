@@ -1526,21 +1526,44 @@ async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ─── Reativar assinatura ─────────────────────────────────
     if acao == "reativar":
-        from database import buscar_usuario
-        from pagamento import criar_cliente_asaas, gerar_link_pagamento
+        from database import buscar_usuario, atualizar_usuario
+        from pagamento import gerar_link_pagamento, buscar_assinatura_ativa, buscar_link_assinatura
         usuario = await buscar_usuario(chat_id)
-        if usuario and usuario.get("asaas_id"):
-            link = await gerar_link_pagamento(usuario["asaas_id"], chat_id)
+
+        if not usuario or not usuario.get("asaas_id"):
+            await msg.reply_text("Use /start para criar um novo cadastro.")
+            return
+
+        await msg.reply_text("⏳ Gerando link de reativação...")
+
+        try:
+            asaas_id = usuario["asaas_id"]
+
+            # Verifica se já tem assinatura ativa
+            assinatura_id = await buscar_assinatura_ativa(asaas_id)
+            if assinatura_id:
+                link = await buscar_link_assinatura(assinatura_id)
+            else:
+                link, assinatura_id = await gerar_link_pagamento(asaas_id, chat_id)
+                if assinatura_id:
+                    await atualizar_usuario(chat_id, assinatura_asaas_id=assinatura_id, status="pendente")
+
             if link:
                 kb_reativar = InlineKeyboardMarkup([
-                    [InlineKeyboardButton("💳 Reativar agora", url=link)],
+                    [InlineKeyboardButton("💳 Reativar assinatura", url=link)],
+                    [InlineKeyboardButton("🔍 Verificar status",    callback_data="verificar_status")],
                 ])
                 await msg.reply_text(
-                    f"👇 Clique para reativar sua assinatura:",
+                    f"🔄 {b('Reativar MercadoBot')}\n\n"
+                    f"Clique abaixo para reativar sua assinatura de {b('R$ 29,90/mês')}:",
+                    parse_mode="HTML",
                     reply_markup=kb_reativar
                 )
-                return
-        await msg.reply_text("Use /start para criar um novo cadastro.")
+            else:
+                await msg.reply_text("❌ Erro ao gerar link. Tente /reativar ou /start.")
+        except Exception as e:
+            logger.error(f"Erro no callback reativar: {e}")
+            await msg.reply_text("❌ Erro ao processar. Tente /reativar.")
         return
 
     # ─── Verificar status de pagamento ──────────────────────
@@ -1575,23 +1598,25 @@ async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await atualizar_usuario(chat_id, status="cancelado")
 
+        kb_reativar = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔄 Reativar assinatura", callback_data="reativar")],
+        ])
+
         if dentro_do_trial:
             await msg.reply_text(
                 f"✅ {b('Assinatura cancelada com sucesso.')}\n\n"
                 f"Como o cancelamento ocorreu dentro do período de trial, "
-                f"{b('nenhum valor será cobrado')}.\n\n"
-                f"Obrigado por experimentar o MercadoBot!\n"
-                f"Use /start para reativar quando quiser.",
-                parse_mode="HTML"
+                f"{b('nenhum valor será cobrado')}.",
+                parse_mode="HTML",
+                reply_markup=kb_reativar
             )
         else:
             await msg.reply_text(
                 f"✅ {b('Assinatura cancelada.')}\n\n"
                 f"Seu acesso foi encerrado e não haverá novas cobranças.\n"
-                f"Cobranças com vencimento futuro foram canceladas.\n\n"
-                f"Obrigado por usar o MercadoBot!\n"
-                f"Use /start para reativar quando quiser.",
-                parse_mode="HTML"
+                f"Cobranças com vencimento futuro foram canceladas.",
+                parse_mode="HTML",
+                reply_markup=kb_reativar
             )
         return
 

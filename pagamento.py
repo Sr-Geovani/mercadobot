@@ -226,8 +226,7 @@ async def buscar_link_assinatura(assinatura_id: str) -> str:
 
 async def cancelar_cobrancas_futuras(asaas_cliente_id: str) -> int:
     """
-    Cancela cobranças pendentes E confirmadas com vencimento futuro.
-    Usado no cancelamento dentro do trial para evitar cobrança indevida.
+    Cancela cobranças pendentes e estorna confirmadas com vencimento futuro.
     """
     if not asaas_cliente_id:
         return 0
@@ -239,30 +238,48 @@ async def cancelar_cobrancas_futuras(asaas_cliente_id: str) -> int:
 
     canceladas = 0
     async with httpx.AsyncClient() as client:
-        # Busca PENDING e CONFIRMED com vencimento >= hoje
-        for status in ("PENDING", "CONFIRMED"):
-            resp = await client.get(
-                f"{ASAAS_URL}/payments",
-                params={
-                    "customer":       asaas_cliente_id,
-                    "status":         status,
-                    "dueDateStart":   amanha,
-                },
-                headers=_headers()
-            )
-            data = resp.json()
-            for pagamento in data.get("data", []):
-                pid = pagamento.get("id")
-                if pid:
-                    r = await client.delete(
-                        f"{ASAAS_URL}/payments/{pid}",
+
+        # PENDING — cancela com DELETE
+        resp = await client.get(
+            f"{ASAAS_URL}/payments",
+            params={"customer": asaas_cliente_id, "status": "PENDING", "dueDateStart": amanha},
+            headers=_headers()
+        )
+        for pagamento in resp.json().get("data", []):
+            pid = pagamento.get("id")
+            if pid:
+                r = await client.delete(f"{ASAAS_URL}/payments/{pid}", headers=_headers())
+                if r.status_code in (200, 204):
+                    canceladas += 1
+                    logger.info(f"Cobrança PENDING cancelada: {pid}")
+
+        # CONFIRMED com vencimento futuro — estorna com refund
+        resp = await client.get(
+            f"{ASAAS_URL}/payments",
+            params={"customer": asaas_cliente_id, "status": "CONFIRMED", "dueDateStart": amanha},
+            headers=_headers()
+        )
+        for pagamento in resp.json().get("data", []):
+            pid   = pagamento.get("id")
+            valor = pagamento.get("value", 0)
+            if pid:
+                # Tenta DELETE primeiro (funciona se ainda não processado)
+                r = await client.delete(f"{ASAAS_URL}/payments/{pid}", headers=_headers())
+                if r.status_code in (200, 204):
+                    canceladas += 1
+                    logger.info(f"Cobrança CONFIRMED cancelada via DELETE: {pid}")
+                else:
+                    # Fallback: solicita reembolso total
+                    r2 = await client.post(
+                        f"{ASAAS_URL}/payments/{pid}/refund",
+                        json={"value": valor, "description": "Cancelamento dentro do trial"},
                         headers=_headers()
                     )
-                    if r.status_code in (200, 204):
+                    if r2.status_code in (200, 201):
                         canceladas += 1
-                        logger.info(f"Cobrança cancelada ({status}): {pid}")
+                        logger.info(f"Cobrança CONFIRMED estornada via refund: {pid}")
                     else:
-                        logger.warning(f"Falha ao cancelar {pid}: {r.status_code} {r.text}")
+                        logger.warning(f"Falha ao cancelar/estornar {pid}: {r2.status_code} {r2.text}")
 
     return canceladas
 
