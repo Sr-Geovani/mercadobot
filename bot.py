@@ -775,6 +775,11 @@ def kb_menu():
     ])
 
 async def abrir_menu(msg):
+    """Envia menu principal. Remove botões da mensagem anterior se possível."""
+    try:
+        await msg.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
     await msg.reply_text("O que deseja analisar agora?", reply_markup=kb_menu())
 
 # ─── ENVIO HTML ──────────────────────────────────────────────
@@ -1502,6 +1507,13 @@ async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = query.message.chat_id
     acao    = query.data
     msg     = query.message
+
+    # Ignora callbacks de mensagens com mais de 10 minutos (evita reprocessamento)
+    from datetime import timezone
+    msg_age = (_datetime.now(timezone.utc) - query.message.date).total_seconds()
+    if msg_age > 600:
+        await query.answer("⏱ Esse botão expirou. Use o menu abaixo.")
+        return
 
     # Imports fixos no topo — evita UnboundLocalError por imports locais conflitantes
     from datetime import datetime as _datetime, timedelta as _timedelta
