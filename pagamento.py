@@ -114,15 +114,24 @@ async def criar_assinatura_com_trial(
         return assinatura
 
 
-async def gerar_link_pagamento(asaas_cliente_id: str, chat_id: int) -> tuple:
+async def gerar_link_pagamento(asaas_cliente_id: str, chat_id: int, reativacao: bool = False) -> tuple:
     """
-    Cria assinatura mensal recorrente com trial de 7 dias.
+    Cria assinatura mensal recorrente.
+    - Primeiro cadastro: trial de 7 dias, cobrança no dia 8
+    - Reativação: sem trial, cobrança imediata (hoje)
     Retorna (link, assinatura_id).
     """
     async with httpx.AsyncClient() as client:
-        primeiro_vencimento = (
-            datetime.now(BRASILIA) + timedelta(days=TRIAL_DIAS + 1)
-        ).strftime("%Y-%m-%d")
+        if reativacao:
+            # Reativação — sem trial, cobrança imediata
+            primeiro_vencimento = datetime.now(BRASILIA).strftime("%Y-%m-%d")
+            descricao = "MercadoBot — Reativação de assinatura"
+        else:
+            # Primeiro cadastro — trial de 7 dias
+            primeiro_vencimento = (
+                datetime.now(BRASILIA) + timedelta(days=TRIAL_DIAS + 1)
+            ).strftime("%Y-%m-%d")
+            descricao = "MercadoBot — Inteligência para seu mercadinho autônomo"
 
         payload = {
             "customer":          asaas_cliente_id,
@@ -130,7 +139,7 @@ async def gerar_link_pagamento(asaas_cliente_id: str, chat_id: int) -> tuple:
             "value":             PRECO_MENSAL,
             "nextDueDate":       primeiro_vencimento,
             "cycle":             "MONTHLY",
-            "description":       "MercadoBot — Inteligência para seu mercadinho autônomo",
+            "description":       descricao,
             "externalReference": str(chat_id),
         }
         resp = await client.post(

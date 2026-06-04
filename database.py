@@ -43,6 +43,7 @@ async def inicializar_banco():
                 assinatura_fim      TEXT,
                 asaas_id            TEXT,
                 assinatura_asaas_id TEXT,
+                trial_usado         BOOLEAN DEFAULT FALSE,
                 criado_em           TEXT,
                 atualizado_em       TEXT
             )
@@ -51,6 +52,7 @@ async def inicializar_banco():
         for col, tipo in [
             ("nome_mercadinho",     "TEXT"),
             ("assinatura_asaas_id", "TEXT"),
+            ("trial_usado",         "BOOLEAN DEFAULT FALSE"),
         ]:
             try:
                 await conn.execute(f"ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS {col} {tipo}")

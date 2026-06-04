@@ -47,7 +47,8 @@ async def handle_webhook(request: web.Request) -> web.Response:
                 chat_id,
                 status="trial",
                 trial_fim=trial_fim,
-                assinatura_fim=assinatura_fim
+                assinatura_fim=assinatura_fim,
+                trial_usado=True
             )
             if _bot:
                 await _bot.send_message(

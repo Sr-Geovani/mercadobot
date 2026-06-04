@@ -1367,14 +1367,19 @@ async def cmd_reativar_handler(update: Update, context: ContextTypes.DEFAULT_TYP
             )
             return
 
-        # Verifica se já tem assinatura ativa
+        trial_usado   = usuario.get("trial_usado", False)
         assinatura_id = await buscar_assinatura_ativa(asaas_id)
+
         if not assinatura_id:
             from pagamento import buscar_link_assinatura
-            link, assinatura_id = await gerar_link_pagamento(asaas_id, chat_id)
+            link, assinatura_id = await gerar_link_pagamento(
+                asaas_id, chat_id, reativacao=trial_usado
+            )
         else:
             from pagamento import buscar_link_assinatura
             link = await buscar_link_assinatura(assinatura_id)
+
+        aviso = f"\n\n{i('Trial já utilizado — cobrança imediata de R$ 29,90.')}" if trial_usado else ""
 
         if link:
             kb = InlineKeyboardMarkup([
@@ -1383,7 +1388,8 @@ async def cmd_reativar_handler(update: Update, context: ContextTypes.DEFAULT_TYP
             ])
             await update.message.reply_text(
                 f"🔄 {b('Reativar MercadoBot')}\n\n"
-                f"Clique abaixo para reativar sua assinatura de {b('R$ 29,90/mês')}:",
+                f"Clique abaixo para reativar sua assinatura de {b('R$ 29,90/mês')}."
+                f"{aviso}",
                 parse_mode="HTML",
                 reply_markup=kb
             )
@@ -1537,16 +1543,22 @@ async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await msg.reply_text("⏳ Gerando link de reativação...")
 
         try:
-            asaas_id = usuario["asaas_id"]
+            asaas_id    = usuario["asaas_id"]
+            trial_usado = usuario.get("trial_usado", False)
 
             # Verifica se já tem assinatura ativa
             assinatura_id = await buscar_assinatura_ativa(asaas_id)
             if assinatura_id:
                 link = await buscar_link_assinatura(assinatura_id)
             else:
-                link, assinatura_id = await gerar_link_pagamento(asaas_id, chat_id)
+                # Trial já usado — reativação sem trial
+                link, assinatura_id = await gerar_link_pagamento(
+                    asaas_id, chat_id, reativacao=trial_usado
+                )
                 if assinatura_id:
                     await atualizar_usuario(chat_id, assinatura_asaas_id=assinatura_id, status="pendente")
+
+            aviso_trial = "" if trial_usado else f"\n\n{i('Trial já utilizado — cobrança imediata de R$ 29,90.')}"
 
             if link:
                 kb_reativar = InlineKeyboardMarkup([
@@ -1555,7 +1567,8 @@ async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 ])
                 await msg.reply_text(
                     f"🔄 {b('Reativar MercadoBot')}\n\n"
-                    f"Clique abaixo para reativar sua assinatura de {b('R$ 29,90/mês')}:",
+                    f"Clique abaixo para reativar sua assinatura de {b('R$ 29,90/mês')}."
+                    f"{aviso_trial}",
                     parse_mode="HTML",
                     reply_markup=kb_reativar
                 )
