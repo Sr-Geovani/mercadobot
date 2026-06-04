@@ -422,17 +422,22 @@ def bloco_score(vendas: pd.DataFrame) -> str:
     return "\n".join(linhas)
 
 
-def bloco_faturamento(vendas: pd.DataFrame) -> str:
-    total = vendas["valor"].sum()
-    ticket = vendas["valor"].mean()
-    n = len(vendas)
-    cancel = vendas["ValorItensCancelados"].sum()
+def bloco_faturamento(vendas: pd.DataFrame, produtos: pd.DataFrame = None) -> str:
+    total      = vendas["valor"].sum()
+    ticket     = vendas["valor"].mean()
+    n          = len(vendas)
+    cancel     = vendas["ValorItensCancelados"].sum()
     pct_cancel = (cancel / total * 100) if total else 0
 
     filiais = vendas.groupby("nomeFilial").agg(
         fat=("valor","sum"), qtd=("valor","count"), tk=("valor","mean"),
         canc=("ValorItensCancelados","sum")
     )
+
+    # Itens vendidos por filial (do relatório de produtos)
+    itens_por_filial = {}
+    if produtos is not None and not produtos.empty and "nomeloja" in produtos.columns:
+        itens_por_filial = produtos.groupby("nomeloja")["quantidade"].sum().to_dict()
 
     linhas = [f"📊 {b('FATURAMENTO DO PERÍODO')}\n"]
     linhas.append(f"💰 Total consolidado: {b(f'R$ {total:,.2f}')}")
@@ -444,7 +449,17 @@ def bloco_faturamento(vendas: pd.DataFrame) -> str:
         nome = filial.split()[-1].title()
         linhas.append(f"📍 {b(nome)}")
         linhas.append(f"   Faturamento: {b(f'R$ {row.fat:,.2f}')}")
-        linhas.append(f"   Transações: {b(str(row.qtd))} | Ticket médio: R$ {row.tk:.2f}")
+        # Busca itens vendidos — tenta bater o nome da filial com nomeloja
+        itens = 0
+        for nomeloja, total_itens in itens_por_filial.items():
+            if nome.lower() in nomeloja.lower() or nomeloja.lower() in filial.lower():
+                itens = int(total_itens)
+                break
+        if itens:
+            linhas.append(f"   Transações: {row.qtd} | Itens vendidos: {b(str(itens))}")
+        else:
+            linhas.append(f"   Transações: {b(str(row.qtd))}")
+        linhas.append(f"   Ticket médio: R$ {row.tk:.2f}")
         linhas.append(f"   Cancelamentos: {c(f'R$ {row.canc:,.2f}')}\n")
 
     return "\n".join(linhas)
@@ -863,7 +878,7 @@ async def fluxo_briefing(msg, chat_id: int):
     ctx = resumo_dados(chat_id)
 
     # Bloco 1 — Faturamento
-    await enviar(msg, bloco_faturamento(vendas))
+    await enviar(msg, bloco_faturamento(vendas, produtos))
     if vendas is not None:
         await msg.reply_photo(photo=g_faturamento(vendas))
 

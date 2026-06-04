@@ -75,7 +75,7 @@ async def briefing_usuario(bot: Bot, usuario: dict):
             return
 
         # Envia blocos separados
-        await bot.send_message(chat_id=chat_id, text=bloco_faturamento(vendas), parse_mode="HTML")
+        await bot.send_message(chat_id=chat_id, text=bloco_faturamento(vendas, produtos), parse_mode="HTML")
         await bot.send_photo(chat_id=chat_id, photo=g_faturamento(vendas))
 
         await bot.send_message(chat_id=chat_id, text=bloco_categorias(produtos), parse_mode="HTML")
