@@ -1427,10 +1427,17 @@ async def mensagem_livre_com_acesso(update: Update, context: ContextTypes.DEFAUL
     await mensagem_livre(update, context)
 
 async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
+    query   = update.callback_query
     chat_id = query.message.chat_id
-    acao = query.data
-    msg  = query.message
+    acao    = query.data
+    msg     = query.message
+
+    # Imports fixos no topo — evita UnboundLocalError por imports locais conflitantes
+    from datetime import datetime as _datetime, timedelta as _timedelta
+    from zoneinfo import ZoneInfo as _ZoneInfo
+    _brasilia = _ZoneInfo("America/Sao_Paulo")
+    _fmt      = "%d/%m/%Y"
+    _hoje     = _datetime.now(_brasilia)
 
     # Mapa de textos para o popup instantâneo
     textos_popup = {
@@ -1550,27 +1557,19 @@ async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ─── Atualizar: período escolhido ───────────────────────
     if acao.startswith("atualizar_"):
-        from datetime import datetime, timedelta
-        from zoneinfo import ZoneInfo
-        brasilia = ZoneInfo("America/Sao_Paulo")
-        hoje     = datetime.now(brasilia)
-        ontem    = hoje - timedelta(days=1)
-        fmt      = "%d/%m/%Y"
-
         # Calcula mês anterior
-        if hoje.month == 1:
-            mes_ant_ini = hoje.replace(year=hoje.year-1, month=12, day=1)
+        if _hoje.month == 1:
+            mes_ant_ini = _hoje.replace(year=_hoje.year-1, month=12, day=1)
         else:
-            mes_ant_ini = hoje.replace(month=hoje.month-1, day=1)
-        # Último dia do mês anterior
-        mes_ant_fim = hoje.replace(day=1) - timedelta(days=1)
+            mes_ant_ini = _hoje.replace(month=_hoje.month-1, day=1)
+        mes_ant_fim = _hoje.replace(day=1) - _timedelta(days=1)
 
         periodos = {
-            "atualizar_hoje":         (hoje.strftime(fmt),         hoje.strftime(fmt),         "hoje"),
-            "atualizar_ontem":        (ontem.strftime(fmt),        ontem.strftime(fmt),        "ontem"),
-            "atualizar_7dias":        ((hoje - timedelta(days=7)).strftime(fmt), hoje.strftime(fmt), "últimos 7 dias"),
-            "atualizar_mes":          (hoje.strftime("01/%m/%Y"),  hoje.strftime(fmt),         f"mês de {nome_mes(hoje.month)}"),
-            "atualizar_mes_anterior": (mes_ant_ini.strftime(fmt),  mes_ant_fim.strftime(fmt),  f"{nome_mes(mes_ant_ini.month)} de {mes_ant_ini.year}"),
+            "atualizar_hoje":         (_hoje.strftime(_fmt),             _hoje.strftime(_fmt),           "hoje"),
+            "atualizar_ontem":        ((_hoje-_timedelta(days=1)).strftime(_fmt), (_hoje-_timedelta(days=1)).strftime(_fmt), "ontem"),
+            "atualizar_7dias":        ((_hoje-_timedelta(days=7)).strftime(_fmt), _hoje.strftime(_fmt),  "últimos 7 dias"),
+            "atualizar_mes":          (_hoje.strftime("01/%m/%Y"),        _hoje.strftime(_fmt),           f"mês de {nome_mes(_hoje.month)}"),
+            "atualizar_mes_anterior": (mes_ant_ini.strftime(_fmt),        mes_ant_fim.strftime(_fmt),     f"{nome_mes(mes_ant_ini.month)} de {mes_ant_ini.year}"),
         }
 
         if acao in periodos:
@@ -1603,17 +1602,13 @@ async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # ── Passo 2: escolha do período ──────────────────────
         if acao.startswith("rep_per_"):
-            brasilia = ZoneInfo("America/Sao_Paulo")
-            hoje_dt  = datetime.now(brasilia)
-            fmt      = "%d/%m/%Y"
-
             periodos = {
-                "rep_per_hoje":   (hoje_dt.strftime(fmt),                              hoje_dt.strftime(fmt),   "hoje"),
-                "rep_per_ontem":  ((hoje_dt-timedelta(days=1)).strftime(fmt),          (hoje_dt-timedelta(days=1)).strftime(fmt), "ontem"),
-                "rep_per_7dias":  ((hoje_dt-timedelta(days=7)).strftime(fmt),          hoje_dt.strftime(fmt),   "últimos 7 dias"),
-                "rep_per_15dias": ((hoje_dt-timedelta(days=15)).strftime(fmt),         hoje_dt.strftime(fmt),   "últimos 15 dias"),
-                "rep_per_30dias": ((hoje_dt-timedelta(days=30)).strftime(fmt),         hoje_dt.strftime(fmt),   "últimos 30 dias"),
-                "rep_per_mes":    (hoje_dt.strftime("01/%m/%Y"),                       hoje_dt.strftime(fmt),   f"mês de {nome_mes(hoje_dt.month)}"),
+                "rep_per_hoje":   (_hoje.strftime(_fmt),                         _hoje.strftime(_fmt),                         "hoje"),
+                "rep_per_ontem":  ((_hoje-_timedelta(days=1)).strftime(_fmt),    (_hoje-_timedelta(days=1)).strftime(_fmt),    "ontem"),
+                "rep_per_7dias":  ((_hoje-_timedelta(days=7)).strftime(_fmt),    _hoje.strftime(_fmt),                         "últimos 7 dias"),
+                "rep_per_15dias": ((_hoje-_timedelta(days=15)).strftime(_fmt),   _hoje.strftime(_fmt),                         "últimos 15 dias"),
+                "rep_per_30dias": ((_hoje-_timedelta(days=30)).strftime(_fmt),   _hoje.strftime(_fmt),                         "últimos 30 dias"),
+                "rep_per_mes":    (_hoje.strftime("01/%m/%Y"),                   _hoje.strftime(_fmt),                         f"mês de {nome_mes(_hoje.month)}"),
             }
 
             if acao not in periodos:
