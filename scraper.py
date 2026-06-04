@@ -109,12 +109,16 @@ async def exportar_produtos(page, context, data_ini: str, data_fim: str) -> Path
     await page.wait_for_timeout(1500)
 
     # Mapeia período para o data-range-key do PDV Legal
-    hoje  = datetime.now().strftime("%d/%m/%Y")
-    ontem = (datetime.now() - timedelta(days=1)).strftime("%d/%m/%Y")
-    d7    = (datetime.now() - timedelta(days=7)).strftime("%d/%m/%Y")
-    d15   = (datetime.now() - timedelta(days=15)).strftime("%d/%m/%Y")
-    d30   = (datetime.now() - timedelta(days=30)).strftime("%d/%m/%Y")
-    mes_ini = datetime.now().replace(day=1).strftime("%d/%m/%Y")
+    # Usa fuso de Brasília para garantir consistência com o bot
+    from zoneinfo import ZoneInfo
+    brasilia = ZoneInfo("America/Sao_Paulo")
+    agora_br = datetime.now(brasilia)
+    hoje  = agora_br.strftime("%d/%m/%Y")
+    ontem = (agora_br - timedelta(days=1)).strftime("%d/%m/%Y")
+    d7    = (agora_br - timedelta(days=7)).strftime("%d/%m/%Y")
+    d15   = (agora_br - timedelta(days=15)).strftime("%d/%m/%Y")
+    d30   = (agora_br - timedelta(days=30)).strftime("%d/%m/%Y")
+    mes_ini = agora_br.replace(day=1).strftime("%d/%m/%Y")
 
     mapa = {
         (hoje,    hoje):  "Hoje",
@@ -126,8 +130,8 @@ async def exportar_produtos(page, context, data_ini: str, data_fim: str) -> Path
     }
     range_key = mapa.get((data_ini, data_fim))
     if not range_key:
-        logger.warning(f"Período ({data_ini} → {data_fim}) não mapeado — usando Ultimos 30 dias")
-        range_key = "Ultimos 30 dias"
+        logger.warning(f"Período ({data_ini} → {data_fim}) não mapeado no PDV Legal — usando Ontem")
+        range_key = "Ontem"
 
     # Abre o date picker e seleciona opção
     await page.click("#reportrange")
