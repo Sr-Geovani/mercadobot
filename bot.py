@@ -696,6 +696,44 @@ def resumo_dados(chat_id: int) -> str:
 
     return "\n\n".join(partes) if partes else "Sem dados."
 
+
+TEMAS_INSIGHT = [
+    "cancelamentos e impacto no faturamento",
+    "horário de pico e oportunidade de receita",
+    "mix de produtos e ruptura de estoque",
+    "comparativo entre unidades",
+    "tendência semanal de faturamento",
+    "ticket médio e oportunidade de aumento",
+    "mix de pagamento e redução de taxas",
+    "produtos âncora e consistência de venda",
+    "sazonalidade e planejamento de estoque",
+    "eficiência operacional e cancelamentos",
+]
+
+async def insight_ia(ctx: str, tema: str = "") -> str:
+    """Gera insight usando Claude. Retorna texto curto e prático."""
+    import random
+    if not tema:
+        tema = random.choice(TEMAS_INSIGHT)
+    try:
+        client = anthropic.Anthropic(api_key=ANTHROPIC_KEY)
+        prompt = (
+            f"Você é um consultor especialista em mercadinhos autônomos em condomínios no Brasil.\n"
+            f"Com base nos dados abaixo, gere um insight CURTO e PRÁTICO sobre: {tema}.\n"
+            f"Máximo 3 bullet points diretos. Sem introdução. Sem conclusão. Só o que importa.\n\n"
+            f"{ctx}"
+        )
+        resp = client.messages.create(
+            model="claude-sonnet-4-5",
+            max_tokens=400,
+            messages=[{"role": "user", "content": prompt}]
+        )
+        return resp.content[0].text.strip()
+    except Exception as e:
+        logger.error(f"Erro insight_ia: {e}")
+        return i("Insight não disponível no momento.")
+
+
 # ─── MENU ────────────────────────────────────────────────────
 async def configurar_menu(app):
     cmds = [

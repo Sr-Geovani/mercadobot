@@ -109,16 +109,15 @@ async def exportar_produtos(page, context, data_ini: str, data_fim: str) -> Path
     await page.wait_for_timeout(1500)
 
     # Mapeia período para o data-range-key do PDV Legal
-    # Usa fuso de Brasília para garantir consistência com o bot
     from zoneinfo import ZoneInfo
-    brasilia = ZoneInfo("America/Sao_Paulo")
-    agora_br = datetime.now(brasilia)
-    hoje  = agora_br.strftime("%d/%m/%Y")
-    ontem = (agora_br - timedelta(days=1)).strftime("%d/%m/%Y")
-    d7    = (agora_br - timedelta(days=7)).strftime("%d/%m/%Y")
-    d15   = (agora_br - timedelta(days=15)).strftime("%d/%m/%Y")
-    d30   = (agora_br - timedelta(days=30)).strftime("%d/%m/%Y")
-    mes_ini = agora_br.replace(day=1).strftime("%d/%m/%Y")
+    brasilia  = ZoneInfo("America/Sao_Paulo")
+    agora_br  = datetime.now(brasilia)
+    hoje      = agora_br.strftime("%d/%m/%Y")
+    ontem     = (agora_br - timedelta(days=1)).strftime("%d/%m/%Y")
+    d7        = (agora_br - timedelta(days=7)).strftime("%d/%m/%Y")
+    d15       = (agora_br - timedelta(days=15)).strftime("%d/%m/%Y")
+    d30       = (agora_br - timedelta(days=30)).strftime("%d/%m/%Y")
+    mes_ini   = agora_br.replace(day=1).strftime("%d/%m/%Y")
 
     mapa = {
         (hoje,    hoje):  "Hoje",
@@ -129,9 +128,27 @@ async def exportar_produtos(page, context, data_ini: str, data_fim: str) -> Path
         (mes_ini, hoje):  "Este mes",
     }
     range_key = mapa.get((data_ini, data_fim))
+
+    # Fallback inteligente baseado no intervalo de dias
     if not range_key:
-        logger.warning(f"Período ({data_ini} → {data_fim}) não mapeado no PDV Legal — usando Ontem")
-        range_key = "Ontem"
+        try:
+            d_ini_dt = datetime.strptime(data_ini, "%d/%m/%Y")
+            d_fim_dt = datetime.strptime(data_fim, "%d/%m/%Y")
+            delta    = (d_fim_dt - d_ini_dt).days
+            hoje_dt  = agora_br.replace(tzinfo=None)
+            # Se fim é hoje ou ontem
+            if data_fim == hoje:
+                if delta <= 1:   range_key = "Hoje"
+                elif delta <= 7:  range_key = "Ultimos 7 dias"
+                elif delta <= 15: range_key = "Ultimos 15 dias"
+                else:             range_key = "Ultimos 30 dias"
+            elif data_fim == ontem and delta == 0:
+                range_key = "Ontem"
+            else:
+                range_key = "Este mes"
+        except Exception:
+            range_key = "Ontem"
+        logger.warning(f"Período ({data_ini} → {data_fim}) não mapeado — usando '{range_key}'")
 
     # Abre o date picker e seleciona opção
     await page.click("#reportrange")
