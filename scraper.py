@@ -125,40 +125,20 @@ async def exportar_produtos(page, context, data_ini: str, data_fim: str) -> Path
         (d7,      hoje):  "Ultimos 7 dias",
         (d15,     hoje):  "Ultimos 15 dias",
         (d30,     hoje):  "Ultimos 30 dias",
+        (mes_ini, hoje):  "Este mes",
     }
-    range_key = mapa.get((data_ini, data_fim))
-
-    # Fallback baseado no intervalo real
-    if not range_key:
-        try:
-            d_ini_dt = datetime.strptime(data_ini, "%d/%m/%Y")
-            d_fim_dt = datetime.strptime(data_fim, "%d/%m/%Y")
-            delta    = (d_fim_dt - d_ini_dt).days
-            if delta <= 1 and data_fim == hoje:   range_key = "Hoje"
-            elif delta == 0 and data_fim == ontem: range_key = "Ontem"
-            elif delta <= 7:                       range_key = "Ultimos 7 dias"
-            elif delta <= 15:                      range_key = "Ultimos 15 dias"
-            elif delta <= 30:                      range_key = "Ultimos 30 dias"
-            elif delta <= 60:                      range_key = "Ultimos 60 dias"
-            elif delta <= 90:                      range_key = "Ultimos 90 dias"
-            else:                                  range_key = "Ultimos 90 dias"
-        except Exception:
-            range_key = "Ontem"
-        logger.warning(f"Período ({data_ini} → {data_fim}) → '{range_key}'")
-
+    range_key = mapa.get((data_ini, data_fim), "Ontem")
     logger.info(f"Produtos — range_key: '{range_key}'")
 
     # Abre o date picker e seleciona opção
     await page.click("#reportrange")
-    await page.wait_for_timeout(800)
-    await page.click(f"li[data-range-key='{range_key}']", timeout=5000)
+    await page.wait_for_timeout(500)
+    await page.click(f"li[data-range-key='{range_key}']")
     await page.wait_for_timeout(500)
 
     # Clica em Filtrar
     await page.click("#btnFiltro")
-    # Meses têm mais dados — timeout maior
-    wait_ms = 8000 if (data_ini != data_fim) else 3000
-    await page.wait_for_timeout(wait_ms)
+    await page.wait_for_timeout(3000)
 
     # Abre modal de download
     await page.click("#imgDownload")
