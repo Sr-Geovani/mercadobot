@@ -141,30 +141,37 @@ async def exportar_produtos(page, data_ini: str, data_fim: str) -> Path:
         await page.wait_for_timeout(500)
     else:
         # Período customizado via "Intervalo"
-        logger.info(f"Produtos — usando Intervalo customizado: {data_ini} → {data_fim}")
+        logger.info(f"Produtos — usando Intervalo: {data_ini} → {data_fim}")
         await page.click("li[data-range-key='Intervalo']")
-        await page.wait_for_timeout(800)
+        await page.wait_for_timeout(1000)
 
-        # Converte dd/mm/yyyy → mm/dd/yyyy para o datepicker
+        # Converte dd/mm/yyyy → mm/dd/yyyy para o datepicker americano
         def br_to_us(d):
             dd, mm, yyyy = d.split("/")
             return f"{mm}/{dd}/{yyyy}"
 
-        # Preenche campo de início
-        await page.locator("input.daterangepicker_start_input").first.click(click_count=3)
-        await page.keyboard.type(br_to_us(data_ini))
-        await page.keyboard.press("Tab")
-        await page.wait_for_timeout(300)
+        ini_us = br_to_us(data_ini)
+        fim_us = br_to_us(data_fim)
 
-        # Preenche campo de fim
-        await page.locator("input.daterangepicker_end_input").first.click(click_count=3)
-        await page.keyboard.type(br_to_us(data_fim))
-        await page.keyboard.press("Tab")
-        await page.wait_for_timeout(300)
-
-        # Confirma
-        await page.locator("button.applyBtn").click()
+        # Preenche via JavaScript direto nos inputs do daterangepicker
+        await page.evaluate(f"""
+            var inputs = document.querySelectorAll('.daterangepicker input[type="text"]');
+            if (inputs.length >= 2) {{
+                inputs[0].value = '{ini_us}';
+                inputs[1].value = '{fim_us}';
+                inputs[0].dispatchEvent(new Event('change'));
+                inputs[1].dispatchEvent(new Event('change'));
+            }}
+        """)
         await page.wait_for_timeout(500)
+
+        # Clica no botão Apply
+        await page.evaluate("""
+            var btn = document.querySelector('.daterangepicker .applyBtn');
+            if (btn) btn.click();
+        """)
+        await page.wait_for_timeout(800)
+        logger.info(f"Intervalo aplicado: {ini_us} → {fim_us}")
 
     # Clica em Filtrar
     await page.click("#btnFiltro")
