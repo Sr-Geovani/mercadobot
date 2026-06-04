@@ -1509,8 +1509,8 @@ async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg     = query.message
 
     # Ignora callbacks de mensagens com mais de 10 minutos
-    from datetime import timezone as _tz
-    msg_age = (datetime.now(_tz.utc) - query.message.date).total_seconds()
+    import time as _time
+    msg_age = _time.time() - query.message.date.timestamp()
     if msg_age > 600:
         await query.answer("⏱ Esse botão expirou. Use o menu abaixo.")
         return
