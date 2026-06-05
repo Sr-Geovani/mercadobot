@@ -196,7 +196,6 @@ async def exportar_cancelamentos(page, data_ini: str, data_fim: str) -> float:
     """
     Busca o total de cancelamentos direto da tela de Vendas Canceladas.
     URL: dashboard_vendas.aspx?tp=2
-    Retorna o valor total cancelado como float.
     """
     logger.info(f"Buscando cancelamentos: {data_ini} → {data_fim}")
     try:
@@ -206,15 +205,14 @@ async def exportar_cancelamentos(page, data_ini: str, data_fim: str) -> float:
         )
         await page.wait_for_timeout(1500)
 
-        # Seleciona o período via date range picker
         from zoneinfo import ZoneInfo
-        brasilia  = ZoneInfo("America/Sao_Paulo")
-        agora     = datetime.now(brasilia)
-        hoje      = agora.strftime("%d/%m/%Y")
-        ontem     = (agora - timedelta(days=1)).strftime("%d/%m/%Y")
-        d7        = (agora - timedelta(days=7)).strftime("%d/%m/%Y")
-        d15       = (agora - timedelta(days=15)).strftime("%d/%m/%Y")
-        d30       = (agora - timedelta(days=30)).strftime("%d/%m/%Y")
+        brasilia = ZoneInfo("America/Sao_Paulo")
+        agora    = datetime.now(brasilia)
+        hoje     = agora.strftime("%d/%m/%Y")
+        ontem    = (agora - timedelta(days=1)).strftime("%d/%m/%Y")
+        d7       = (agora - timedelta(days=7)).strftime("%d/%m/%Y")
+        d15      = (agora - timedelta(days=15)).strftime("%d/%m/%Y")
+        d30      = (agora - timedelta(days=30)).strftime("%d/%m/%Y")
 
         mapa = {
             (hoje,  hoje):  "Hoje",
@@ -252,15 +250,16 @@ async def exportar_cancelamentos(page, data_ini: str, data_fim: str) -> float:
             await page.evaluate("var btn = document.querySelector('.daterangepicker .applyBtn'); if(btn) btn.click();")
             await page.wait_for_timeout(800)
 
-        # Clica em Filtrar
-        await page.click("#btnFiltrar")
+        # Clica em Filtrar — mesmo ID da tela de produtos
+        await page.click("#btnFiltro")
         await page.wait_for_timeout(2000)
 
-        # Lê o total cancelado — campo "Total cancelado" no rodapé
+        # Lê o total cancelado via JavaScript
         total_text = await page.evaluate("""
             var cards = document.querySelectorAll('.info-box-number');
             for (var c of cards) {
-                var label = c.closest('.info-box') ? c.closest('.info-box').querySelector('.info-box-text') : null;
+                var box = c.closest('.info-box');
+                var label = box ? box.querySelector('.info-box-text') : null;
                 if (label && label.textContent.toLowerCase().includes('cancelado')) {
                     return c.textContent.trim();
                 }
@@ -268,10 +267,9 @@ async def exportar_cancelamentos(page, data_ini: str, data_fim: str) -> float:
             return '0';
         """)
 
-        # Converte string para float
         total_str = total_text.replace(".", "").replace(",", ".").strip()
         total = float(total_str) if total_str else 0.0
-        logger.info(f"Total cancelado (tela cancelamentos): R$ {total:.2f}")
+        logger.info(f"Total cancelado: R$ {total:.2f}")
         return total
 
     except Exception as e:
@@ -294,8 +292,7 @@ async def _baixar_async(data_ini: str, data_fim: str,
             await fazer_login(page, _email, _senha)
             path_vendas   = await exportar_vendas(page, data_ini, data_fim)
             path_produtos = await exportar_produtos(page, data_ini, data_fim)
-            total_cancel  = await exportar_cancelamentos(page, data_ini, data_fim)
-            return path_vendas, path_produtos, total_cancel
+            return path_vendas, path_produtos, 0.0
         finally:
             await browser.close()
 
