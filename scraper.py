@@ -259,6 +259,12 @@ async def exportar_cancelamentos(page, data_ini: str, data_fim: str) -> float:
         await page.wait_for_timeout(1000)
         logger.info("Cancelamentos — filtro aplicado")
 
+        # Limpa arquivo anterior para garantir que baixa o novo
+        import shutil
+        cancel_path = DOWNLOAD_DIR / "cancelamentos.xlsx"
+        if cancel_path.exists():
+            cancel_path.unlink()
+
         await page.click("#imgDownload")
         await page.wait_for_timeout(1000)
 
@@ -272,8 +278,8 @@ async def exportar_cancelamentos(page, data_ini: str, data_fim: str) -> float:
         import pandas as pd
         df = pd.read_excel(destino)
         logger.info(f"Cancelamentos Excel — linhas: {len(df)}, colunas: {list(df.columns)}")
-        if len(df) > 0 and "data" in df.columns:
-            logger.info(f"Cancelamentos — exemplo data: {df['data'].iloc[0]}")
+        if len(df) > 0:
+            logger.info(f"Cancelamentos — primeiras 3 linhas:\n{df.head(3).to_string()}")
 
         # Filtra por data — coluna 'data' tem formato 'dd/mm/yyyy HH:MM:SS'
         if "data" in df.columns and len(df) > 0:
