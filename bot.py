@@ -436,20 +436,42 @@ def bloco_faturamento(vendas: pd.DataFrame, produtos: pd.DataFrame = None) -> st
     ticket = vendas["valor"].mean()
     n      = len(vendas)
 
-    # Cancelamentos: soma apenas linhas onde houve de fato cancelamento
-    cancel_mask = vendas["ValorItensCancelados"] > 0
-    cancel      = vendas.loc[cancel_mask, "ValorItensCancelados"].sum()
-    n_cancel    = cancel_mask.sum()
-    pct_cancel  = (cancel / total * 100) if total else 0
+    # Cancelamentos tipo 1: transações inteiras estornadas
+    estornadas = pd.Series(dtype=float)
+    if "Estornado" in vendas.columns:
+        mask_est   = vendas["Estornado"] == True
+        estornadas = vendas.loc[mask_est, "valor"]
+        cancel_est = estornadas.sum()
+        n_est      = mask_est.sum()
+    else:
+        cancel_est = 0
+        n_est      = 0
+
+    # Cancelamentos tipo 2: itens cancelados dentro de vendas normais
+    if "ValorItensCancelados" in vendas.columns:
+        # Exclui as transações já contadas como estornadas
+        if "Estornado" in vendas.columns:
+            mask_itens = (vendas["ValorItensCancelados"] > 0) & (vendas["Estornado"] != True)
+        else:
+            mask_itens = vendas["ValorItensCancelados"] > 0
+        cancel_itens = vendas.loc[mask_itens, "ValorItensCancelados"].sum()
+        n_itens      = mask_itens.sum()
+    else:
+        cancel_itens = 0
+        n_itens      = 0
+
+    cancel     = cancel_est + cancel_itens
+    n_cancel   = n_est + n_itens
+    pct_cancel = (cancel / (total + cancel) * 100) if (total + cancel) else 0
+
+    # Cancelamentos por filial
+    def cancel_filial(filial):
+        est = vendas.loc[(vendas["nomeFilial"]==filial) & (vendas.get("Estornado", pd.Series(False, index=vendas.index))==True), "valor"].sum() if "Estornado" in vendas.columns else 0
+        iti = vendas.loc[(vendas["nomeFilial"]==filial) & (vendas.get("ValorItensCancelados", pd.Series(0, index=vendas.index))>0), "ValorItensCancelados"].sum() if "ValorItensCancelados" in vendas.columns else 0
+        return est + iti
 
     filiais = vendas.groupby("nomeFilial").agg(
         fat=("valor","sum"), qtd=("valor","count"), tk=("valor","mean"),
-    )
-    # Cancelamentos por filial — só linhas com cancelamento
-    canc_filial = (
-        vendas[cancel_mask]
-        .groupby("nomeFilial")["ValorItensCancelados"]
-        .sum()
     )
 
     # Itens vendidos por filial (do relatório de produtos)
@@ -462,13 +484,13 @@ def bloco_faturamento(vendas: pd.DataFrame, produtos: pd.DataFrame = None) -> st
     linhas.append(f"🛒 Transações: {b(str(n))}")
     linhas.append(f"🎯 Ticket médio: {b(f'R$ {ticket:.2f}')}")
     if cancel > 0:
-        linhas.append(f"⚠️ Cancelamentos: {c(f'R$ {cancel:,.2f}')} {i(f'({pct_cancel:.1f}% | {n_cancel} ocorrências)')}\n")
+        linhas.append(f"⚠️ Cancelamentos: {c(f'R$ {cancel:,.2f}')} {i(f'({pct_cancel:.1f}% do faturamento)')}\n")
     else:
         linhas.append(f"✅ Sem cancelamentos no período\n")
 
     for filial, row in filiais.iterrows():
-        nome       = filial.split()[-1].title()
-        canc_val   = canc_filial.get(filial, 0)
+        nome     = filial.split()[-1].title()
+        canc_val = cancel_filial(filial)
         linhas.append(f"📍 {b(nome)}")
         linhas.append(f"   Faturamento: {b(f'R$ {row.fat:,.2f}')}")
         itens = 0
@@ -482,8 +504,8 @@ def bloco_faturamento(vendas: pd.DataFrame, produtos: pd.DataFrame = None) -> st
             linhas.append(f"   Transações: {b(str(row.qtd))}")
         linhas.append(f"   Ticket médio: R$ {row.tk:.2f}")
         if canc_val > 0:
-            pct = (canc_val / row.fat * 100) if row.fat else 0
-            linhas.append(f"   Cancelamentos: {c(f'R$ {canc_val:,.2f}')} {i(f'({pct:.1f}%)')}")
+            pct = (canc_val / (row.fat + canc_val) * 100) if (row.fat + canc_val) else 0
+            linhas.append(f"   Cancelamentos: {c(f'R$ {canc_val:,.2f}')} {i(f'({pct:.1f}% do faturamento)')}")
         linhas.append("")
 
     return "\n".join(linhas)
