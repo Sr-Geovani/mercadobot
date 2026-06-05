@@ -470,13 +470,13 @@ def bloco_faturamento(vendas: pd.DataFrame, produtos: pd.DataFrame = None, total
         linhas.append("")  # Sem exibição — dado não disponível ainda
 
     for filial, row in filiais.iterrows():
-        nome     = filial.split()[-1].title()
+        nome     = filial.strip().title()
         canc_val = cancel_filial(filial)
         linhas.append(f"📍 {b(nome)}")
         linhas.append(f"   Faturamento: {b(f'R$ {row.fat:,.2f}')}")
         itens = 0
         for nomeloja, total_itens in itens_por_filial.items():
-            if nome.lower() in nomeloja.lower() or nomeloja.lower() in filial.lower():
+            if filial.lower() in nomeloja.lower() or nomeloja.lower() in filial.lower():
                 itens = int(total_itens)
                 break
         if itens:

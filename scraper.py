@@ -265,13 +265,13 @@ async def exportar_cancelamentos(page, data_ini: str, data_fim: str) -> float:
             "return t.toFixed(2);"
             "})()"
         )
-        total_filtrado = await new_page.evaluate(js_filtro)
-        logger.info(f"Cancelamentos — total filtrado JS: '{total_filtrado}'")
-
-        # Usa o filtrado por data; fallback para LiteralFaturado se 0
-        total = float(total_filtrado) if total_filtrado and float(total_filtrado) > 0 else 0.0
-        if total == 0.0 and total_str and total_str != "0":
-            total = float(total_str.replace(".", "").replace(",", "."))
+        # Usa apenas o LiteralFaturado — fonte confiável da página
+        total = 0.0
+        if total_str and total_str not in ("0", "0,00", ""):
+            try:
+                total = float(total_str.replace(".", "").replace(",", "."))
+            except ValueError:
+                total = 0.0
         logger.info(f"Total cancelado: R$ {total:.2f}")
         await new_page.close()
         return total
