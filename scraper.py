@@ -232,37 +232,46 @@ async def exportar_cancelamentos(page, data_ini: str, data_fim: str) -> float:
         await new_page.wait_for_timeout(500)
         await new_page.wait_for_function("typeof GetDadosProdutos === 'function'", timeout=10000)
         await new_page.evaluate("GetDadosProdutos();")
-        await new_page.wait_for_timeout(3000)
+        await new_page.wait_for_timeout(4000)
 
-        # Filtra linhas da tabela por data via JavaScript
-        ini_parts = data_ini.split("/")
-        fim_parts = data_fim.split("/")
-        ini_y, ini_m, ini_d = ini_parts[2], str(int(ini_parts[1])-1), ini_parts[0]
-        fim_y, fim_m, fim_d = fim_parts[2], str(int(fim_parts[1])-1), fim_parts[0]
+        # Lê o total diretamente do elemento que mostra "Total cancelado"
+        total_str = await new_page.evaluate(
+            "document.getElementById('ContentPlaceHolder1_LiteralFaturado') ? "
+            "document.getElementById('ContentPlaceHolder1_LiteralFaturado').textContent.trim() : '0'"
+        )
+        logger.info(f"Cancelamentos — LiteralFaturado: '{total_str}'")
 
-        js = (
-            "(function() {"
-            "  var iniDt = new Date(" + ini_y + "," + ini_m + "," + ini_d + ");"
-            "  var fimDt = new Date(" + fim_y + "," + fim_m + "," + fim_d + ",23,59,59);"
-            "  var rows = document.querySelectorAll('#gdvPaged tbody tr');"
-            "  var total = 0;"
-            "  rows.forEach(function(row) {"
-            "    var cells = row.querySelectorAll('td');"
-            "    if (cells.length < 6) return;"
-            "    var ds = cells[0].textContent.trim().substring(0,10);"
-            "    var p = ds.split('/');"
-            "    if (p.length < 3) return;"
-            "    var dt = new Date(parseInt(p[2]), parseInt(p[1])-1, parseInt(p[0]));"
-            "    if (dt >= iniDt && dt <= fimDt) {"
-            "      var v = parseFloat(cells[5].textContent.trim().replace(/[.]/g,'').replace(',','.'));  // fix"
-            "      if (!isNaN(v)) total += v;"
-            "    }"
-            "  });"
-            "  return total.toFixed(2);"
+        # Filtra as linhas da tabela por data via JS separado e simples
+        ini_d, ini_m, ini_y = data_ini.split("/")
+        fim_d, fim_m, fim_y = data_fim.split("/")
+        js_filtro = (
+            "(function(){"
+            f"var i=new Date({ini_y},{int(ini_m)-1},{ini_d});"
+            f"var f=new Date({fim_y},{int(fim_m)-1},{fim_d},23,59,59);"
+            "var r=document.querySelectorAll('#gdvPaged tbody tr');"
+            "var t=0;"
+            "r.forEach(function(row){"
+            "var c=row.querySelectorAll('td');"
+            "if(c.length<6)return;"
+            "var ds=c[0].textContent.trim().substring(0,10);"
+            "var p=ds.split('/');"
+            "if(p.length<3)return;"
+            "var dt=new Date(parseInt(p[2]),parseInt(p[1])-1,parseInt(p[0]));"
+            "if(dt>=i&&dt<=f){"
+            "var v=parseFloat(c[5].textContent.trim().replace(/[.]/g,'').replace(',','.'));"
+            "if(!isNaN(v))t+=v;"
+            "}"
+            "});"
+            "return t.toFixed(2);"
             "})()"
         )
-        total_str = await new_page.evaluate(js)
-        total = float(total_str) if total_str else 0.0
+        total_filtrado = await new_page.evaluate(js_filtro)
+        logger.info(f"Cancelamentos — total filtrado JS: '{total_filtrado}'")
+
+        # Usa o filtrado por data; fallback para LiteralFaturado se 0
+        total = float(total_filtrado) if total_filtrado and float(total_filtrado) > 0 else 0.0
+        if total == 0.0 and total_str and total_str != "0":
+            total = float(total_str.replace(".", "").replace(",", "."))
         logger.info(f"Total cancelado: R$ {total:.2f}")
         await new_page.close()
         return total
