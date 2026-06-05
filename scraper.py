@@ -240,7 +240,9 @@ async def exportar_cancelamentos(page, data_ini: str, data_fim: str) -> float:
 
         import pandas as pd
         df = pd.read_excel(destino)
-        logger.info(f"Cancelamentos — {len(df)} linhas, data[0]: '{df['data'].iloc[0] if len(df) > 0 and 'data' in df.columns else 'N/A'}'")
+        logger.info(f"Cancelamentos — {len(df)} linhas")
+        if len(df) > 0:
+            logger.info(f"Cancelamentos — primeiras 3 linhas:\n{df[['data','nomefilial','Valor cancelamento']].head(3).to_string()}")
 
         if "data" in df.columns and len(df) > 0:
             df["data_dt"] = pd.to_datetime(
