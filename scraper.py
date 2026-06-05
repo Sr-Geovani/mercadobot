@@ -239,6 +239,10 @@ async def exportar_cancelamentos(page, data_ini: str, data_fim: str) -> float:
                 dd, mm, yyyy = d.split("/")
                 return f"{mm}/{dd}/{yyyy}"
 
+            def br_to_us(d):
+                dd, mm, yyyy = d.split("/")
+                return f"{mm}/{dd}/{yyyy}"
+
             ini_us = br_to_us(data_ini)
             fim_us = br_to_us(data_fim)
 
@@ -255,6 +259,19 @@ async def exportar_cancelamentos(page, data_ini: str, data_fim: str) -> float:
             await page.evaluate("var btn = document.querySelector('.daterangepicker .applyBtn'); if(btn) btn.click();")
             await page.wait_for_timeout(800)
             logger.info(f"Cancelamentos — intervalo aplicado: {ini_us} → {fim_us}")
+
+        await page.click("#btnFiltro")
+        await page.wait_for_timeout(500)
+
+        # Ajusta horário final para 23:59 para incluir todas as transações do dia
+        try:
+            campos_hora = await page.locator("input.form-control").all()
+            hora_fields = [c for c in campos_hora if await c.input_value() in ("00:00", "23:59", "")]
+            if len(hora_fields) >= 2:
+                await hora_fields[1].triple_click()
+                await hora_fields[1].type("23:59")
+        except Exception:
+            pass
 
         await page.click("#btnFiltro")
         await page.wait_for_timeout(2000)
