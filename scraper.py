@@ -224,6 +224,7 @@ async def exportar_cancelamentos(page, data_ini: str, data_fim: str) -> float:
         range_key = mapa.get((data_ini, data_fim))
         logger.info(f"Cancelamentos — range_key: '{range_key or 'Intervalo'}'")
 
+        # Seleciona período — código idêntico ao exportar_produtos
         await page.click("#reportrange")
         await page.wait_for_timeout(500)
 
@@ -231,13 +232,9 @@ async def exportar_cancelamentos(page, data_ini: str, data_fim: str) -> float:
             await page.click(f"li[data-range-key='{range_key}']")
             await page.wait_for_timeout(500)
         else:
-            # Usa Intervalo com JavaScript — mesmo método que funciona em produtos
+            logger.info(f"Cancelamentos — usando Intervalo: {data_ini} → {data_fim}")
             await page.click("li[data-range-key='Intervalo']")
-            await page.wait_for_timeout(800)
-
-            def br_to_us(d):
-                dd, mm, yyyy = d.split("/")
-                return f"{mm}/{dd}/{yyyy}"
+            await page.wait_for_timeout(1000)
 
             def br_to_us(d):
                 dd, mm, yyyy = d.split("/")
@@ -256,25 +253,17 @@ async def exportar_cancelamentos(page, data_ini: str, data_fim: str) -> float:
                 }}
             """)
             await page.wait_for_timeout(500)
-            await page.evaluate("var btn = document.querySelector('.daterangepicker .applyBtn'); if(btn) btn.click();")
+
+            await page.evaluate("""
+                var btn = document.querySelector('.daterangepicker .applyBtn');
+                if (btn) btn.click();
+            """)
             await page.wait_for_timeout(800)
             logger.info(f"Cancelamentos — intervalo aplicado: {ini_us} → {fim_us}")
 
+        # Clica em Filtrar
         await page.click("#btnFiltro")
-        await page.wait_for_timeout(500)
-
-        # Ajusta horário final para 23:59 para incluir todas as transações do dia
-        try:
-            campos_hora = await page.locator("input.form-control").all()
-            hora_fields = [c for c in campos_hora if await c.input_value() in ("00:00", "23:59", "")]
-            if len(hora_fields) >= 2:
-                await hora_fields[1].triple_click()
-                await hora_fields[1].type("23:59")
-        except Exception:
-            pass
-
-        await page.click("#btnFiltro")
-        await page.wait_for_timeout(2000)
+        await page.wait_for_timeout(3000)
 
         # Abre modal e baixa Excel
         await page.click("#imgDownload")
