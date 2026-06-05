@@ -222,26 +222,19 @@ async def exportar_cancelamentos(page, data_ini: str, data_fim: str) -> float:
         await new_page.wait_for_timeout(500)
         logger.info("Cancelamentos — período selecionado via jQuery")
 
-        # Clica em Filtrar e aguarda dados aparecerem na tabela
-        await new_page.evaluate("$('#btnFiltro').trigger('click');")
+        # Chama a função de filtro diretamente (mesmo que o onclick do botão)
+        await new_page.evaluate("GetDadosProdutos();")
 
-        # Aguarda a tabela ter linhas reais (não vazia)
+        # Aguarda a tabela de cancelamentos carregar — procura por coluna 'Valor cancelamento'
         try:
             await new_page.wait_for_function(
-                "document.querySelectorAll('table tbody tr').length > 1",
+                """document.querySelector('table') &&
+                   document.querySelector('table').innerText.includes('cancelamento')""",
                 timeout=15000
             )
-            # Loga o que está na tabela da página
-            tabela_info = await new_page.evaluate("""
-                (() => {
-                    var rows = document.querySelectorAll('table tbody tr');
-                    var primeira = rows[0] ? rows[0].innerText.substring(0, 100) : 'vazia';
-                    return {total_rows: rows.length, primeira: primeira};
-                })()
-            """)
-            logger.info(f"Cancelamentos — tabela na página: {tabela_info}")
+            logger.info("Cancelamentos — tabela de cancelamentos carregada")
         except Exception as e:
-            logger.warning(f"Cancelamentos — timeout aguardando tabela: {e}")
+            logger.warning(f"Cancelamentos — timeout: {e}")
 
         await new_page.wait_for_timeout(1000)
 
