@@ -228,7 +228,7 @@ async def exportar_cancelamentos(page, data_ini: str, data_fim: str) -> float:
         await new_page.wait_for_timeout(500)
         await new_page.evaluate("$('#reportrange').trigger('click');")
         await new_page.wait_for_timeout(1000)
-        await new_page.evaluate("$('li[data-range-key="" + range_key + ""]').trigger('click');")
+        await new_page.evaluate(f"$('li[data-range-key=\"{range_key}\"]').trigger('click');")
         await new_page.wait_for_timeout(500)
         await new_page.wait_for_function("typeof GetDadosProdutos === 'function'", timeout=10000)
         await new_page.evaluate("GetDadosProdutos();")
