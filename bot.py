@@ -436,15 +436,9 @@ def bloco_faturamento(vendas: pd.DataFrame, produtos: pd.DataFrame = None, total
     ticket = vendas["valor"].mean()
     n      = len(vendas)
 
-    # Usa total_cancel da tela de Vendas Canceladas (fonte mais precisa)
-    # Fallback para ValorItensCancelados se não disponível
-    if total_cancel > 0:
-        cancel = total_cancel
-    elif "ValorItensCancelados" in vendas.columns:
-        cancel = vendas.loc[vendas["ValorItensCancelados"] > 0, "ValorItensCancelados"].sum()
-    else:
-        cancel = 0
-
+    # Cancelamentos: usa total_cancel da tela dedicada se disponível
+    # Caso contrário omite — melhor não mostrar que mostrar errado
+    cancel     = total_cancel if total_cancel > 0 else 0
     pct_cancel = (cancel / (total + cancel) * 100) if (total + cancel) else 0
 
     # Cancelamentos por filial — proporcional ao ValorItensCancelados de cada filial
@@ -473,7 +467,7 @@ def bloco_faturamento(vendas: pd.DataFrame, produtos: pd.DataFrame = None, total
     if cancel > 0:
         linhas.append(f"⚠️ Cancelamentos: {c(f'R$ {cancel:,.2f}')} {i(f'({pct_cancel:.1f}% do faturamento)')}\n")
     else:
-        linhas.append(f"✅ Sem cancelamentos no período\n")
+        linhas.append("")  # Sem exibição — dado não disponível ainda
 
     for filial, row in filiais.iterrows():
         nome     = filial.split()[-1].title()
@@ -1238,12 +1232,6 @@ async def executar_atualizacao(msg, chat_id: int, data_ini: str, data_fim: str, 
 
         vendas_raw   = pd.read_excel(path_vendas)
         produtos_raw = pd.read_excel(path_produtos)
-
-        # Debug — ver total de linhas brutas e soma do ValorItensCancelados
-        if "ValorItensCancelados" in vendas_raw.columns:
-            logger.info(f"DEBUG Excel bruto — linhas: {len(vendas_raw)}, ValorItensCancelados sum: {pd.to_numeric(vendas_raw['ValorItensCancelados'], errors='coerce').fillna(0).sum():.2f}")
-        else:
-            logger.info(f"DEBUG Excel bruto — linhas: {len(vendas_raw)}, colunas: {list(vendas_raw.columns)[:8]}")
 
         vendas   = normalizar_vendas(vendas_raw)
         produtos = normalizar_produtos(produtos_raw)
