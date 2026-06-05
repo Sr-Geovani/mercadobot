@@ -928,21 +928,19 @@ async def comando_reposicao_msg(msg):
         reply_markup=kb
     )
 
-async def pedir_periodo(msg):
-    """Oferece seleção de período."""
+async def sem_dados_msg(msg):
+    """Mensagem quando não há dados carregados — orienta a usar Analisar período."""
     kb = InlineKeyboardMarkup([
-        [InlineKeyboardButton("📅 Hoje",            callback_data="atualizar_hoje")],
-        [InlineKeyboardButton("📅 Ontem",           callback_data="atualizar_ontem")],
-        [InlineKeyboardButton("📅 Últimos 7 dias",  callback_data="atualizar_7dias")],
-        [InlineKeyboardButton("📅 Últimos 15 dias", callback_data="atualizar_15dias")],
-        [InlineKeyboardButton("📅 Últimos 30 dias", callback_data="atualizar_30dias")],
-        [InlineKeyboardButton("📅 Mês atual",       callback_data="atualizar_mes")],
-        [InlineKeyboardButton("📅 Mês anterior",    callback_data="atualizar_mes_anterior")],
+        [InlineKeyboardButton("📅 Carregar dados agora", callback_data="atualizar_menu")],
     ])
     await msg.reply_text(
-        f"📂 Escolha o período:",
+        "📂 Nenhum dado carregado ainda.\n\n"
+        "Escolha um período para começar a análise.",
         reply_markup=kb
     )
+async def pedir_periodo(msg):
+    """Redireciona para sem_dados_msg — mantido por compatibilidade."""
+    await sem_dados_msg(msg)
 
 async def fluxo_briefing(msg, chat_id: int):
     d = dados_usuario.get(chat_id, {})

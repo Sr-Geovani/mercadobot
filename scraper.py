@@ -243,29 +243,34 @@ async def exportar_cancelamentos(page, data_ini: str, data_fim: str) -> dict:
             filial_val  = opt["value"]
             filial_nome = opt["text"]
 
-            # Seleciona apenas essa filial via selectpicker
-            await new_page.evaluate(f"""
-                $('#ContentPlaceHolder1_ddlfilial').val(['{filial_val}']);
-                $('#ContentPlaceHolder1_ddlfilial').selectpicker('refresh');
-            """)
-            await new_page.wait_for_timeout(300)
-
-            # Filtra
-            await new_page.evaluate("GetDadosProdutos();")
-            await new_page.wait_for_timeout(3000)
-
-            # Lê total cancelado
-            val_str = await new_page.evaluate(
-                "document.getElementById('ContentPlaceHolder1_LiteralFaturado') ? "
-                "document.getElementById('ContentPlaceHolder1_LiteralFaturado').textContent.trim() : '0'"
-            )
             try:
-                val = float(val_str.replace(".", "").replace(",", ".")) if val_str and val_str not in ("0", "0,00") else 0.0
-            except ValueError:
-                val = 0.0
+                # Seleciona apenas essa filial via selectpicker
+                await new_page.evaluate(f"""
+                    $('#ContentPlaceHolder1_ddlfilial').val(['{filial_val}']);
+                    $('#ContentPlaceHolder1_ddlfilial').selectpicker('refresh');
+                """)
+                await new_page.wait_for_timeout(300)
 
-            resultado[filial_nome] = val
-            logger.info(f"Cancelamentos — {filial_nome}: R$ {val:.2f}")
+                # Filtra
+                await new_page.evaluate("GetDadosProdutos();")
+                await new_page.wait_for_timeout(4000)
+
+                # Lê total cancelado
+                val_str = await new_page.evaluate(
+                    "document.getElementById('ContentPlaceHolder1_LiteralFaturado') ? "
+                    "document.getElementById('ContentPlaceHolder1_LiteralFaturado').textContent.trim() : '0'"
+                )
+                try:
+                    val = float(val_str.replace(".", "").replace(",", ".")) if val_str and val_str not in ("0", "0,00") else 0.0
+                except ValueError:
+                    val = 0.0
+
+                resultado[filial_nome] = val
+                logger.info(f"Cancelamentos — {filial_nome}: R$ {val:.2f}")
+
+            except Exception as e_filial:
+                logger.warning(f"Cancelamentos — erro na filial {filial_nome}: {e_filial}")
+                resultado[filial_nome] = 0.0
 
         resultado["_total"] = sum(v for k, v in resultado.items() if not k.startswith("_"))
         logger.info(f"Cancelamentos — total: R$ {resultado['_total']:.2f}")
