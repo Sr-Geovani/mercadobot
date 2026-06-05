@@ -432,9 +432,14 @@ def bloco_score(vendas: pd.DataFrame) -> str:
 
 
 def bloco_faturamento(vendas: pd.DataFrame, produtos: pd.DataFrame = None, total_cancel: float = 0.0) -> str:
-    total  = vendas["valor"].sum()
-    ticket = vendas["valor"].mean()
+    # Usa coluna "faturado" se disponível — é o valor efetivamente recebido no caixa
+    # O PDV Legal define: FA=Faturado, CP=Cancelamento Parcial, CT=Cancelamento Total
+    col_fat = "faturado" if "faturado" in vendas.columns else "valor"
+
+    total  = vendas[col_fat].sum()
+    ticket = vendas.loc[vendas[col_fat] > 0, col_fat].mean() if (vendas[col_fat] > 0).any() else 0
     n      = len(vendas)
+    n_fat  = (vendas[col_fat] > 0).sum()  # apenas transações com valor positivo
 
     # Cancelamentos: usa total_cancel da tela dedicada se disponível
     # Caso contrário omite — melhor não mostrar que mostrar errado
@@ -452,7 +457,13 @@ def bloco_faturamento(vendas: pd.DataFrame, produtos: pd.DataFrame = None, total
         return round(cancel * (vic_filial / vic_total), 2)
 
     filiais = vendas.groupby("nomeFilial").agg(
-        fat=("valor","sum"), qtd=("valor","count"), tk=("valor","mean"),
+        fat=(col_fat, "sum"),
+        qtd=(col_fat, "count"),
+        tk_sum=(col_fat, "sum"),
+        tk_cnt=(col_fat, lambda x: (x > 0).sum()),
+    )
+    filiais["tk"] = filiais.apply(
+        lambda r: r["tk_sum"] / r["tk_cnt"] if r["tk_cnt"] > 0 else 0, axis=1
     )
 
     # Itens vendidos por filial (do relatório de produtos)
@@ -462,7 +473,7 @@ def bloco_faturamento(vendas: pd.DataFrame, produtos: pd.DataFrame = None, total
 
     linhas = [f"📊 {b('FATURAMENTO DO PERÍODO')}\n"]
     linhas.append(f"💰 Total consolidado: {b(f'R$ {total:,.2f}')}")
-    linhas.append(f"🛒 Transações: {b(str(n))}")
+    linhas.append(f"🛒 Transações: {b(str(n_fat))}")
     linhas.append(f"🎯 Ticket médio: {b(f'R$ {ticket:.2f}')}")
     if cancel > 0:
         linhas.append(f"⚠️ Cancelamentos: {c(f'R$ {cancel:,.2f}')} {i(f'({pct_cancel:.1f}% do faturamento)')}\n")
