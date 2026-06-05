@@ -432,41 +432,25 @@ def bloco_score(vendas: pd.DataFrame) -> str:
 
 
 def bloco_faturamento(vendas: pd.DataFrame, produtos: pd.DataFrame = None) -> str:
-    logger.info("bloco_faturamento v3")
-    if "StatusCupom" in vendas.columns:
-        mask_cp = vendas["StatusCupom"] == "CP"
-        cp_rows = vendas.loc[mask_cp, ["nomeFilial","valor","ValorItensCancelados","StatusCupom","PossuiItemCancelado"]].to_dict("records") if "ValorItensCancelados" in vendas.columns else []
-        for r in cp_rows:
-            logger.info(f"CP row: {r}")
-        fa_cancel = vendas.loc[(vendas["StatusCupom"]=="FA") & (vendas.get("ValorItensCancelados", pd.Series(0,index=vendas.index))>0), ["nomeFilial","valor","ValorItensCancelados"]].to_dict("records") if "ValorItensCancelados" in vendas.columns else []
-        for r in fa_cancel:
-            logger.info(f"FA cancel row: {r}")
-
     total  = vendas["valor"].sum()
     ticket = vendas["valor"].mean()
     n      = len(vendas)
 
-    # Cancelamentos tipo 1: transações inteiras canceladas (StatusCupom = 'CP')
-    mask_cp   = vendas["StatusCupom"] == "CP" if "StatusCupom" in vendas.columns else pd.Series(False, index=vendas.index)
-    cancel_cp = vendas.loc[mask_cp, "valor"].sum()
-
-    # Cancelamentos tipo 2: itens cancelados dentro de vendas normais (não CP)
+    # Cancelamentos: sempre ValorItensCancelados (válido para FA e CP)
     if "ValorItensCancelados" in vendas.columns:
-        mask_itens   = (vendas["ValorItensCancelados"] > 0) & (~mask_cp)
-        cancel_itens = vendas.loc[mask_itens, "ValorItensCancelados"].sum()
+        mask_cancel = vendas["ValorItensCancelados"] > 0
+        cancel      = vendas.loc[mask_cancel, "ValorItensCancelados"].sum()
     else:
-        cancel_itens = 0
-        mask_itens   = pd.Series(False, index=vendas.index)
+        mask_cancel = pd.Series(False, index=vendas.index)
+        cancel      = 0
 
-    cancel     = cancel_cp + cancel_itens
-    # Percentual sobre faturamento bruto (faturado + cancelamentos)
-    pct_cancel = (cancel / (total + cancel_cp) * 100) if (total + cancel_cp) else 0
+    pct_cancel = (cancel / (total + cancel) * 100) if (total + cancel) else 0
 
     # Cancelamentos por filial
     def cancel_filial(filial):
-        cp  = vendas.loc[(vendas["nomeFilial"]==filial) & mask_cp, "valor"].sum()
-        iti = vendas.loc[(vendas["nomeFilial"]==filial) & mask_itens, "ValorItensCancelados"].sum() if "ValorItensCancelados" in vendas.columns else 0
-        return cp + iti
+        if "ValorItensCancelados" not in vendas.columns:
+            return 0
+        return vendas.loc[(vendas["nomeFilial"]==filial) & mask_cancel, "ValorItensCancelados"].sum()
 
     filiais = vendas.groupby("nomeFilial").agg(
         fat=("valor","sum"), qtd=("valor","count"), tk=("valor","mean"),
