@@ -432,16 +432,15 @@ def bloco_score(vendas: pd.DataFrame) -> str:
 
 
 def bloco_faturamento(vendas: pd.DataFrame, produtos: pd.DataFrame = None) -> str:
-    # DEBUG temporário — remove após identificar o problema
+    # DEBUG temporário
+    if "StatusCupom" in vendas.columns:
+        logger.info(f"DEBUG cancel — StatusCupom únicos: {vendas['StatusCupom'].unique().tolist()}")
+        logger.info(f"DEBUG cancel — StatusCupom value_counts: {vendas['StatusCupom'].value_counts().to_dict()}")
+    if "PossuiItemCancelado" in vendas.columns:
+        logger.info(f"DEBUG cancel — PossuiItemCancelado únicos: {vendas['PossuiItemCancelado'].unique().tolist()}")
     if "ValorItensCancelados" in vendas.columns:
-        logger.info(f"DEBUG cancel — total linhas: {len(vendas)}")
         logger.info(f"DEBUG cancel — ValorItensCancelados sum: {vendas['ValorItensCancelados'].sum():.2f}")
-        logger.info(f"DEBUG cancel — ValorItensCancelados > 0: {(vendas['ValorItensCancelados'] > 0).sum()} linhas, soma: {vendas.loc[vendas['ValorItensCancelados']>0,'ValorItensCancelados'].sum():.2f}")
-    if "Estornado" in vendas.columns:
-        mask_est = vendas["Estornado"] == True
-        logger.info(f"DEBUG cancel — Estornado True: {mask_est.sum()} linhas, valor soma: {vendas.loc[mask_est,'valor'].sum():.2f}")
-        logger.info(f"DEBUG cancel — valores Estornado únicos: {vendas['Estornado'].unique().tolist()}")
-    logger.info(f"DEBUG cancel — colunas: {list(vendas.columns)}")
+        logger.info(f"DEBUG cancel — ValorItensCancelados > 0: {(vendas['ValorItensCancelados']>0).sum()} linhas, soma: {vendas.loc[vendas['ValorItensCancelados']>0,'ValorItensCancelados'].sum():.2f}")
 
     total  = vendas["valor"].sum()
     ticket = vendas["valor"].mean()
