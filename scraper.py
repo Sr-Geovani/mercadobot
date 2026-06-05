@@ -245,16 +245,15 @@ async def exportar_cancelamentos(page, data_ini: str, data_fim: str) -> float:
             except Exception:
                 range_key = "Ultimos 30 dias"
 
-        logger.info(f"Cancelamentos — range_key: '{range_key}'")
+        # Usa sempre Ultimos 30 dias — cobre qualquer período até 1 mês
+        # O filtro preciso é feito por data em Python após o download
+        range_key = "Ultimos 30 dias"
+        logger.info(f"Cancelamentos — baixando Ultimos 30 dias, filtrar por data em Python")
 
-        # Abre o dropdown via JavaScript e seleciona a opção
-        await page.evaluate(f"""
-            document.getElementById('reportrange').click();
-        """)
+        await page.evaluate("document.getElementById('reportrange').click();")
         await page.wait_for_timeout(800)
-
         await page.evaluate(f"""
-            var li = document.querySelector("li[data-range-key='{range_key}']");
+            var li = document.querySelector("li[data-range-key='Ultimos 30 dias']");
             if (li) li.click();
         """)
         await page.wait_for_timeout(500)
