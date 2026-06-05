@@ -245,34 +245,13 @@ async def exportar_cancelamentos(page, data_ini: str, data_fim: str) -> float:
             except Exception:
                 range_key = "Ultimos 30 dias"
 
-        # Abre o datepicker e seleciona Ultimos 90 dias
+        # Seleciona Ultimos 90 dias via JavaScript com sintaxe correta
         await page.wait_for_selector("#reportrange", timeout=10000)
-        
-        # Loga o estado atual do datepicker para debug
-        html_debug = await page.evaluate("""
-            var rr = document.getElementById('reportrange');
-            var span = rr ? rr.querySelector('span') : null;
-            var picker = document.querySelector('.daterangepicker');
-            return {
-                reportrange_text: span ? span.textContent : 'not found',
-                picker_visible: picker ? picker.style.display : 'not found',
-                opcoes: Array.from(document.querySelectorAll('li[data-range-key]')).map(l => l.getAttribute('data-range-key'))
-            };
-        """)
-        logger.info(f"Cancelamentos debug: {html_debug}")
-        
-        await page.click("#reportrange")
-        await page.wait_for_timeout(1000)
-        
-        html_debug2 = await page.evaluate("""
-            var picker = document.querySelector('.daterangepicker');
-            var opcoes = Array.from(document.querySelectorAll('li[data-range-key]')).map(l => ({
-                key: l.getAttribute('data-range-key'),
-                visible: l.offsetParent !== null
-            }));
-            return { picker_display: picker ? window.getComputedStyle(picker).display : 'none', opcoes: opcoes };
-        """)
-        logger.info(f"Cancelamentos após click: {html_debug2}")
+        await page.evaluate("(() => { document.getElementById('reportrange').click(); })()")
+        await page.wait_for_timeout(1500)
+        await page.evaluate("(() => { var li = document.querySelector(\"li[data-range-key='Ultimos 90 dias']\"); if(li) li.click(); })()")
+        await page.wait_for_timeout(500)
+        logger.info("Cancelamentos — selecionado Ultimos 90 dias")
 
         await page.click("#btnFiltro")
         await page.wait_for_timeout(4000)
