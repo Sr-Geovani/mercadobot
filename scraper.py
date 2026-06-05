@@ -245,18 +245,16 @@ async def exportar_cancelamentos(page, data_ini: str, data_fim: str) -> float:
             except Exception:
                 range_key = "Ultimos 30 dias"
 
-        # Sempre baixa Ultimos 90 dias — cobre mês atual e anterior
-        await page.evaluate("document.getElementById('reportrange').click();")
-        await page.wait_for_timeout(800)
-        await page.evaluate("""
-            var li = document.querySelector("li[data-range-key='Ultimos 90 dias']");
-            if (li) li.click();
-        """)
+        # Abre o datepicker e seleciona Ultimos 90 dias
+        await page.wait_for_selector("#reportrange", timeout=10000)
+        await page.click("#reportrange")
+        await page.wait_for_selector("li[data-range-key='Ultimos 90 dias']", timeout=5000)
+        await page.click("li[data-range-key='Ultimos 90 dias']")
         await page.wait_for_timeout(500)
-        logger.info("Cancelamentos — baixando Ultimos 90 dias")
+        logger.info("Cancelamentos — selecionado Ultimos 90 dias")
 
         await page.click("#btnFiltro")
-        await page.wait_for_timeout(3000)
+        await page.wait_for_timeout(4000)
 
         await page.click("#imgDownload")
         await page.wait_for_timeout(1000)
