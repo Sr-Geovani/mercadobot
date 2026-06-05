@@ -254,7 +254,7 @@ async def exportar_cancelamentos(page, data_ini: str, data_fim: str) -> float:
             "    if (p.length < 3) return;"
             "    var dt = new Date(parseInt(p[2]), parseInt(p[1])-1, parseInt(p[0]));"
             "    if (dt >= iniDt && dt <= fimDt) {"
-            "      var v = parseFloat(cells[5].textContent.trim().replace(/\./g,'').replace(',','.'));"
+            "      var v = parseFloat(cells[5].textContent.trim().replace(/[.]/g,'').replace(',','.'));"
             "      if (!isNaN(v)) total += v;"
             "    }"
             "  });"
