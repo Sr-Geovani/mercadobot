@@ -270,6 +270,9 @@ async def exportar_cancelamentos(page, data_ini: str, data_fim: str) -> float:
 
         import pandas as pd
         df = pd.read_excel(destino)
+        logger.info(f"Cancelamentos Excel — linhas: {len(df)}, colunas: {list(df.columns)}")
+        if len(df) > 0 and "data" in df.columns:
+            logger.info(f"Cancelamentos — exemplo data: {df['data'].iloc[0]}")
 
         # Filtra por data — coluna 'data' tem formato 'dd/mm/yyyy HH:MM:SS'
         if "data" in df.columns and len(df) > 0:
