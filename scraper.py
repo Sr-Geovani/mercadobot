@@ -194,8 +194,8 @@ async def exportar_produtos(page, data_ini: str, data_fim: str) -> Path:
 
 async def exportar_cancelamentos(page, data_ini: str, data_fim: str) -> float:
     """
-    Baixa o Excel de Vendas com Cancelamentos e soma 'Valor cancelamento'.
-    URL: dashboard_vendas.aspx?tp=2
+    Baixa Excel de cancelamentos e filtra por data em Python.
+    Usa período padrão da tela e filtra localmente.
     """
     logger.info(f"Buscando cancelamentos: {data_ini} → {data_fim}")
     try:
@@ -213,59 +213,48 @@ async def exportar_cancelamentos(page, data_ini: str, data_fim: str) -> float:
         d7       = (agora - timedelta(days=7)).strftime("%d/%m/%Y")
         d15      = (agora - timedelta(days=15)).strftime("%d/%m/%Y")
         d30      = (agora - timedelta(days=30)).strftime("%d/%m/%Y")
+        d60      = (agora - timedelta(days=60)).strftime("%d/%m/%Y")
+        d90      = (agora - timedelta(days=90)).strftime("%d/%m/%Y")
 
+        # Escolhe o período mais amplo que cobre o intervalo pedido
         mapa = {
             (hoje,  hoje):  "Hoje",
             (ontem, ontem): "Ontem",
             (d7,    hoje):  "Ultimos 7 dias",
             (d15,   hoje):  "Ultimos 15 dias",
             (d30,   hoje):  "Ultimos 30 dias",
+            (d60,   hoje):  "Ultimos 60 dias",
+            (d90,   hoje):  "Ultimos 90 dias",
         }
         range_key = mapa.get((data_ini, data_fim))
-        logger.info(f"Cancelamentos — range_key: '{range_key or 'Intervalo'}'")
 
-        # Seleciona período — código idêntico ao exportar_produtos
+        # Se não bater exatamente, usa o período mais amplo possível
+        if not range_key:
+            try:
+                from datetime import datetime as _dt
+                ini_dt  = _dt.strptime(data_ini, "%d/%m/%Y")
+                fim_dt  = _dt.strptime(data_fim, "%d/%m/%Y")
+                delta   = (fim_dt - ini_dt).days + 1
+                agora_dt = _dt.now()
+                dias_atras = (agora_dt - ini_dt).days
+                if dias_atras <= 7:    range_key = "Ultimos 7 dias"
+                elif dias_atras <= 15: range_key = "Ultimos 15 dias"
+                elif dias_atras <= 30: range_key = "Ultimos 30 dias"
+                elif dias_atras <= 60: range_key = "Ultimos 60 dias"
+                else:                  range_key = "Ultimos 90 dias"
+            except Exception:
+                range_key = "Ultimos 30 dias"
+
+        logger.info(f"Cancelamentos — range_key: '{range_key}'")
         await page.click("#reportrange")
         await page.wait_for_timeout(500)
+        await page.click(f"li[data-range-key='{range_key}']")
+        await page.wait_for_timeout(500)
 
-        if range_key:
-            await page.click(f"li[data-range-key='{range_key}']")
-            await page.wait_for_timeout(500)
-        else:
-            logger.info(f"Cancelamentos — usando Intervalo: {data_ini} → {data_fim}")
-            await page.click("li[data-range-key='Intervalo']")
-            await page.wait_for_timeout(1000)
-
-            def br_to_us(d):
-                dd, mm, yyyy = d.split("/")
-                return f"{mm}/{dd}/{yyyy}"
-
-            ini_us = br_to_us(data_ini)
-            fim_us = br_to_us(data_fim)
-
-            await page.evaluate(f"""
-                var inputs = document.querySelectorAll('.daterangepicker input[type="text"]');
-                if (inputs.length >= 2) {{
-                    inputs[0].value = '{ini_us}';
-                    inputs[1].value = '{fim_us}';
-                    inputs[0].dispatchEvent(new Event('change'));
-                    inputs[1].dispatchEvent(new Event('change'));
-                }}
-            """)
-            await page.wait_for_timeout(500)
-
-            await page.evaluate("""
-                var btn = document.querySelector('.daterangepicker .applyBtn');
-                if (btn) btn.click();
-            """)
-            await page.wait_for_timeout(800)
-            logger.info(f"Cancelamentos — intervalo aplicado: {ini_us} → {fim_us}")
-
-        # Clica em Filtrar
         await page.click("#btnFiltro")
         await page.wait_for_timeout(3000)
 
-        # Abre modal e baixa Excel
+        # Baixa o Excel
         await page.click("#imgDownload")
         await page.wait_for_timeout(1000)
 
@@ -276,11 +265,19 @@ async def exportar_cancelamentos(page, data_ini: str, data_fim: str) -> float:
         destino  = DOWNLOAD_DIR / "cancelamentos.xlsx"
         await download.save_as(destino)
 
+        # Filtra por data em Python — garante precisão independente do datepicker
         import pandas as pd
-        df    = pd.read_excel(destino)
+        df = pd.read_excel(destino)
+
+        if "data" in df.columns and len(df) > 0:
+            df["data_dt"] = pd.to_datetime(df["data"], dayfirst=True, errors="coerce")
+            ini_dt = pd.to_datetime(data_ini, dayfirst=True)
+            fim_dt = pd.to_datetime(data_fim, dayfirst=True)
+            df = df[(df["data_dt"] >= ini_dt) & (df["data_dt"] <= fim_dt + pd.Timedelta(days=1))]
+
         col   = "Valor cancelamento"
         total = float(pd.to_numeric(df[col], errors="coerce").sum()) if col in df.columns else 0.0
-        logger.info(f"Total cancelado: R$ {total:.2f} ({len(df)} linhas)")
+        logger.info(f"Total cancelado: R$ {total:.2f} ({len(df)} linhas após filtro de data)")
         return total
 
     except Exception as e:
