@@ -193,73 +193,46 @@ async def exportar_produtos(page, data_ini: str, data_fim: str) -> Path:
 
 
 async def exportar_cancelamentos(page, data_ini: str, data_fim: str) -> float:
-    """
-    Baixa Excel de Vendas com Cancelamentos.
-    Usa mesma lógica do exportar_produtos — código idêntico, URL diferente.
-    """
+    """Baixa Excel de cancelamentos em nova aba isolada."""
     logger.info(f"Buscando cancelamentos: {data_ini} → {data_fim}")
     try:
-        await page.goto(
+        context  = page.context
+        new_page = await context.new_page()
+
+        await new_page.goto(
             "https://pdvlegal.com.br/dashboard_vendas.aspx?tp=2",
             wait_until="networkidle"
         )
-        await page.wait_for_timeout(2000)
+        await new_page.wait_for_timeout(2000)
 
-        # Garante que o reportrange está pronto
-        await page.wait_for_selector("#reportrange", state="visible", timeout=10000)
-
-        br    = ZoneInfo("America/Sao_Paulo")
-        agora = datetime.now(br)
-        hoje  = agora.strftime("%d/%m/%Y")
-        ontem = (agora - timedelta(days=1)).strftime("%d/%m/%Y")
-        d7    = (agora - timedelta(days=7)).strftime("%d/%m/%Y")
-        d15   = (agora - timedelta(days=15)).strftime("%d/%m/%Y")
-        d30   = (agora - timedelta(days=30)).strftime("%d/%m/%Y")
-        d60   = (agora - timedelta(days=60)).strftime("%d/%m/%Y")
-        d90   = (agora - timedelta(days=90)).strftime("%d/%m/%Y")
-
-        mapa = {
-            (hoje,  hoje):  "Hoje",
-            (ontem, ontem): "Ontem",
-            (d7,    hoje):  "Ultimos 7 dias",
-            (d15,   hoje):  "Ultimos 15 dias",
-            (d30,   hoje):  "Ultimos 30 dias",
-            (d60,   hoje):  "Ultimos 60 dias",
-            (d90,   hoje):  "Ultimos 90 dias",
-        }
-
-        # Para cancelamentos sempre usa 90 dias e filtra em Python
         range_key = "Ultimos 90 dias"
         logger.info(f"Cancelamentos — range_key: '{range_key}'")
 
-        # Idêntico ao exportar_produtos mas com wait_for_selector no dropdown
-        await page.click("#reportrange")
-        await page.wait_for_timeout(1000)
-        await page.wait_for_selector(f"li[data-range-key='{range_key}']", state="visible", timeout=10000)
-        await page.click(f"li[data-range-key='{range_key}']")
-        await page.wait_for_timeout(500)
+        await new_page.click("#reportrange")
+        await new_page.wait_for_timeout(1000)
+        await new_page.wait_for_selector(f"li[data-range-key='{range_key}']", state="visible", timeout=10000)
+        await new_page.click(f"li[data-range-key='{range_key}']")
+        await new_page.wait_for_timeout(500)
 
-        await page.click("#btnFiltro")
-        await page.wait_for_timeout(3000)
+        await new_page.click("#btnFiltro")
+        await new_page.wait_for_timeout(3000)
 
-        await page.click("#imgDownload")
-        await page.wait_for_timeout(1000)
+        await new_page.click("#imgDownload")
+        await new_page.wait_for_timeout(1000)
 
-        async with page.expect_download(timeout=45000) as download_info:
-            await page.click("#ContentPlaceHolder1_ImageButton1")
+        async with new_page.expect_download(timeout=45000) as download_info:
+            await new_page.click("#ContentPlaceHolder1_ImageButton1")
 
         download = await download_info.value
         destino  = DOWNLOAD_DIR / "cancelamentos.xlsx"
         await download.save_as(destino)
+        await new_page.close()
         logger.info(f"Cancelamentos baixado: {destino}")
 
         import pandas as pd
         df = pd.read_excel(destino)
-        logger.info(f"Cancelamentos — linhas: {len(df)}")
-        if len(df) > 0:
-            logger.info(f"Primeiras linhas:\n{df.head(3).to_string()}")
+        logger.info(f"Cancelamentos — {len(df)} linhas")
 
-        # Filtra por data em Python
         if "data" in df.columns and len(df) > 0:
             df["data_dt"] = pd.to_datetime(
                 df["data"].astype(str).str[:10],
@@ -269,7 +242,7 @@ async def exportar_cancelamentos(page, data_ini: str, data_fim: str) -> float:
             ini_dt = pd.to_datetime(data_ini, format="%d/%m/%Y")
             fim_dt = pd.to_datetime(data_fim, format="%d/%m/%Y")
             df = df[(df["data_dt"] >= ini_dt) & (df["data_dt"] <= fim_dt)]
-            logger.info(f"Cancelamentos — {len(df)} linhas no período {data_ini} a {data_fim}")
+            logger.info(f"Cancelamentos — {len(df)} linhas no periodo {data_ini} a {data_fim}")
 
         col   = "Valor cancelamento"
         total = float(pd.to_numeric(df[col], errors="coerce").sum()) if col in df.columns else 0.0
