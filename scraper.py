@@ -222,21 +222,17 @@ async def exportar_cancelamentos(page, data_ini: str, data_fim: str) -> float:
         await new_page.wait_for_timeout(500)
         logger.info("Cancelamentos — período selecionado via jQuery")
 
-        # Chama a função de filtro diretamente (mesmo que o onclick do botão)
+        # Aguarda a função GetDadosProdutos estar disponível e chama
+        await new_page.wait_for_function("typeof GetDadosProdutos === 'function'", timeout=10000)
         await new_page.evaluate("GetDadosProdutos();")
+        logger.info("Cancelamentos — GetDadosProdutos() chamado")
 
-        # Aguarda a tabela de cancelamentos carregar — procura por coluna 'Valor cancelamento'
+        # Aguarda AJAX completar — networkidle ou timeout
         try:
-            await new_page.wait_for_function(
-                """document.querySelector('table') &&
-                   document.querySelector('table').innerText.includes('cancelamento')""",
-                timeout=15000
-            )
-            logger.info("Cancelamentos — tabela de cancelamentos carregada")
-        except Exception as e:
-            logger.warning(f"Cancelamentos — timeout: {e}")
-
-        await new_page.wait_for_timeout(1000)
+            await new_page.wait_for_load_state("networkidle", timeout=10000)
+        except Exception:
+            pass
+        await new_page.wait_for_timeout(2000)
 
         await new_page.click("#imgDownload")
         await new_page.wait_for_timeout(1000)
