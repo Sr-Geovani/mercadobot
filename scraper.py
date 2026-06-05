@@ -231,9 +231,17 @@ async def exportar_cancelamentos(page, data_ini: str, data_fim: str) -> float:
                 "document.querySelectorAll('table tbody tr').length > 1",
                 timeout=15000
             )
-            logger.info("Cancelamentos — tabela carregada com dados")
-        except Exception:
-            logger.warning("Cancelamentos — timeout aguardando tabela, tentando assim mesmo")
+            # Loga o que está na tabela da página
+            tabela_info = await new_page.evaluate("""
+                (() => {
+                    var rows = document.querySelectorAll('table tbody tr');
+                    var primeira = rows[0] ? rows[0].innerText.substring(0, 100) : 'vazia';
+                    return {total_rows: rows.length, primeira: primeira};
+                })()
+            """)
+            logger.info(f"Cancelamentos — tabela na página: {tabela_info}")
+        except Exception as e:
+            logger.warning(f"Cancelamentos — timeout aguardando tabela: {e}")
 
         await new_page.wait_for_timeout(1000)
 
