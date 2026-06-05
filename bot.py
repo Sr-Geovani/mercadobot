@@ -440,10 +440,10 @@ def bloco_faturamento(vendas: pd.DataFrame, produtos: pd.DataFrame = None, total
         cancel_dict  = {}
         cancel       = float(total_cancel) if total_cancel else 0.0
 
-    col_fat = "faturado" if "faturado" in vendas.columns else "valor"
+    col_fat = "valor"
     total  = vendas[col_fat].sum()
-    ticket = vendas.loc[vendas[col_fat] > 0, col_fat].mean() if (vendas[col_fat] > 0).any() else 0
-    n_fat  = (vendas[col_fat] > 0).sum()
+    ticket = vendas[col_fat].mean()
+    n_fat  = len(vendas)
 
     pct_cancel = (cancel / (total + cancel) * 100) if (total + cancel) else 0
 
@@ -466,11 +466,7 @@ def bloco_faturamento(vendas: pd.DataFrame, produtos: pd.DataFrame = None, total
     filiais = vendas.groupby("nomeFilial").agg(
         fat=(col_fat, "sum"),
         qtd=(col_fat, "count"),
-        tk_sum=(col_fat, "sum"),
-        tk_cnt=(col_fat, lambda x: (x > 0).sum()),
-    )
-    filiais["tk"] = filiais.apply(
-        lambda r: r["tk_sum"] / r["tk_cnt"] if r["tk_cnt"] > 0 else 0, axis=1
+        tk=(col_fat, "mean"),
     )
 
     # Itens vendidos por filial (do relatório de produtos)
