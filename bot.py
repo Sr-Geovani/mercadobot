@@ -1711,9 +1711,18 @@ async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ─── Atualizar menu ─────────────────────────────────────
     if acao in ("atualizar_menu", "briefing_periodo"):
         gerar_briefing = (acao == "briefing_periodo")
-        context.user_data["gerar_briefing"] = gerar_briefing  # sempre sobrescreve
+        context.user_data["gerar_briefing"] = gerar_briefing
         titulo = "📊 Briefing — Escolha o período:" if gerar_briefing else "📅 Analisar outro período — Escolha o período:"
-        await msg.reply_text(titulo, parse_mode="HTML", reply_markup=kb)
+        kb_periodos = InlineKeyboardMarkup([
+            [InlineKeyboardButton("📅 Hoje",            callback_data="atualizar_hoje")],
+            [InlineKeyboardButton("📅 Ontem",           callback_data="atualizar_ontem")],
+            [InlineKeyboardButton("📅 Últimos 7 dias",  callback_data="atualizar_7dias")],
+            [InlineKeyboardButton("📅 Últimos 15 dias", callback_data="atualizar_15dias")],
+            [InlineKeyboardButton("📅 Últimos 30 dias", callback_data="atualizar_30dias")],
+            [InlineKeyboardButton("📅 Mês atual",       callback_data="atualizar_mes")],
+            [InlineKeyboardButton("📅 Mês anterior",    callback_data="atualizar_mes_anterior")],
+        ])
+        await msg.reply_text(titulo, parse_mode="HTML", reply_markup=kb_periodos)
         return
 
     # ─── Atualizar: período escolhido ───────────────────────
