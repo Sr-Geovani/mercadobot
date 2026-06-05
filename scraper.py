@@ -208,12 +208,19 @@ async def exportar_cancelamentos(page, data_ini: str, data_fim: str) -> float:
         range_key = "Ultimos 90 dias"
         logger.info(f"Cancelamentos — range_key: '{range_key}'")
 
-        await new_page.wait_for_selector("#reportrange", state="visible", timeout=10000)
-        await new_page.dispatch_event("#reportrange", "click")
+        # Aguarda jQuery e daterangepicker inicializados
+        await new_page.wait_for_function(
+            "typeof $ !== 'undefined'",
+            timeout=10000
+        )
         await new_page.wait_for_timeout(1000)
-        await new_page.wait_for_selector(f"li[data-range-key='{range_key}']", state="visible", timeout=10000)
-        await new_page.click(f"li[data-range-key='{range_key}']")
+
+        # Clica via jQuery — mesmo mecanismo que o PDV Legal usa
+        await new_page.evaluate("$('#reportrange').trigger('click');")
+        await new_page.wait_for_timeout(1000)
+        await new_page.evaluate(f"$('li[data-range-key=\"{range_key}\"]').trigger('click');")
         await new_page.wait_for_timeout(500)
+        logger.info("Cancelamentos — período selecionado via jQuery")
 
         await new_page.click("#btnFiltro")
         await new_page.wait_for_timeout(3000)
