@@ -193,8 +193,9 @@ async def exportar_produtos(page, data_ini: str, data_fim: str) -> Path:
 
 
 async def exportar_cancelamentos(page, data_ini: str, data_fim: str) -> float:
-    """Baixa Excel de cancelamentos em nova aba isolada."""
-    logger.info(f"Buscando cancelamentos: {data_ini} → {data_fim}")
+    """Le total de cancelamentos diretamente do DOM via JavaScript."""
+    logger.info(f"Buscando cancelamentos: {data_ini} -> {data_fim}")
+    new_page = None
     try:
         context  = page.context
         new_page = await context.new_page()
@@ -205,76 +206,77 @@ async def exportar_cancelamentos(page, data_ini: str, data_fim: str) -> float:
         )
         await new_page.wait_for_timeout(2000)
 
-        range_key = "Ultimos 90 dias"
-        logger.info(f"Cancelamentos — range_key: '{range_key}'")
+        br    = ZoneInfo("America/Sao_Paulo")
+        agora = datetime.now(br)
+        hoje  = agora.strftime("%d/%m/%Y")
+        ontem = (agora - timedelta(days=1)).strftime("%d/%m/%Y")
+        d7    = (agora - timedelta(days=7)).strftime("%d/%m/%Y")
+        d15   = (agora - timedelta(days=15)).strftime("%d/%m/%Y")
+        d30   = (agora - timedelta(days=30)).strftime("%d/%m/%Y")
 
-        # Aguarda jQuery e daterangepicker inicializados
-        await new_page.wait_for_function(
-            "typeof $ !== 'undefined'",
-            timeout=10000
-        )
-        await new_page.wait_for_timeout(1000)
+        mapa = {
+            (hoje,  hoje):  "Hoje",
+            (ontem, ontem): "Ontem",
+            (d7,    hoje):  "Ultimos 7 dias",
+            (d15,   hoje):  "Ultimos 15 dias",
+            (d30,   hoje):  "Ultimos 30 dias",
+        }
+        range_key = mapa.get((data_ini, data_fim), "Ultimos 90 dias")
+        logger.info(f"Cancelamentos -- range_key: '{range_key}'")
 
-        # Clica via jQuery — mesmo mecanismo que o PDV Legal usa
+        await new_page.wait_for_function("typeof $ !== 'undefined'", timeout=10000)
+        await new_page.wait_for_timeout(500)
         await new_page.evaluate("$('#reportrange').trigger('click');")
         await new_page.wait_for_timeout(1000)
-        await new_page.evaluate(f"$('li[data-range-key=\"{range_key}\"]').trigger('click');")
+        await new_page.evaluate("$('li[data-range-key="" + range_key + ""]').trigger('click');")
         await new_page.wait_for_timeout(500)
-        logger.info("Cancelamentos — período selecionado via jQuery")
-
-        # Aguarda a função GetDadosProdutos estar disponível e chama
         await new_page.wait_for_function("typeof GetDadosProdutos === 'function'", timeout=10000)
         await new_page.evaluate("GetDadosProdutos();")
-        logger.info("Cancelamentos — GetDadosProdutos() chamado")
+        await new_page.wait_for_timeout(3000)
 
-        # Aguarda AJAX completar — networkidle ou timeout
-        try:
-            await new_page.wait_for_load_state("networkidle", timeout=10000)
-        except Exception:
-            pass
-        await new_page.wait_for_timeout(2000)
+        # Filtra linhas da tabela por data via JavaScript
+        ini_parts = data_ini.split("/")
+        fim_parts = data_fim.split("/")
+        ini_y, ini_m, ini_d = ini_parts[2], str(int(ini_parts[1])-1), ini_parts[0]
+        fim_y, fim_m, fim_d = fim_parts[2], str(int(fim_parts[1])-1), fim_parts[0]
 
-        await new_page.click("#imgDownload")
-        await new_page.wait_for_timeout(1000)
-
-        async with new_page.expect_download(timeout=45000) as download_info:
-            await new_page.click("#ContentPlaceHolder1_ImageButton1")
-
-        download = await download_info.value
-        destino  = DOWNLOAD_DIR / "cancelamentos.xlsx"
-        await download.save_as(destino)
-        await new_page.close()
-        logger.info(f"Cancelamentos baixado: {destino}")
-
-        import pandas as pd
-        df = pd.read_excel(destino)
-        logger.info(f"Cancelamentos — {len(df)} linhas")
-        if len(df) > 0:
-            logger.info(f"Cancelamentos — primeiras 3 linhas:\n{df[['data','nomefilial','Valor cancelamento']].head(3).to_string()}")
-
-        if "data" in df.columns and len(df) > 0:
-            df["data_dt"] = pd.to_datetime(
-                df["data"].astype(str).str[:10],
-                format="%d/%m/%Y",
-                errors="coerce"
-            )
-            ini_dt = pd.to_datetime(data_ini, format="%d/%m/%Y")
-            fim_dt = pd.to_datetime(data_fim, format="%d/%m/%Y")
-            df = df[(df["data_dt"] >= ini_dt) & (df["data_dt"] <= fim_dt)]
-            logger.info(f"Cancelamentos — {len(df)} linhas no periodo {data_ini} a {data_fim}")
-
-        col   = "Valor cancelamento"
-        total = float(pd.to_numeric(df[col], errors="coerce").sum()) if col in df.columns else 0.0
+        js = (
+            "(function() {"
+            "  var iniDt = new Date(" + ini_y + "," + ini_m + "," + ini_d + ");"
+            "  var fimDt = new Date(" + fim_y + "," + fim_m + "," + fim_d + ",23,59,59);"
+            "  var rows = document.querySelectorAll('#gdvPaged tbody tr');"
+            "  var total = 0;"
+            "  rows.forEach(function(row) {"
+            "    var cells = row.querySelectorAll('td');"
+            "    if (cells.length < 6) return;"
+            "    var ds = cells[0].textContent.trim().substring(0,10);"
+            "    var p = ds.split('/');"
+            "    if (p.length < 3) return;"
+            "    var dt = new Date(parseInt(p[2]), parseInt(p[1])-1, parseInt(p[0]));"
+            "    if (dt >= iniDt && dt <= fimDt) {"
+            "      var v = parseFloat(cells[5].textContent.trim().replace(/\./g,'').replace(',','.'));"
+            "      if (!isNaN(v)) total += v;"
+            "    }"
+            "  });"
+            "  return total.toFixed(2);"
+            "})()"
+        )
+        total_str = await new_page.evaluate(js)
+        total = float(total_str) if total_str else 0.0
         logger.info(f"Total cancelado: R$ {total:.2f}")
+        await new_page.close()
         return total
 
     except Exception as e:
         logger.error(f"Erro ao buscar cancelamentos: {e}")
+        if new_page:
+            try:
+                await new_page.close()
+            except Exception:
+                pass
         return 0.0
 
 
-async def _baixar_async(data_ini: str, data_fim: str,
-                        email: str = None, senha: str = None) -> tuple:
     from playwright.async_api import async_playwright
 
     _email = email or PDV_EMAIL
