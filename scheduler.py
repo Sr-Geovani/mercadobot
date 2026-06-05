@@ -245,7 +245,7 @@ async def enviar_fechamento_semanal():
             continue
         try:
             from scraper import baixar_relatorios_periodo
-            path_vendas, path_produtos = await asyncio.get_event_loop().run_in_executor(
+            path_vendas, path_produtos, _ = await asyncio.get_event_loop().run_in_executor(
                 None, baixar_relatorios_periodo, inicio_semana, fim_semana, pdv_email, pdv_senha
             )
             vendas   = pd.read_excel(path_vendas)
@@ -314,7 +314,7 @@ async def enviar_alertas_proativos():
         try:
             from scraper import baixar_relatorios_periodo
             hoje = agora.strftime("%d/%m/%Y")
-            path_vendas, _ = await asyncio.get_event_loop().run_in_executor(
+            path_vendas, _, _ = await asyncio.get_event_loop().run_in_executor(
                 None, baixar_relatorios_periodo, hoje, hoje, pdv_email, pdv_senha
             )
 

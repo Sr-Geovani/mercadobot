@@ -1841,7 +1841,7 @@ async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 from scraper import baixar_relatorios_periodo
                 import asyncio as _asyncio
                 loop = _asyncio.get_event_loop()
-                _, path_produtos = await loop.run_in_executor(
+                _, path_produtos, _ = await loop.run_in_executor(
                     None, baixar_relatorios_periodo, ini, fim, pdv_email, pdv_senha
                 )
                 produtos = pd.read_excel(path_produtos)
