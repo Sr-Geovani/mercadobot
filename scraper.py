@@ -206,44 +206,44 @@ async def exportar_cancelamentos(page, data_ini: str, data_fim: str) -> float:
         )
         await new_page.wait_for_timeout(2000)
 
-        br    = ZoneInfo("America/Sao_Paulo")
-        agora = datetime.now(br)
-        hoje  = agora.strftime("%d/%m/%Y")
-        ontem = (agora - timedelta(days=1)).strftime("%d/%m/%Y")
-        d7    = (agora - timedelta(days=7)).strftime("%d/%m/%Y")
-        d15   = (agora - timedelta(days=15)).strftime("%d/%m/%Y")
-        d30   = (agora - timedelta(days=30)).strftime("%d/%m/%Y")
-
-        mapa = {
-            (hoje,  hoje):  "Hoje",
-            (ontem, ontem): "Ontem",
-            (d7,    hoje):  "Ultimos 7 dias",
-            (d15,   hoje):  "Ultimos 15 dias",
-            (d30,   hoje):  "Ultimos 30 dias",
-        }
-        range_key = mapa.get((data_ini, data_fim), "Ultimos 90 dias")
-        logger.info(f"Cancelamentos -- range_key: '{range_key}'")
-
         await new_page.wait_for_function("typeof $ !== 'undefined'", timeout=10000)
         await new_page.wait_for_timeout(500)
-        await new_page.evaluate("$('#reportrange').trigger('click');")
-        await new_page.wait_for_timeout(1000)
-        await new_page.evaluate(f"$('li[data-range-key=\"{range_key}\"]').trigger('click');")
+
+        # Injeta as datas diretamente no daterangepicker via JavaScript
+        # data_ini e data_fim estão em dd/mm/yyyy — converte para moment
+        ini_d, ini_m, ini_y = data_ini.split("/")
+        fim_d, fim_m, fim_y = data_fim.split("/")
+
+        await new_page.evaluate(f"""
+            (function() {{
+                var ini = moment('{ini_y}-{ini_m}-{ini_d}', 'YYYY-MM-DD');
+                var fim = moment('{fim_y}-{fim_m}-{fim_d}', 'YYYY-MM-DD');
+                var dr = $('#reportrange').data('daterangepicker');
+                if (dr) {{
+                    dr.setStartDate(ini);
+                    dr.setEndDate(fim);
+                    $('#reportrange span').html(
+                        ini.format('DD/MM/YYYY') + ' - ' + fim.format('DD/MM/YYYY')
+                    );
+                }}
+            }})();
+        """)
         await new_page.wait_for_timeout(500)
+        logger.info(f"Cancelamentos -- datas injetadas: {data_ini} a {data_fim}")
+
+        # Chama o filtro
         await new_page.wait_for_function("typeof GetDadosProdutos === 'function'", timeout=10000)
         await new_page.evaluate("GetDadosProdutos();")
         await new_page.wait_for_timeout(4000)
 
-        # Lê o total diretamente do elemento que mostra "Total cancelado"
+        # Lê o total do elemento DOM
         total_str = await new_page.evaluate(
             "document.getElementById('ContentPlaceHolder1_LiteralFaturado') ? "
             "document.getElementById('ContentPlaceHolder1_LiteralFaturado').textContent.trim() : '0'"
         )
         logger.info(f"Cancelamentos — LiteralFaturado: '{total_str}'")
 
-        # Filtra as linhas da tabela por data via JS separado e simples
-        ini_d, ini_m, ini_y = data_ini.split("/")
-        fim_d, fim_m, fim_y = data_fim.split("/")
+        # Filtra as linhas da tabela por data via JS
         js_filtro = (
             "(function(){"
             f"var i=new Date({ini_y},{int(ini_m)-1},{ini_d});"
