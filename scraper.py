@@ -222,6 +222,7 @@ async def exportar_cancelamentos(page, data_ini: str, data_fim: str) -> float:
             (d30,   hoje):  "Ultimos 30 dias",
         }
         range_key = mapa.get((data_ini, data_fim))
+        logger.info(f"Cancelamentos — range_key: '{range_key or 'Intervalo'}'")
 
         await page.click("#reportrange")
         await page.wait_for_timeout(500)
@@ -230,6 +231,7 @@ async def exportar_cancelamentos(page, data_ini: str, data_fim: str) -> float:
             await page.click(f"li[data-range-key='{range_key}']")
             await page.wait_for_timeout(500)
         else:
+            # Usa Intervalo com JavaScript — mesmo método que funciona em produtos
             await page.click("li[data-range-key='Intervalo']")
             await page.wait_for_timeout(800)
 
@@ -237,11 +239,14 @@ async def exportar_cancelamentos(page, data_ini: str, data_fim: str) -> float:
                 dd, mm, yyyy = d.split("/")
                 return f"{mm}/{dd}/{yyyy}"
 
+            ini_us = br_to_us(data_ini)
+            fim_us = br_to_us(data_fim)
+
             await page.evaluate(f"""
                 var inputs = document.querySelectorAll('.daterangepicker input[type="text"]');
                 if (inputs.length >= 2) {{
-                    inputs[0].value = '{br_to_us(data_ini)}';
-                    inputs[1].value = '{br_to_us(data_fim)}';
+                    inputs[0].value = '{ini_us}';
+                    inputs[1].value = '{fim_us}';
                     inputs[0].dispatchEvent(new Event('change'));
                     inputs[1].dispatchEvent(new Event('change'));
                 }}
@@ -249,6 +254,7 @@ async def exportar_cancelamentos(page, data_ini: str, data_fim: str) -> float:
             await page.wait_for_timeout(500)
             await page.evaluate("var btn = document.querySelector('.daterangepicker .applyBtn'); if(btn) btn.click();")
             await page.wait_for_timeout(800)
+            logger.info(f"Cancelamentos — intervalo aplicado: {ini_us} → {fim_us}")
 
         await page.click("#btnFiltro")
         await page.wait_for_timeout(2000)
