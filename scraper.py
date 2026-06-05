@@ -194,8 +194,8 @@ async def exportar_produtos(page, data_ini: str, data_fim: str) -> Path:
 
 async def exportar_cancelamentos(page, data_ini: str, data_fim: str) -> float:
     """
-    Baixa Excel de cancelamentos e filtra por data em Python.
-    Usa período padrão da tela e filtra localmente.
+    Baixa Excel de Vendas com Cancelamentos.
+    Usa mesma lógica do exportar_produtos — código idêntico, URL diferente.
     """
     logger.info(f"Buscando cancelamentos: {data_ini} → {data_fim}")
     try:
@@ -205,18 +205,16 @@ async def exportar_cancelamentos(page, data_ini: str, data_fim: str) -> float:
         )
         await page.wait_for_timeout(1500)
 
-        from zoneinfo import ZoneInfo
-        brasilia = ZoneInfo("America/Sao_Paulo")
-        agora    = datetime.now(brasilia)
-        hoje     = agora.strftime("%d/%m/%Y")
-        ontem    = (agora - timedelta(days=1)).strftime("%d/%m/%Y")
-        d7       = (agora - timedelta(days=7)).strftime("%d/%m/%Y")
-        d15      = (agora - timedelta(days=15)).strftime("%d/%m/%Y")
-        d30      = (agora - timedelta(days=30)).strftime("%d/%m/%Y")
-        d60      = (agora - timedelta(days=60)).strftime("%d/%m/%Y")
-        d90      = (agora - timedelta(days=90)).strftime("%d/%m/%Y")
+        br    = ZoneInfo("America/Sao_Paulo")
+        agora = datetime.now(br)
+        hoje  = agora.strftime("%d/%m/%Y")
+        ontem = (agora - timedelta(days=1)).strftime("%d/%m/%Y")
+        d7    = (agora - timedelta(days=7)).strftime("%d/%m/%Y")
+        d15   = (agora - timedelta(days=15)).strftime("%d/%m/%Y")
+        d30   = (agora - timedelta(days=30)).strftime("%d/%m/%Y")
+        d60   = (agora - timedelta(days=60)).strftime("%d/%m/%Y")
+        d90   = (agora - timedelta(days=90)).strftime("%d/%m/%Y")
 
-        # Escolhe o período mais amplo que cobre o intervalo pedido
         mapa = {
             (hoje,  hoje):  "Hoje",
             (ontem, ontem): "Ontem",
@@ -226,62 +224,38 @@ async def exportar_cancelamentos(page, data_ini: str, data_fim: str) -> float:
             (d60,   hoje):  "Ultimos 60 dias",
             (d90,   hoje):  "Ultimos 90 dias",
         }
-        range_key = mapa.get((data_ini, data_fim))
 
-        # Se não bater exatamente, usa o período mais amplo possível
-        if not range_key:
-            try:
-                from datetime import datetime as _dt
-                ini_dt  = _dt.strptime(data_ini, "%d/%m/%Y")
-                fim_dt  = _dt.strptime(data_fim, "%d/%m/%Y")
-                delta   = (fim_dt - ini_dt).days + 1
-                agora_dt = _dt.now()
-                dias_atras = (agora_dt - ini_dt).days
-                if dias_atras <= 7:    range_key = "Ultimos 7 dias"
-                elif dias_atras <= 15: range_key = "Ultimos 15 dias"
-                elif dias_atras <= 30: range_key = "Ultimos 30 dias"
-                elif dias_atras <= 60: range_key = "Ultimos 60 dias"
-                else:                  range_key = "Ultimos 90 dias"
-            except Exception:
-                range_key = "Ultimos 30 dias"
+        # Para cancelamentos sempre usa 90 dias e filtra em Python
+        range_key = "Ultimos 90 dias"
+        logger.info(f"Cancelamentos — range_key: '{range_key}'")
 
-        # Seleciona Ultimos 90 dias via JavaScript com sintaxe correta
-        await page.wait_for_selector("#reportrange", timeout=10000)
-        await page.evaluate("(() => { document.getElementById('reportrange').click(); })()")
-        await page.wait_for_timeout(1500)
-        await page.evaluate("(() => { var li = document.querySelector(\"li[data-range-key='Ultimos 90 dias']\"); if(li) li.click(); })()")
+        # Idêntico ao exportar_produtos
+        await page.click("#reportrange")
         await page.wait_for_timeout(500)
-        logger.info("Cancelamentos — selecionado Ultimos 90 dias")
+        await page.click(f"li[data-range-key='{range_key}']")
+        await page.wait_for_timeout(500)
 
-        # Clica em Filtrar e aguarda a página processar
         await page.click("#btnFiltro")
-        await page.wait_for_load_state("networkidle", timeout=10000)
-        await page.wait_for_timeout(1000)
-        logger.info("Cancelamentos — filtro aplicado")
-
-        # Limpa arquivo anterior para garantir que baixa o novo
-        import shutil
-        cancel_path = DOWNLOAD_DIR / "cancelamentos.xlsx"
-        if cancel_path.exists():
-            cancel_path.unlink()
+        await page.wait_for_timeout(3000)
 
         await page.click("#imgDownload")
         await page.wait_for_timeout(1000)
 
-        async with page.expect_download(timeout=30000) as dl_info:
+        async with page.expect_download(timeout=45000) as download_info:
             await page.click("#ContentPlaceHolder1_ImageButton1")
 
-        download = await dl_info.value
+        download = await download_info.value
         destino  = DOWNLOAD_DIR / "cancelamentos.xlsx"
         await download.save_as(destino)
+        logger.info(f"Cancelamentos baixado: {destino}")
 
         import pandas as pd
         df = pd.read_excel(destino)
-        logger.info(f"Cancelamentos Excel — linhas: {len(df)}, colunas: {list(df.columns)}")
+        logger.info(f"Cancelamentos — linhas: {len(df)}")
         if len(df) > 0:
-            logger.info(f"Cancelamentos — primeiras 3 linhas:\n{df.head(3).to_string()}")
+            logger.info(f"Primeiras linhas:\n{df.head(3).to_string()}")
 
-        # Filtra por data — coluna 'data' tem formato 'dd/mm/yyyy HH:MM:SS'
+        # Filtra por data em Python
         if "data" in df.columns and len(df) > 0:
             df["data_dt"] = pd.to_datetime(
                 df["data"].astype(str).str[:10],
