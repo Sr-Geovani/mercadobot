@@ -192,6 +192,93 @@ async def exportar_produtos(page, data_ini: str, data_fim: str) -> Path:
     return destino
 
 
+async def exportar_cancelamentos(page, data_ini: str, data_fim: str) -> float:
+    """
+    Busca o total de cancelamentos direto da tela de Vendas Canceladas.
+    URL: dashboard_vendas.aspx?tp=2
+    Retorna o valor total cancelado como float.
+    """
+    logger.info(f"Buscando cancelamentos: {data_ini} → {data_fim}")
+    try:
+        await page.goto(
+            "https://pdvlegal.com.br/dashboard_vendas.aspx?tp=2",
+            wait_until="networkidle"
+        )
+        await page.wait_for_timeout(1500)
+
+        # Seleciona o período via date range picker
+        from zoneinfo import ZoneInfo
+        brasilia  = ZoneInfo("America/Sao_Paulo")
+        agora     = datetime.now(brasilia)
+        hoje      = agora.strftime("%d/%m/%Y")
+        ontem     = (agora - timedelta(days=1)).strftime("%d/%m/%Y")
+        d7        = (agora - timedelta(days=7)).strftime("%d/%m/%Y")
+        d15       = (agora - timedelta(days=15)).strftime("%d/%m/%Y")
+        d30       = (agora - timedelta(days=30)).strftime("%d/%m/%Y")
+
+        mapa = {
+            (hoje,  hoje):  "Hoje",
+            (ontem, ontem): "Ontem",
+            (d7,    hoje):  "Ultimos 7 dias",
+            (d15,   hoje):  "Ultimos 15 dias",
+            (d30,   hoje):  "Ultimos 30 dias",
+        }
+        range_key = mapa.get((data_ini, data_fim))
+
+        await page.click("#reportrange")
+        await page.wait_for_timeout(500)
+
+        if range_key:
+            await page.click(f"li[data-range-key='{range_key}']")
+            await page.wait_for_timeout(500)
+        else:
+            await page.click("li[data-range-key='Intervalo']")
+            await page.wait_for_timeout(800)
+
+            def br_to_us(d):
+                dd, mm, yyyy = d.split("/")
+                return f"{mm}/{dd}/{yyyy}"
+
+            await page.evaluate(f"""
+                var inputs = document.querySelectorAll('.daterangepicker input[type="text"]');
+                if (inputs.length >= 2) {{
+                    inputs[0].value = '{br_to_us(data_ini)}';
+                    inputs[1].value = '{br_to_us(data_fim)}';
+                    inputs[0].dispatchEvent(new Event('change'));
+                    inputs[1].dispatchEvent(new Event('change'));
+                }}
+            """)
+            await page.wait_for_timeout(500)
+            await page.evaluate("var btn = document.querySelector('.daterangepicker .applyBtn'); if(btn) btn.click();")
+            await page.wait_for_timeout(800)
+
+        # Clica em Filtrar
+        await page.click("#btnFiltrar")
+        await page.wait_for_timeout(2000)
+
+        # Lê o total cancelado — campo "Total cancelado" no rodapé
+        total_text = await page.evaluate("""
+            var cards = document.querySelectorAll('.info-box-number');
+            for (var c of cards) {
+                var label = c.closest('.info-box') ? c.closest('.info-box').querySelector('.info-box-text') : null;
+                if (label && label.textContent.toLowerCase().includes('cancelado')) {
+                    return c.textContent.trim();
+                }
+            }
+            return '0';
+        """)
+
+        # Converte string para float
+        total_str = total_text.replace(".", "").replace(",", ".").strip()
+        total = float(total_str) if total_str else 0.0
+        logger.info(f"Total cancelado (tela cancelamentos): R$ {total:.2f}")
+        return total
+
+    except Exception as e:
+        logger.error(f"Erro ao buscar cancelamentos: {e}")
+        return 0.0
+
+
 async def _baixar_async(data_ini: str, data_fim: str,
                         email: str = None, senha: str = None) -> tuple:
     from playwright.async_api import async_playwright
@@ -207,7 +294,8 @@ async def _baixar_async(data_ini: str, data_fim: str,
             await fazer_login(page, _email, _senha)
             path_vendas   = await exportar_vendas(page, data_ini, data_fim)
             path_produtos = await exportar_produtos(page, data_ini, data_fim)
-            return path_vendas, path_produtos
+            total_cancel  = await exportar_cancelamentos(page, data_ini, data_fim)
+            return path_vendas, path_produtos, total_cancel
         finally:
             await browser.close()
 
@@ -220,7 +308,7 @@ def baixar_relatorios(email: str = None, senha: str = None) -> tuple:
 
 def baixar_relatorios_periodo(data_ini: str, data_fim: str,
                                email: str = None, senha: str = None) -> tuple:
-    """Baixa os dois relatórios para o período com as credenciais informadas."""
+    """Baixa os relatórios e cancelamentos para o período. Retorna (path_vendas, path_produtos, total_cancel)."""
     logger.info(f"Período: {data_ini} → {data_fim}")
     return asyncio.run(_baixar_async(data_ini, data_fim, email, senha))
 

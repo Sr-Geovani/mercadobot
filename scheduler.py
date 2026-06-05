@@ -47,7 +47,7 @@ async def briefing_usuario(bot: Bot, usuario: dict):
         # Importa o scraper e processa com as credenciais do usuário
         from scraper import baixar_relatorios
         loop = asyncio.get_event_loop()
-        path_vendas, path_produtos = await loop.run_in_executor(
+        path_vendas, path_produtos, total_cancel = await loop.run_in_executor(
             None, baixar_relatorios, pdv_email, pdv_senha
         )
 
@@ -75,7 +75,7 @@ async def briefing_usuario(bot: Bot, usuario: dict):
             return
 
         # Envia blocos separados
-        await bot.send_message(chat_id=chat_id, text=bloco_faturamento(vendas, produtos), parse_mode="HTML")
+        await bot.send_message(chat_id=chat_id, text=bloco_faturamento(vendas, produtos, total_cancel), parse_mode="HTML")
         await bot.send_photo(chat_id=chat_id, photo=g_faturamento(vendas))
 
         await bot.send_message(chat_id=chat_id, text=bloco_categorias(produtos), parse_mode="HTML")

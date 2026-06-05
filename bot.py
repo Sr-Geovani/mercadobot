@@ -431,26 +431,31 @@ def bloco_score(vendas: pd.DataFrame) -> str:
     return "\n".join(linhas)
 
 
-def bloco_faturamento(vendas: pd.DataFrame, produtos: pd.DataFrame = None) -> str:
+def bloco_faturamento(vendas: pd.DataFrame, produtos: pd.DataFrame = None, total_cancel: float = 0.0) -> str:
     total  = vendas["valor"].sum()
     ticket = vendas["valor"].mean()
     n      = len(vendas)
 
-    # Cancelamentos: sempre ValorItensCancelados (válido para FA e CP)
-    if "ValorItensCancelados" in vendas.columns:
-        mask_cancel = vendas["ValorItensCancelados"] > 0
-        cancel      = vendas.loc[mask_cancel, "ValorItensCancelados"].sum()
+    # Usa total_cancel da tela de Vendas Canceladas (fonte mais precisa)
+    # Fallback para ValorItensCancelados se não disponível
+    if total_cancel > 0:
+        cancel = total_cancel
+    elif "ValorItensCancelados" in vendas.columns:
+        cancel = vendas.loc[vendas["ValorItensCancelados"] > 0, "ValorItensCancelados"].sum()
     else:
-        mask_cancel = pd.Series(False, index=vendas.index)
-        cancel      = 0
+        cancel = 0
 
     pct_cancel = (cancel / (total + cancel) * 100) if (total + cancel) else 0
 
-    # Cancelamentos por filial
+    # Cancelamentos por filial — proporcional ao ValorItensCancelados de cada filial
     def cancel_filial(filial):
-        if "ValorItensCancelados" not in vendas.columns:
+        if "ValorItensCancelados" not in vendas.columns or cancel == 0:
             return 0
-        return vendas.loc[(vendas["nomeFilial"]==filial) & mask_cancel, "ValorItensCancelados"].sum()
+        vic_total  = vendas.loc[vendas["ValorItensCancelados"] > 0, "ValorItensCancelados"].sum()
+        vic_filial = vendas.loc[(vendas["nomeFilial"]==filial) & (vendas["ValorItensCancelados"]>0), "ValorItensCancelados"].sum()
+        if vic_total == 0:
+            return 0
+        return round(cancel * (vic_filial / vic_total), 2)
 
     filiais = vendas.groupby("nomeFilial").agg(
         fat=("valor","sum"), qtd=("valor","count"), tk=("valor","mean"),
@@ -934,8 +939,10 @@ async def fluxo_briefing(msg, chat_id: int):
     produtos = d.get("produtos")
     ctx = resumo_dados(chat_id)
 
+    total_cancel = d.get("total_cancel", 0.0)
+
     # Bloco 1 — Faturamento
-    await enviar(msg, bloco_faturamento(vendas, produtos))
+    await enviar(msg, bloco_faturamento(vendas, produtos, total_cancel))
     if vendas is not None:
         await msg.reply_photo(photo=g_faturamento(vendas))
 
@@ -1216,7 +1223,7 @@ async def executar_atualizacao(msg, chat_id: int, data_ini: str, data_fim: str, 
             f"⏳ Exportando Resumo de Vendas..."
         )
 
-        path_vendas, path_produtos = await loop.run_in_executor(
+        path_vendas, path_produtos, total_cancel = await loop.run_in_executor(
             None, baixar_relatorios_periodo, data_ini, data_fim, pdv_email, pdv_senha
         )
 
@@ -1259,6 +1266,7 @@ async def executar_atualizacao(msg, chat_id: int, data_ini: str, data_fim: str, 
         dados_usuario[chat_id]["vendas"]        = vendas
         dados_usuario[chat_id]["produtos"]      = produtos
         dados_usuario[chat_id]["periodo_label"] = label
+        dados_usuario[chat_id]["total_cancel"]  = total_cancel
 
         await atualizar_status(
             f"🔄 Buscando dados — {b(label)}\n\n"
