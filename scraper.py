@@ -192,10 +192,15 @@ async def exportar_produtos(page, data_ini: str, data_fim: str) -> Path:
     return destino
 
 
-async def exportar_cancelamentos(page, data_ini: str, data_fim: str) -> float:
-    """Le total de cancelamentos diretamente do DOM via JavaScript."""
+async def exportar_cancelamentos(page, data_ini: str, data_fim: str) -> dict:
+    """
+    Retorna dict com cancelamentos por filial + total.
+    Ex: {"CONDOMINIO FRANCA": 123.45, "CALIFÓRNIA": 67.89, "_total": 191.34}
+    Seleciona cada filial individualmente e lê o LiteralFaturado.
+    """
     logger.info(f"Buscando cancelamentos: {data_ini} -> {data_fim}")
     new_page = None
+    resultado = {}
     try:
         context  = page.context
         new_page = await context.new_page()
@@ -205,15 +210,12 @@ async def exportar_cancelamentos(page, data_ini: str, data_fim: str) -> float:
             wait_until="networkidle"
         )
         await new_page.wait_for_timeout(2000)
-
         await new_page.wait_for_function("typeof $ !== 'undefined'", timeout=10000)
         await new_page.wait_for_timeout(500)
 
-        # Injeta as datas diretamente no daterangepicker via JavaScript
-        # data_ini e data_fim estão em dd/mm/yyyy — converte para moment
+        # Injeta datas no daterangepicker
         ini_d, ini_m, ini_y = data_ini.split("/")
         fim_d, fim_m, fim_y = data_fim.split("/")
-
         await new_page.evaluate(f"""
             (function() {{
                 var ini = moment('{ini_y}-{ini_m}-{ini_d}', 'YYYY-MM-DD');
@@ -222,59 +224,53 @@ async def exportar_cancelamentos(page, data_ini: str, data_fim: str) -> float:
                 if (dr) {{
                     dr.setStartDate(ini);
                     dr.setEndDate(fim);
-                    $('#reportrange span').html(
-                        ini.format('DD/MM/YYYY') + ' - ' + fim.format('DD/MM/YYYY')
-                    );
+                    $('#reportrange span').html(ini.format('DD/MM/YYYY') + ' - ' + fim.format('DD/MM/YYYY'));
                 }}
             }})();
         """)
-        await new_page.wait_for_timeout(500)
-        logger.info(f"Cancelamentos -- datas injetadas: {data_ini} a {data_fim}")
+        await new_page.wait_for_timeout(300)
 
-        # Chama o filtro
+        # Descobre as filiais disponíveis no select
+        filiais_options = await new_page.evaluate("""
+            Array.from(document.querySelectorAll('#ContentPlaceHolder1_ddlfilial option'))
+                .map(o => ({value: o.value, text: o.text.trim()}))
+        """)
+        logger.info(f"Cancelamentos — filiais encontradas: {filiais_options}")
+
         await new_page.wait_for_function("typeof GetDadosProdutos === 'function'", timeout=10000)
-        await new_page.evaluate("GetDadosProdutos();")
-        await new_page.wait_for_timeout(4000)
 
-        # Lê o total do elemento DOM
-        total_str = await new_page.evaluate(
-            "document.getElementById('ContentPlaceHolder1_LiteralFaturado') ? "
-            "document.getElementById('ContentPlaceHolder1_LiteralFaturado').textContent.trim() : '0'"
-        )
-        logger.info(f"Cancelamentos — LiteralFaturado: '{total_str}'")
+        for opt in filiais_options:
+            filial_val  = opt["value"]
+            filial_nome = opt["text"]
 
-        # Filtra as linhas da tabela por data via JS
-        js_filtro = (
-            "(function(){"
-            f"var i=new Date({ini_y},{int(ini_m)-1},{ini_d});"
-            f"var f=new Date({fim_y},{int(fim_m)-1},{fim_d},23,59,59);"
-            "var r=document.querySelectorAll('#gdvPaged tbody tr');"
-            "var t=0;"
-            "r.forEach(function(row){"
-            "var c=row.querySelectorAll('td');"
-            "if(c.length<6)return;"
-            "var ds=c[0].textContent.trim().substring(0,10);"
-            "var p=ds.split('/');"
-            "if(p.length<3)return;"
-            "var dt=new Date(parseInt(p[2]),parseInt(p[1])-1,parseInt(p[0]));"
-            "if(dt>=i&&dt<=f){"
-            "var v=parseFloat(c[5].textContent.trim().replace(/[.]/g,'').replace(',','.'));"
-            "if(!isNaN(v))t+=v;"
-            "}"
-            "});"
-            "return t.toFixed(2);"
-            "})()"
-        )
-        # Usa apenas o LiteralFaturado — fonte confiável da página
-        total = 0.0
-        if total_str and total_str not in ("0", "0,00", ""):
+            # Seleciona apenas essa filial via selectpicker
+            await new_page.evaluate(f"""
+                $('#ContentPlaceHolder1_ddlfilial').val(['{filial_val}']);
+                $('#ContentPlaceHolder1_ddlfilial').selectpicker('refresh');
+            """)
+            await new_page.wait_for_timeout(300)
+
+            # Filtra
+            await new_page.evaluate("GetDadosProdutos();")
+            await new_page.wait_for_timeout(3000)
+
+            # Lê total cancelado
+            val_str = await new_page.evaluate(
+                "document.getElementById('ContentPlaceHolder1_LiteralFaturado') ? "
+                "document.getElementById('ContentPlaceHolder1_LiteralFaturado').textContent.trim() : '0'"
+            )
             try:
-                total = float(total_str.replace(".", "").replace(",", "."))
+                val = float(val_str.replace(".", "").replace(",", ".")) if val_str and val_str not in ("0", "0,00") else 0.0
             except ValueError:
-                total = 0.0
-        logger.info(f"Total cancelado: R$ {total:.2f}")
+                val = 0.0
+
+            resultado[filial_nome] = val
+            logger.info(f"Cancelamentos — {filial_nome}: R$ {val:.2f}")
+
+        resultado["_total"] = sum(v for k, v in resultado.items() if not k.startswith("_"))
+        logger.info(f"Cancelamentos — total: R$ {resultado['_total']:.2f}")
         await new_page.close()
-        return total
+        return resultado
 
     except Exception as e:
         logger.error(f"Erro ao buscar cancelamentos: {e}")
@@ -283,7 +279,7 @@ async def exportar_cancelamentos(page, data_ini: str, data_fim: str) -> float:
                 await new_page.close()
             except Exception:
                 pass
-        return 0.0
+        return {"_total": 0.0}
 
 
 async def _baixar_async(data_ini: str, data_fim: str,

@@ -431,27 +431,34 @@ def bloco_score(vendas: pd.DataFrame) -> str:
     return "\n".join(linhas)
 
 
-def bloco_faturamento(vendas: pd.DataFrame, produtos: pd.DataFrame = None, total_cancel: float = 0.0) -> str:
-    # Usa coluna "faturado" se disponível — é o valor efetivamente recebido no caixa
-    # O PDV Legal define: FA=Faturado, CP=Cancelamento Parcial, CT=Cancelamento Total
-    col_fat = "faturado" if "faturado" in vendas.columns else "valor"
+def bloco_faturamento(vendas: pd.DataFrame, produtos: pd.DataFrame = None, total_cancel = 0.0) -> str:
+    # total_cancel pode ser float (legado) ou dict {filial: valor, "_total": valor}
+    if isinstance(total_cancel, dict):
+        cancel_dict  = total_cancel
+        cancel       = cancel_dict.get("_total", 0.0)
+    else:
+        cancel_dict  = {}
+        cancel       = float(total_cancel) if total_cancel else 0.0
 
+    col_fat = "faturado" if "faturado" in vendas.columns else "valor"
     total  = vendas[col_fat].sum()
     ticket = vendas.loc[vendas[col_fat] > 0, col_fat].mean() if (vendas[col_fat] > 0).any() else 0
-    n      = len(vendas)
-    n_fat  = (vendas[col_fat] > 0).sum()  # apenas transações com valor positivo
+    n_fat  = (vendas[col_fat] > 0).sum()
 
-    # Cancelamentos: usa total_cancel da tela dedicada se disponível
-    # Caso contrário omite — melhor não mostrar que mostrar errado
-    cancel     = total_cancel if total_cancel > 0 else 0
     pct_cancel = (cancel / (total + cancel) * 100) if (total + cancel) else 0
 
-    # Cancelamentos por filial — proporcional ao ValorItensCancelados de cada filial
-    def cancel_filial(filial):
+    def cancel_filial(filial_nome):
+        # Primeiro tenta match direto pelo nome da filial no dict
+        for k, v in cancel_dict.items():
+            if k.startswith("_"):
+                continue
+            if filial_nome.upper() in k.upper() or k.upper() in filial_nome.upper():
+                return v
+        # Fallback proporcional pelo ValorItensCancelados
         if "ValorItensCancelados" not in vendas.columns or cancel == 0:
             return 0
         vic_total  = vendas.loc[vendas["ValorItensCancelados"] > 0, "ValorItensCancelados"].sum()
-        vic_filial = vendas.loc[(vendas["nomeFilial"]==filial) & (vendas["ValorItensCancelados"]>0), "ValorItensCancelados"].sum()
+        vic_filial = vendas.loc[(vendas["nomeFilial"]==filial_nome) & (vendas["ValorItensCancelados"]>0), "ValorItensCancelados"].sum()
         if vic_total == 0:
             return 0
         return round(cancel * (vic_filial / vic_total), 2)
@@ -478,7 +485,7 @@ def bloco_faturamento(vendas: pd.DataFrame, produtos: pd.DataFrame = None, total
     if cancel > 0:
         linhas.append(f"⚠️ Cancelamentos: {c(f'R$ {cancel:,.2f}')} {i(f'({pct_cancel:.1f}% do faturamento)')}\n")
     else:
-        linhas.append("")  # Sem exibição — dado não disponível ainda
+        linhas.append("")
 
     for filial, row in filiais.iterrows():
         nome     = filial.strip().title()
