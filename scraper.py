@@ -253,11 +253,11 @@ async def exportar_cancelamentos(page, data_ini: str, data_fim: str) -> float:
         await page.wait_for_timeout(500)
         logger.info("Cancelamentos — selecionado Ultimos 90 dias")
 
-        # Clica em Filtrar e aguarda a página recarregar os dados
-        async with page.expect_response(lambda r: "dashboard_vendas" in r.url, timeout=15000) as resp:
-            await page.click("#btnFiltro")
-        await page.wait_for_timeout(2000)
-        logger.info("Cancelamentos — filtro aplicado, aguardando dados")
+        # Clica em Filtrar e aguarda a página processar
+        await page.click("#btnFiltro")
+        await page.wait_for_load_state("networkidle", timeout=10000)
+        await page.wait_for_timeout(1000)
+        logger.info("Cancelamentos — filtro aplicado")
 
         await page.click("#imgDownload")
         await page.wait_for_timeout(1000)
