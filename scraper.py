@@ -194,7 +194,7 @@ async def exportar_produtos(page, data_ini: str, data_fim: str) -> Path:
 
 async def exportar_cancelamentos(page, data_ini: str, data_fim: str) -> float:
     """
-    Busca o total de cancelamentos direto da tela de Vendas Canceladas.
+    Baixa o Excel de Vendas com Cancelamentos e soma 'Valor cancelamento'.
     URL: dashboard_vendas.aspx?tp=2
     """
     logger.info(f"Buscando cancelamentos: {data_ini} → {data_fim}")
@@ -250,26 +250,25 @@ async def exportar_cancelamentos(page, data_ini: str, data_fim: str) -> float:
             await page.evaluate("var btn = document.querySelector('.daterangepicker .applyBtn'); if(btn) btn.click();")
             await page.wait_for_timeout(800)
 
-        # Clica em Filtrar — mesmo ID da tela de produtos
         await page.click("#btnFiltro")
         await page.wait_for_timeout(2000)
 
-        # Lê o total cancelado via JavaScript
-        total_text = await page.evaluate("""
-            var cards = document.querySelectorAll('.info-box-number');
-            for (var c of cards) {
-                var box = c.closest('.info-box');
-                var label = box ? box.querySelector('.info-box-text') : null;
-                if (label && label.textContent.toLowerCase().includes('cancelado')) {
-                    return c.textContent.trim();
-                }
-            }
-            return '0';
-        """)
+        # Abre modal e baixa Excel
+        await page.click("#imgDownload")
+        await page.wait_for_timeout(1000)
 
-        total_str = total_text.replace(".", "").replace(",", ".").strip()
-        total = float(total_str) if total_str else 0.0
-        logger.info(f"Total cancelado: R$ {total:.2f}")
+        async with page.expect_download(timeout=30000) as dl_info:
+            await page.click("#ContentPlaceHolder1_ImageButton1")
+
+        download = await dl_info.value
+        destino  = DOWNLOAD_DIR / "cancelamentos.xlsx"
+        await download.save_as(destino)
+
+        import pandas as pd
+        df    = pd.read_excel(destino)
+        col   = "Valor cancelamento"
+        total = float(pd.to_numeric(df[col], errors="coerce").sum()) if col in df.columns else 0.0
+        logger.info(f"Total cancelado: R$ {total:.2f} ({len(df)} linhas)")
         return total
 
     except Exception as e:
