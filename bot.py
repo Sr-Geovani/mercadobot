@@ -432,53 +432,31 @@ def bloco_score(vendas: pd.DataFrame) -> str:
 
 
 def bloco_faturamento(vendas: pd.DataFrame, produtos: pd.DataFrame = None) -> str:
-    # DEBUG temporário
-    if "StatusCupom" in vendas.columns:
-        logger.info(f"DEBUG cancel — StatusCupom únicos: {vendas['StatusCupom'].unique().tolist()}")
-        logger.info(f"DEBUG cancel — StatusCupom value_counts: {vendas['StatusCupom'].value_counts().to_dict()}")
-    if "PossuiItemCancelado" in vendas.columns:
-        logger.info(f"DEBUG cancel — PossuiItemCancelado únicos: {vendas['PossuiItemCancelado'].unique().tolist()}")
-    if "ValorItensCancelados" in vendas.columns:
-        logger.info(f"DEBUG cancel — ValorItensCancelados sum: {vendas['ValorItensCancelados'].sum():.2f}")
-        logger.info(f"DEBUG cancel — ValorItensCancelados > 0: {(vendas['ValorItensCancelados']>0).sum()} linhas, soma: {vendas.loc[vendas['ValorItensCancelados']>0,'ValorItensCancelados'].sum():.2f}")
-
     total  = vendas["valor"].sum()
     ticket = vendas["valor"].mean()
     n      = len(vendas)
 
-    # Cancelamentos tipo 1: transações inteiras estornadas
-    estornadas = pd.Series(dtype=float)
-    if "Estornado" in vendas.columns:
-        mask_est   = vendas["Estornado"] == True
-        estornadas = vendas.loc[mask_est, "valor"]
-        cancel_est = estornadas.sum()
-        n_est      = mask_est.sum()
-    else:
-        cancel_est = 0
-        n_est      = 0
+    # Cancelamentos tipo 1: transações inteiras canceladas (StatusCupom = 'CP')
+    mask_cp   = vendas["StatusCupom"] == "CP" if "StatusCupom" in vendas.columns else pd.Series(False, index=vendas.index)
+    cancel_cp = vendas.loc[mask_cp, "valor"].sum()
 
-    # Cancelamentos tipo 2: itens cancelados dentro de vendas normais
+    # Cancelamentos tipo 2: itens cancelados dentro de vendas normais (não CP)
     if "ValorItensCancelados" in vendas.columns:
-        # Exclui as transações já contadas como estornadas
-        if "Estornado" in vendas.columns:
-            mask_itens = (vendas["ValorItensCancelados"] > 0) & (vendas["Estornado"] != True)
-        else:
-            mask_itens = vendas["ValorItensCancelados"] > 0
+        mask_itens   = (vendas["ValorItensCancelados"] > 0) & (~mask_cp)
         cancel_itens = vendas.loc[mask_itens, "ValorItensCancelados"].sum()
-        n_itens      = mask_itens.sum()
     else:
         cancel_itens = 0
-        n_itens      = 0
+        mask_itens   = pd.Series(False, index=vendas.index)
 
-    cancel     = cancel_est + cancel_itens
-    n_cancel   = n_est + n_itens
-    pct_cancel = (cancel / (total + cancel) * 100) if (total + cancel) else 0
+    cancel     = cancel_cp + cancel_itens
+    # Percentual sobre faturamento bruto (faturado + cancelamentos)
+    pct_cancel = (cancel / (total + cancel_cp) * 100) if (total + cancel_cp) else 0
 
     # Cancelamentos por filial
     def cancel_filial(filial):
-        est = vendas.loc[(vendas["nomeFilial"]==filial) & (vendas.get("Estornado", pd.Series(False, index=vendas.index))==True), "valor"].sum() if "Estornado" in vendas.columns else 0
-        iti = vendas.loc[(vendas["nomeFilial"]==filial) & (vendas.get("ValorItensCancelados", pd.Series(0, index=vendas.index))>0), "ValorItensCancelados"].sum() if "ValorItensCancelados" in vendas.columns else 0
-        return est + iti
+        cp  = vendas.loc[(vendas["nomeFilial"]==filial) & mask_cp, "valor"].sum()
+        iti = vendas.loc[(vendas["nomeFilial"]==filial) & mask_itens, "ValorItensCancelados"].sum() if "ValorItensCancelados" in vendas.columns else 0
+        return cp + iti
 
     filiais = vendas.groupby("nomeFilial").agg(
         fat=("valor","sum"), qtd=("valor","count"), tk=("valor","mean"),
