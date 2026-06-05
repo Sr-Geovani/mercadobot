@@ -245,23 +245,19 @@ async def exportar_cancelamentos(page, data_ini: str, data_fim: str) -> float:
             except Exception:
                 range_key = "Ultimos 30 dias"
 
-        # Usa sempre Ultimos 30 dias — cobre qualquer período até 1 mês
-        # O filtro preciso é feito por data em Python após o download
-        range_key = "Ultimos 30 dias"
-        logger.info(f"Cancelamentos — baixando Ultimos 30 dias, filtrar por data em Python")
-
+        # Sempre baixa Ultimos 90 dias — cobre mês atual e anterior
         await page.evaluate("document.getElementById('reportrange').click();")
         await page.wait_for_timeout(800)
-        await page.evaluate(f"""
-            var li = document.querySelector("li[data-range-key='Ultimos 30 dias']");
+        await page.evaluate("""
+            var li = document.querySelector("li[data-range-key='Ultimos 90 dias']");
             if (li) li.click();
         """)
         await page.wait_for_timeout(500)
+        logger.info("Cancelamentos — baixando Ultimos 90 dias")
 
         await page.click("#btnFiltro")
         await page.wait_for_timeout(3000)
 
-        # Baixa o Excel
         await page.click("#imgDownload")
         await page.wait_for_timeout(1000)
 
@@ -272,19 +268,24 @@ async def exportar_cancelamentos(page, data_ini: str, data_fim: str) -> float:
         destino  = DOWNLOAD_DIR / "cancelamentos.xlsx"
         await download.save_as(destino)
 
-        # Filtra por data em Python — garante precisão independente do datepicker
         import pandas as pd
         df = pd.read_excel(destino)
 
+        # Filtra por data — coluna 'data' tem formato 'dd/mm/yyyy HH:MM:SS'
         if "data" in df.columns and len(df) > 0:
-            df["data_dt"] = pd.to_datetime(df["data"], dayfirst=True, errors="coerce")
-            ini_dt = pd.to_datetime(data_ini, dayfirst=True)
-            fim_dt = pd.to_datetime(data_fim, dayfirst=True)
-            df = df[(df["data_dt"] >= ini_dt) & (df["data_dt"] <= fim_dt + pd.Timedelta(days=1))]
+            df["data_dt"] = pd.to_datetime(
+                df["data"].astype(str).str[:10],
+                format="%d/%m/%Y",
+                errors="coerce"
+            )
+            ini_dt = pd.to_datetime(data_ini, format="%d/%m/%Y")
+            fim_dt = pd.to_datetime(data_fim, format="%d/%m/%Y")
+            df = df[(df["data_dt"] >= ini_dt) & (df["data_dt"] <= fim_dt)]
+            logger.info(f"Cancelamentos — {len(df)} linhas no período {data_ini} a {data_fim}")
 
         col   = "Valor cancelamento"
         total = float(pd.to_numeric(df[col], errors="coerce").sum()) if col in df.columns else 0.0
-        logger.info(f"Total cancelado: R$ {total:.2f} ({len(df)} linhas após filtro de data)")
+        logger.info(f"Total cancelado: R$ {total:.2f}")
         return total
 
     except Exception as e:
