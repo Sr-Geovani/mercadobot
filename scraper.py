@@ -277,6 +277,9 @@ async def exportar_cancelamentos(page, data_ini: str, data_fim: str) -> float:
         return 0.0
 
 
+async def _baixar_async(data_ini: str, data_fim: str,
+                        email: str = None, senha: str = None) -> tuple:
+    """Executa login + downloads + cancelamentos em sequência."""
     from playwright.async_api import async_playwright
 
     _email = email or PDV_EMAIL
