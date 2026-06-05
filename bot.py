@@ -702,6 +702,9 @@ def resumo_dados(chat_id: int) -> str:
     produtos = d.get("produtos")
     periodo  = d.get("periodo_label", "período atual")
     cancel   = d.get("total_cancel", 0.0)
+    # Normaliza: se for dict extrai _total
+    if isinstance(cancel, dict):
+        cancel = cancel.get("_total", 0.0)
     partes   = [f"Período analisado: {periodo}"]
 
     if vendas is not None:
