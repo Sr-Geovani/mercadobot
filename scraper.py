@@ -203,7 +203,10 @@ async def exportar_cancelamentos(page, data_ini: str, data_fim: str) -> float:
             "https://pdvlegal.com.br/dashboard_vendas.aspx?tp=2",
             wait_until="networkidle"
         )
-        await page.wait_for_timeout(1500)
+        await page.wait_for_timeout(2000)
+
+        # Garante que o reportrange está pronto
+        await page.wait_for_selector("#reportrange", state="visible", timeout=10000)
 
         br    = ZoneInfo("America/Sao_Paulo")
         agora = datetime.now(br)
@@ -229,9 +232,10 @@ async def exportar_cancelamentos(page, data_ini: str, data_fim: str) -> float:
         range_key = "Ultimos 90 dias"
         logger.info(f"Cancelamentos — range_key: '{range_key}'")
 
-        # Idêntico ao exportar_produtos
+        # Idêntico ao exportar_produtos mas com wait_for_selector no dropdown
         await page.click("#reportrange")
-        await page.wait_for_timeout(500)
+        await page.wait_for_timeout(1000)
+        await page.wait_for_selector(f"li[data-range-key='{range_key}']", state="visible", timeout=10000)
         await page.click(f"li[data-range-key='{range_key}']")
         await page.wait_for_timeout(500)
 
