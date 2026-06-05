@@ -291,7 +291,8 @@ async def _baixar_async(data_ini: str, data_fim: str,
             await fazer_login(page, _email, _senha)
             path_vendas   = await exportar_vendas(page, data_ini, data_fim)
             path_produtos = await exportar_produtos(page, data_ini, data_fim)
-            return path_vendas, path_produtos, 0.0
+            total_cancel  = await exportar_cancelamentos(page, data_ini, data_fim)
+            return path_vendas, path_produtos, total_cancel
         finally:
             await browser.close()
 
