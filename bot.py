@@ -432,6 +432,7 @@ def bloco_score(vendas: pd.DataFrame) -> str:
 
 
 def bloco_faturamento(vendas: pd.DataFrame, produtos: pd.DataFrame = None) -> str:
+    logger.info("bloco_faturamento v2 — cancelamentos por StatusCupom CP")
     total  = vendas["valor"].sum()
     ticket = vendas["valor"].mean()
     n      = len(vendas)
