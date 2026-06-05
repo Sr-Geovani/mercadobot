@@ -432,7 +432,16 @@ def bloco_score(vendas: pd.DataFrame) -> str:
 
 
 def bloco_faturamento(vendas: pd.DataFrame, produtos: pd.DataFrame = None) -> str:
-    logger.info("bloco_faturamento v2 — cancelamentos por StatusCupom CP")
+    logger.info("bloco_faturamento v3")
+    if "StatusCupom" in vendas.columns:
+        mask_cp = vendas["StatusCupom"] == "CP"
+        cp_rows = vendas.loc[mask_cp, ["nomeFilial","valor","ValorItensCancelados","StatusCupom","PossuiItemCancelado"]].to_dict("records") if "ValorItensCancelados" in vendas.columns else []
+        for r in cp_rows:
+            logger.info(f"CP row: {r}")
+        fa_cancel = vendas.loc[(vendas["StatusCupom"]=="FA") & (vendas.get("ValorItensCancelados", pd.Series(0,index=vendas.index))>0), ["nomeFilial","valor","ValorItensCancelados"]].to_dict("records") if "ValorItensCancelados" in vendas.columns else []
+        for r in fa_cancel:
+            logger.info(f"FA cancel row: {r}")
+
     total  = vendas["valor"].sum()
     ticket = vendas["valor"].mean()
     n      = len(vendas)
