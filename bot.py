@@ -683,18 +683,21 @@ def normalizar_produtos(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 def resumo_dados(chat_id: int) -> str:
-    d = dados_usuario.get(chat_id, {})
+    d        = dados_usuario.get(chat_id, {})
     vendas   = d.get("vendas")
     produtos = d.get("produtos")
-    partes = []
+    periodo  = d.get("periodo_label", "período atual")
+    cancel   = d.get("total_cancel", 0.0)
+    partes   = [f"Período analisado: {periodo}"]
 
     if vendas is not None:
         total   = vendas["valor"].sum()
         ticket  = vendas["valor"].mean()
         n       = len(vendas)
-        cancel  = vendas["ValorItensCancelados"].sum()
+        # Usa total_cancel da tela dedicada se disponível
+        cancel_str = f"R$ {cancel:.2f}" if cancel > 0 else "não disponível"
         filiais = vendas.groupby("nomeFilial")["valor"].agg(["sum","count","mean"])
-        partes.append(f"VENDAS: {n} transações, R$ {total:.2f} total, ticket R$ {ticket:.2f}, cancelamentos R$ {cancel:.2f}")
+        partes.append(f"VENDAS: {n} transações, R$ {total:.2f} total, ticket R$ {ticket:.2f}, cancelamentos {cancel_str}")
         partes.append("POR FILIAL:\n" + filiais.to_string())
         v2 = vendas.copy()
         v2["hora"] = pd.to_datetime(v2["HoraAbertura"], format="%H:%M:%S").dt.hour
