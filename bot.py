@@ -789,7 +789,7 @@ async def configurar_menu(app):
     await app.bot.set_chat_menu_button(menu_button=MenuButtonCommands())
 
 def kb_menu(periodo_label: str = ""):
-    label_periodo = f"📅 Analisar período" + (f" — {periodo_label}" if periodo_label else "")
+    btn_periodo = "📅 Analisar outro período" if periodo_label else "📅 Analisar período"
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("📊 Briefing",      callback_data="briefing"),
          InlineKeyboardButton("⚠️ Alertas",       callback_data="alertas")],
@@ -804,18 +804,21 @@ def kb_menu(periodo_label: str = ""):
         [InlineKeyboardButton("🎯 Projeção Mês",  callback_data="projecao"),
          InlineKeyboardButton("⭐ Score Saúde",   callback_data="score")],
         [InlineKeyboardButton("🛒 Lista de Reposição",  callback_data="reposicao")],
-        [InlineKeyboardButton(label_periodo,             callback_data="atualizar_menu")],
+        [InlineKeyboardButton(btn_periodo,               callback_data="atualizar_menu")],
     ])
 
 async def abrir_menu(msg, chat_id: int = None):
-    """Envia menu com período ativo."""
+    """Envia menu com período ativo visível."""
     periodo_label = ""
     if chat_id and chat_id in dados_usuario:
         periodo_label = dados_usuario[chat_id].get("periodo_label", "")
-    await msg.reply_text(
-        "O que deseja analisar agora?",
-        reply_markup=kb_menu(periodo_label)
-    )
+
+    if periodo_label:
+        texto = f"📅 {b(f'Período analisado atualmente: {periodo_label}')}\n\nO que deseja analisar?"
+    else:
+        texto = "📂 Escolha um período para começar."
+
+    await msg.reply_text(texto, parse_mode="HTML", reply_markup=kb_menu(periodo_label))
 
 # ─── ENVIO HTML ──────────────────────────────────────────────
 async def enviar(msg, texto: str):
@@ -951,7 +954,7 @@ async def fluxo_briefing(msg, chat_id: int):
     insight = await insight_ia(ctx, "cancelamentos, quedas de faturamento e oportunidades de produto")
     await enviar(msg, f"💡 {b('INSIGHT DO DIA')}\n\n{insight}")
 
-    await abrir_menu(msg)
+    await abrir_menu(msg, chat_id)
 
 async def comando_briefing(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await pedir_periodo(update.message)
@@ -969,7 +972,7 @@ async def comando_produtos(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ctx = resumo_dados(chat_id)
     insight = await insight_ia(ctx, "oportunidades de mix de produtos entre as unidades")
     await enviar(update.message, f"💡 {b('INSIGHTS')}\n\n{insight}")
-    await abrir_menu(update.message)
+    await abrir_menu(update.message, update.effective_chat.id)
 
 async def comando_categorias(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id  = update.effective_chat.id
@@ -984,7 +987,7 @@ async def comando_categorias(update: Update, context: ContextTypes.DEFAULT_TYPE)
     ctx = resumo_dados(chat_id)
     insight = await insight_ia(ctx, "categorias com melhor e pior desempenho")
     await enviar(update.message, f"💡 {b('INSIGHTS')}\n\n{insight}")
-    await abrir_menu(update.message)
+    await abrir_menu(update.message, update.effective_chat.id)
 
 async def comando_pagamentos(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
@@ -999,7 +1002,7 @@ async def comando_pagamentos(update: Update, context: ContextTypes.DEFAULT_TYPE)
     ctx = resumo_dados(chat_id)
     insight = await insight_ia(ctx, "mix de pagamento e oportunidade de incentivar PIX")
     await enviar(update.message, f"💡 {b('INSIGHTS')}\n\n{insight}")
-    await abrir_menu(update.message)
+    await abrir_menu(update.message, update.effective_chat.id)
 
 async def comando_semana(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
@@ -1014,7 +1017,7 @@ async def comando_semana(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ctx = resumo_dados(chat_id)
     insight = await insight_ia(ctx, "variação semanal de faturamento entre as unidades")
     await enviar(update.message, f"💡 {b('INSIGHTS')}\n\n{insight}")
-    await abrir_menu(update.message)
+    await abrir_menu(update.message, update.effective_chat.id)
 
 async def comando_pico(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
@@ -1029,7 +1032,7 @@ async def comando_pico(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ctx = resumo_dados(chat_id)
     insight = await insight_ia(ctx, "horários de pico e horários fracos para sugestão de ação")
     await enviar(update.message, f"💡 {b('INSIGHTS')}\n\n{insight}")
-    await abrir_menu(update.message)
+    await abrir_menu(update.message, update.effective_chat.id)
 
 async def comando_alertas(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
@@ -1064,7 +1067,7 @@ async def comando_alertas(update: Update, context: ContextTypes.DEFAULT_TYPE):
     insight = await insight_ia(ctx, "todos os alertas críticos e ações corretivas imediatas")
     linhas.append(f"\n{insight}")
     await enviar(update.message, "\n".join(linhas))
-    await abrir_menu(update.message)
+    await abrir_menu(update.message, update.effective_chat.id)
 
 
 async def comando_reposicao(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1094,7 +1097,7 @@ async def comando_comparativo(update: Update, context: ContextTypes.DEFAULT_TYPE
     ctx = resumo_dados(chat_id)
     insight = await insight_ia(ctx, "comparativo entre unidades — qual tem melhor desempenho e por quê")
     await enviar(update.message, f"💡 {b('INSIGHT')}\n\n{insight}")
-    await abrir_menu(update.message)
+    await abrir_menu(update.message, update.effective_chat.id)
 
 async def comando_produto_mes(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
@@ -1105,7 +1108,7 @@ async def comando_produto_mes(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
     await update.message.reply_text("⏳ Analisando produtos destaque...")
     await enviar(update.message, bloco_produto_mes(produtos))
-    await abrir_menu(update.message)
+    await abrir_menu(update.message, update.effective_chat.id)
 
 async def comando_giro(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
@@ -1119,7 +1122,7 @@ async def comando_giro(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ctx = resumo_dados(chat_id)
     insight = await insight_ia(ctx, "estratégia de estoque baseada no giro dos produtos")
     await enviar(update.message, f"💡 {b('INSIGHT')}\n\n{insight}")
-    await abrir_menu(update.message)
+    await abrir_menu(update.message, update.effective_chat.id)
 
 async def comando_projecao(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
@@ -1134,7 +1137,7 @@ async def comando_projecao(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await enviar(update.message, bloco)
     else:
         await update.message.reply_text("⚠️ Dados insuficientes para projeção.")
-    await abrir_menu(update.message)
+    await abrir_menu(update.message, update.effective_chat.id)
 
 async def comando_score(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
@@ -1148,7 +1151,7 @@ async def comando_score(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ctx = resumo_dados(chat_id)
     insight = await insight_ia(ctx, "principais ações para melhorar o score de saúde da operação")
     await enviar(update.message, f"💡 {b('COMO MELHORAR')}\n\n{insight}")
-    await abrir_menu(update.message)
+    await abrir_menu(update.message, update.effective_chat.id)
 
 
 async def comando_atualizar(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1167,7 +1170,7 @@ async def comando_atualizar(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=kb
     )
 
-async def executar_atualizacao(msg, chat_id: int, data_ini: str, data_fim: str, label: str):
+async def executar_atualizacao(msg, chat_id: int, data_ini: str, data_fim: str, label: str, gerar_briefing: bool = True):
     """Executa o scraper para o período escolhido e envia o briefing."""
 
     # Mensagem de status que vamos editar em tempo real
@@ -1238,7 +1241,7 @@ async def executar_atualizacao(msg, chat_id: int, data_ini: str, data_fim: str, 
                 f"• O filtro de data não foi reconhecido\n\n"
                 f"Tente outro período ou importe o arquivo manualmente."
             )
-            await abrir_menu(msg)
+            await abrir_menu(msg, chat_id)
             return
 
         if chat_id not in dados_usuario:
@@ -1254,10 +1257,13 @@ async def executar_atualizacao(msg, chat_id: int, data_ini: str, data_fim: str, 
             f"✅ Vendas exportadas\n"
             f"✅ Produtos exportados\n"
             f"✅ Dados processados\n\n"
-            f"📊 Gerando briefing completo..."
+            f"{'📊 Gerando briefing completo...' if gerar_briefing else '✅ Período carregado!'}"
         )
 
-        await fluxo_briefing(msg, chat_id)
+        if gerar_briefing:
+            await fluxo_briefing(msg, chat_id)
+        else:
+            await abrir_menu(msg, chat_id)
 
     except Exception as e:
         erro = str(e)
@@ -1298,7 +1304,7 @@ async def executar_atualizacao(msg, chat_id: int, data_ini: str, data_fim: str, 
                 f"Tente novamente ou importe os arquivos manualmente."
             )
 
-        await abrir_menu(msg)
+        await abrir_menu(msg, chat_id)
 
 async def mensagem_livre(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
@@ -1357,7 +1363,7 @@ async def mensagem_livre(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("⏳ Pensando...")
     insight = await insight_ia(ctx, texto)
     await enviar(update.message, insight)
-    await abrir_menu(update.message)
+    await abrir_menu(update.message, update.effective_chat.id)
 
 async def cmd_status_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     from onboarding import cmd_status
@@ -1574,7 +1580,7 @@ async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ─── Menu principal ──────────────────────────────────────
     if acao == "menu_principal":
-        await abrir_menu(msg)
+        await abrir_menu(msg, chat_id)
         return
 
     # ─── Atualizar credenciais PDV Legal ─────────────────────
@@ -1702,26 +1708,16 @@ async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         return
 
-    # ─── Atualizar menu (deve vir ANTES do startswith) ──────
-    if acao == "atualizar_menu":
-        kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("📅 Hoje",            callback_data="atualizar_hoje")],
-            [InlineKeyboardButton("📅 Ontem",           callback_data="atualizar_ontem")],
-            [InlineKeyboardButton("📅 Últimos 7 dias",  callback_data="atualizar_7dias")],
-            [InlineKeyboardButton("📅 Últimos 15 dias", callback_data="atualizar_15dias")],
-            [InlineKeyboardButton("📅 Últimos 30 dias", callback_data="atualizar_30dias")],
-            [InlineKeyboardButton("📅 Mês atual",       callback_data="atualizar_mes")],
-            [InlineKeyboardButton("📅 Mês anterior",    callback_data="atualizar_mes_anterior")],
-        ])
-        await msg.reply_text(
-            f"🔄 {b('ATUALIZAR DADOS')}\n\nQual período deseja buscar?",
-            parse_mode="HTML", reply_markup=kb
-        )
+    # ─── Atualizar menu ─────────────────────────────────────
+    if acao in ("atualizar_menu", "briefing_periodo"):
+        gerar_briefing = (acao == "briefing_periodo")
+        context.user_data["gerar_briefing"] = gerar_briefing  # sempre sobrescreve
+        titulo = "📊 Briefing — Escolha o período:" if gerar_briefing else "📅 Analisar outro período — Escolha o período:"
+        await msg.reply_text(titulo, parse_mode="HTML", reply_markup=kb)
         return
 
     # ─── Atualizar: período escolhido ───────────────────────
     if acao.startswith("atualizar_"):
-        # Mês anterior
         if _hoje.month == 1:
             _mes_ant_ini = _hoje.replace(year=_hoje.year-1, month=12, day=1)
         else:
@@ -1740,7 +1736,9 @@ async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if acao in periodos:
             ini, fim, label = periodos[acao]
-            await executar_atualizacao(msg, chat_id, ini, fim, label)
+            gerar_briefing = context.user_data.get("gerar_briefing", True)
+            context.user_data.pop("gerar_briefing", None)
+            await executar_atualizacao(msg, chat_id, ini, fim, label, gerar_briefing=gerar_briefing)
         return
 
     if acao.startswith("rep_"):
@@ -1833,7 +1831,7 @@ async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
                 if produtos.empty:
                     await msg.reply_text("⚠️ Nenhum produto encontrado para o período selecionado.")
-                    await abrir_menu(msg)
+                    await abrir_menu(msg, chat_id)
                     return
 
                 # Aplica margem de segurança se necessário
@@ -1846,7 +1844,7 @@ async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     f"❌ Erro ao buscar dados do PDV Legal.\n\n{i(str(e)[:200])}",
                     parse_mode="HTML"
                 )
-                await abrir_menu(msg)
+                await abrir_menu(msg, chat_id)
                 return
 
             # Formato: chat
@@ -1854,7 +1852,7 @@ async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 blocos = bloco_reposicao(produtos, "exato")  # modo já aplicado acima
                 for bloco in blocos:
                     await enviar(msg, bloco)
-                await abrir_menu(msg)
+                await abrir_menu(msg, chat_id)
                 return
 
             # Formato: Excel
@@ -1913,7 +1911,7 @@ async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 filename=filename,
                 caption=f"📊 Lista de reposição {label_modo} — {label_per}"
             )
-            await abrir_menu(msg)
+            await abrir_menu(msg, chat_id)
             return
 
         # Fallback para callbacks antigos rep_exato / rep_estoque
@@ -1955,7 +1953,20 @@ async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
     }
 
     if acao == "briefing":
-        await pedir_periodo(msg)
+        context.user_data["gerar_briefing"] = True
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("📅 Hoje",            callback_data="atualizar_hoje")],
+            [InlineKeyboardButton("📅 Ontem",           callback_data="atualizar_ontem")],
+            [InlineKeyboardButton("📅 Últimos 7 dias",  callback_data="atualizar_7dias")],
+            [InlineKeyboardButton("📅 Últimos 15 dias", callback_data="atualizar_15dias")],
+            [InlineKeyboardButton("📅 Últimos 30 dias", callback_data="atualizar_30dias")],
+            [InlineKeyboardButton("📅 Mês atual",       callback_data="atualizar_mes")],
+            [InlineKeyboardButton("📅 Mês anterior",    callback_data="atualizar_mes_anterior")],
+        ])
+        await msg.reply_text(
+            f"📊 {b('BRIEFING')} — Escolha o período:",
+            parse_mode="HTML", reply_markup=kb
+        )
         return
 
     fake = type("U", (), {"message": msg, "effective_chat": type("C", (), {"id": chat_id})()})()

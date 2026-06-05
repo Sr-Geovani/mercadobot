@@ -448,14 +448,15 @@ async def enviar_onboarding_guiado():
                     await bot.send_message(
                         chat_id=chat_id,
                         text=(
-                            f"📊 <b>Dica — Consulte qualquer período</b>\n\n"
-                            f"Use /atualizar e escolha:\n"
+                            f"📅 <b>Dica — Analise qualquer período com um toque</b>\n\n"
+                            f"No menu principal você tem o botão <b>📅 Analisar outro período</b>.\n\n"
+                            f"Com ele você escolhe o período que quer ver e o bot busca tudo automaticamente no PDV Legal:\n"
                             f"• Hoje\n"
                             f"• Ontem\n"
-                            f"• Últimos 7 dias\n"
+                            f"• Últimos 7, 15 ou 30 dias\n"
                             f"• Mês atual ou anterior\n\n"
-                            f"O MercadoBot busca tudo direto no PDV Legal — "
-                            f"sem exportar nenhum arquivo."
+                            f"O período carregado aparece sempre no topo do menu para você saber exatamente qual está analisando.\n\n"
+                            f"💡 O botão <b>📊 Briefing</b> também pede o período e já entrega o relatório completo automaticamente."
                         ),
                         parse_mode="HTML"
                     )
