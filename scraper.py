@@ -247,10 +247,16 @@ async def exportar_cancelamentos(page, data_ini: str, data_fim: str) -> float:
 
         logger.info(f"Cancelamentos — range_key: '{range_key}'")
 
-        # Abre o datepicker primeiro, depois seleciona a opção
-        await page.click("#reportrange")
+        # Abre o dropdown via JavaScript e seleciona a opção
+        await page.evaluate(f"""
+            document.getElementById('reportrange').click();
+        """)
         await page.wait_for_timeout(800)
-        await page.click(f"li[data-range-key='{range_key}']")
+
+        await page.evaluate(f"""
+            var li = document.querySelector("li[data-range-key='{range_key}']");
+            if (li) li.click();
+        """)
         await page.wait_for_timeout(500)
 
         await page.click("#btnFiltro")
