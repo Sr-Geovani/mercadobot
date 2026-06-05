@@ -1232,6 +1232,12 @@ async def executar_atualizacao(msg, chat_id: int, data_ini: str, data_fim: str, 
         vendas_raw   = pd.read_excel(path_vendas)
         produtos_raw = pd.read_excel(path_produtos)
 
+        # Debug — ver total de linhas brutas e soma do ValorItensCancelados
+        if "ValorItensCancelados" in vendas_raw.columns:
+            logger.info(f"DEBUG Excel bruto — linhas: {len(vendas_raw)}, ValorItensCancelados sum: {pd.to_numeric(vendas_raw['ValorItensCancelados'], errors='coerce').fillna(0).sum():.2f}")
+        else:
+            logger.info(f"DEBUG Excel bruto — linhas: {len(vendas_raw)}, colunas: {list(vendas_raw.columns)[:8]}")
+
         vendas   = normalizar_vendas(vendas_raw)
         produtos = normalizar_produtos(produtos_raw)
 
