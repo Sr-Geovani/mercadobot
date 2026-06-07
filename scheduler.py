@@ -365,16 +365,28 @@ async def enviar_alertas_proativos():
             alertas = []
             hora_atual = agora.hour
 
-            # Alerta 1: cancelamentos altos
-            cancel = vendas["ValorItensCancelados"].sum() if "ValorItensCancelados" in vendas.columns else 0
-            total  = vendas["valor"].sum()
-            if total > 0 and cancel > 0 and (cancel / total) > 0.05:
-                alertas.append(
-                    f"⚠️ Cancelamentos em {cancel/total*100:.1f}% do faturamento hoje "
-                    f"(R$ {cancel:.2f}). Acima do ideal de 5%."
-                )
+            # Alerta de cancelamentos — só às 22h quando o dia está encerrado
+            # e o percentual é representativo do volume real
+            if hora_atual >= 22:
+                cancel = vendas["ValorItensCancelados"].sum() if "ValorItensCancelados" in vendas.columns else 0
+                total  = vendas["valor"].sum()
+                if total > 0 and cancel > 0 and (cancel / total) > 0.05:
+                    detalhe_filiais = ""
+                    if isinstance(total_cancel, dict):
+                        linhas_filial = []
+                        for filial, val in total_cancel.items():
+                            if filial.startswith("_") or val == 0:
+                                continue
+                            linhas_filial.append(f"  • {filial.title()}: R$ {val:.2f}")
+                        if linhas_filial:
+                            detalhe_filiais = "\n" + "\n".join(linhas_filial)
+                    alertas.append(
+                        f"⚠️ <b>Cancelamentos acima do limite</b>\n"
+                        f"Total: R$ {cancel:.2f} ({cancel/total*100:.1f}% do faturamento){detalhe_filiais}\n"
+                        f"Limite saudável: até 5%."
+                    )
 
-            # Alerta 2: nenhuma venda até agora
+            # Alerta zero vendas — válido em qualquer horário (13h e 22h)
             vendas2 = vendas.copy()
             if "HoraAbertura" in vendas2.columns:
                 vendas2["hora"] = pd.to_datetime(vendas2["HoraAbertura"], format="%H:%M:%S", errors="coerce").dt.hour
@@ -389,16 +401,14 @@ async def enviar_alertas_proativos():
                     f"Verifique se o sistema está operando normalmente."
                 )
 
-            # Alerta 3: horário de pico sem vendas (19h–22h)
-            if "hora" in vendas2.columns:
-                pico_horas = [19, 20, 21, 22]
-                if hora_atual in pico_horas:
-                    vendas_pico = vendas2[vendas2["hora"] == hora_atual]
-                    if len(vendas_pico) == 0:
-                        alertas.append(
-                            f"🕐 Às {hora_atual}h (horário de pico) não houve vendas ainda. "
-                            f"Verifique os totens."
-                        )
+            # Alerta pico noturno — só às 22h
+            if hora_atual >= 22 and "hora" in vendas2.columns:
+                vendas_noite = vendas2[vendas2["hora"].between(19, 21)]
+                if len(vendas_noite) == 0:
+                    alertas.append(
+                        f"🌙 Nenhuma venda registrada entre 19h e 22h. "
+                        f"Pico noturno sem movimento — verifique os totens."
+                    )
 
             if not alertas:
                 logger.info(f"Alertas: nenhum alerta para {chat_id} às {hora_atual}h")
