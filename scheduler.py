@@ -44,22 +44,23 @@ async def briefing_usuario(bot: Bot, usuario: dict):
             parse_mode="HTML"
         )
 
-        # Importa o scraper e processa com as credenciais do usuário
-        from scraper import baixar_relatorios
+        from scraper import baixar_relatorios, baixar_relatorios_periodo
+        from bot import normalizar_vendas, normalizar_produtos, bloco_faturamento, \
+            bloco_categorias, bloco_pagamentos, bloco_semanal, \
+            g_faturamento, g_categorias, g_pagamentos, g_semanal, \
+            insight_ia, kb_menu, dados_usuario
+
         loop = asyncio.get_event_loop()
+
+        # Dados de ontem — base do briefing
+        agora  = datetime.now(BRASILIA)
+        ontem  = (agora - timedelta(days=1)).strftime("%d/%m/%Y")
         path_vendas, path_produtos, total_cancel = await loop.run_in_executor(
             None, baixar_relatorios, pdv_email, pdv_senha
         )
 
         vendas   = pd.read_excel(path_vendas)
         produtos = pd.read_excel(path_produtos)
-
-        # Normaliza dados
-        from bot import normalizar_vendas, normalizar_produtos, bloco_faturamento, \
-            bloco_categorias, bloco_pagamentos, bloco_semanal, \
-            g_faturamento, g_categorias, g_pagamentos, g_semanal, \
-            insight_ia, resumo_dados, kb_menu
-
         vendas   = normalizar_vendas(vendas)
         produtos = normalizar_produtos(produtos)
 
@@ -74,7 +75,28 @@ async def briefing_usuario(bot: Bot, usuario: dict):
             )
             return
 
-        # Envia blocos separados
+        # Busca 30 dias para evolução semanal — período separado
+        d30 = (agora - timedelta(days=30)).strftime("%d/%m/%Y")
+        try:
+            path_v30, _, _ = await loop.run_in_executor(
+                None, baixar_relatorios_periodo, d30, ontem, pdv_email, pdv_senha
+            )
+            vendas_30 = normalizar_vendas(pd.read_excel(path_v30))
+        except Exception:
+            vendas_30 = vendas  # fallback: usa ontem mesmo
+
+        # ── Salva dados de ontem em dados_usuario para o menu funcionar ──
+        dados_usuario[chat_id] = {
+            "vendas":       vendas,
+            "produtos":     produtos,
+            "total_cancel": total_cancel,
+            "periodo_label": f"Ontem ({ontem})",
+            "data_ini":     ontem,
+            "data_fim":     ontem,
+        }
+        logger.info(f"Briefing: dados_usuario[{chat_id}] atualizado com dados de ontem")
+
+        # Envia blocos
         await bot.send_message(chat_id=chat_id, text=bloco_faturamento(vendas, produtos, total_cancel), parse_mode="HTML")
         await bot.send_photo(chat_id=chat_id, photo=g_faturamento(vendas))
 
@@ -84,15 +106,15 @@ async def briefing_usuario(bot: Bot, usuario: dict):
         await bot.send_message(chat_id=chat_id, text=bloco_pagamentos(vendas), parse_mode="HTML")
         await bot.send_photo(chat_id=chat_id, photo=g_pagamentos(vendas))
 
-        await bot.send_message(chat_id=chat_id, text=bloco_semanal(vendas), parse_mode="HTML")
-        await bot.send_photo(chat_id=chat_id, photo=g_semanal(vendas))
+        # Evolução semanal usa os 30 dias
+        await bot.send_message(chat_id=chat_id, text=bloco_semanal(vendas_30), parse_mode="HTML")
+        await bot.send_photo(chat_id=chat_id, photo=g_semanal(vendas_30))
 
-        # Insight IA aleatório
-        from bot import resumo_dados as _resumo
+        # Insight IA
         ctx = (
             f"VENDAS: {len(vendas)} transações, R$ {vendas['valor'].sum():.2f} total\n"
             f"TICKET MÉDIO: R$ {vendas['valor'].mean():.2f}\n"
-            f"CANCELAMENTOS: R$ {vendas['ValorItensCancelados'].sum():.2f}"
+            f"CANCELAMENTOS: R$ {total_cancel.get('_total', 0) if isinstance(total_cancel, dict) else total_cancel:.2f}"
         )
         insight = await insight_ia(ctx)
         await bot.send_message(
@@ -101,11 +123,10 @@ async def briefing_usuario(bot: Bot, usuario: dict):
             parse_mode="HTML"
         )
 
-        # Menu
         await bot.send_message(
             chat_id=chat_id,
-            text="O que deseja analisar agora?",
-            reply_markup=kb_menu()
+            text=f"📅 Período carregado: {b('Ontem (' + ontem + ')')}\nUse o menu para análises adicionais.",
+            reply_markup=kb_menu(f"Ontem ({ontem})")
         )
 
         logger.info(f"Briefing enviado com sucesso para {chat_id}")
@@ -172,12 +193,12 @@ def iniciar_scheduler():
         replace_existing=True,
     )
 
-    # Alerta de pico quinta a domingo às 20h
+    # Alerta de pico quinta a domingo às 19h
     scheduler.add_job(
         enviar_alerta_pico,
         trigger="cron",
         day_of_week="thu,fri,sat,sun",
-        hour=20,
+        hour=19,
         minute=0,
         id="alerta_pico",
         replace_existing=True,
@@ -296,14 +317,18 @@ async def enviar_fechamento_semanal():
 
 
 async def enviar_alertas_proativos():
-    """Envia alertas apenas quando há algo relevante — sem spam."""
+    """
+    Busca dados frescos do dia para cada usuário, atualiza dados_usuario,
+    e envia alertas apenas quando há algo relevante.
+    """
     from database import listar_usuarios_ativos
     usuarios = await listar_usuarios_ativos()
     if not usuarios:
         return
 
-    bot  = Bot(token=TELEGRAM_TOKEN)
+    bot   = Bot(token=TELEGRAM_TOKEN)
     agora = datetime.now(BRASILIA)
+    hoje  = agora.strftime("%d/%m/%Y")
 
     for usuario in usuarios:
         chat_id   = usuario["chat_id"]
@@ -313,36 +338,50 @@ async def enviar_alertas_proativos():
             continue
         try:
             from scraper import baixar_relatorios_periodo
-            hoje = agora.strftime("%d/%m/%Y")
-            path_vendas, _, _ = await asyncio.get_event_loop().run_in_executor(
+            from bot import normalizar_vendas, normalizar_produtos, dados_usuario, kb_menu
+
+            # Busca dados frescos do dia atual
+            path_vendas, path_produtos, total_cancel = await asyncio.get_event_loop().run_in_executor(
                 None, baixar_relatorios_periodo, hoje, hoje, pdv_email, pdv_senha
             )
 
-            vendas = pd.read_excel(path_vendas)
-            from bot import normalizar_vendas
-            vendas = normalizar_vendas(vendas)
+            vendas   = normalizar_vendas(pd.read_excel(path_vendas))
+            produtos = normalizar_produtos(pd.read_excel(path_produtos))
+
+            # Atualiza dados_usuario com dados frescos de hoje
+            dados_usuario[chat_id] = {
+                "vendas":        vendas,
+                "produtos":      produtos,
+                "total_cancel":  total_cancel,
+                "periodo_label": f"Hoje ({hoje})",
+                "data_ini":      hoje,
+                "data_fim":      hoje,
+            }
+            logger.info(f"Alertas: dados_usuario[{chat_id}] atualizado com dados de hoje ({hoje})")
 
             if len(vendas) == 0:
                 continue
 
             alertas = []
+            hora_atual = agora.hour
 
             # Alerta 1: cancelamentos altos
-            cancel = vendas["ValorItensCancelados"].sum()
+            cancel = vendas["ValorItensCancelados"].sum() if "ValorItensCancelados" in vendas.columns else 0
             total  = vendas["valor"].sum()
-            if total > 0 and (cancel / total) > 0.05:
+            if total > 0 and cancel > 0 and (cancel / total) > 0.05:
                 alertas.append(
                     f"⚠️ Cancelamentos em {cancel/total*100:.1f}% do faturamento hoje "
                     f"(R$ {cancel:.2f}). Acima do ideal de 5%."
                 )
 
-            # Alerta 2: queda brusca comparado à média
-            hora_atual = agora.hour
+            # Alerta 2: nenhuma venda até agora
             vendas2 = vendas.copy()
-            vendas2["hora"] = pd.to_datetime(vendas2["HoraAbertura"], format="%H:%M:%S").dt.hour
-            vendas_ate_agora = vendas2[vendas2["hora"] <= hora_atual]
-            fat_hoje = vendas_ate_agora["valor"].sum()
-            n_vendas  = len(vendas_ate_agora)
+            if "HoraAbertura" in vendas2.columns:
+                vendas2["hora"] = pd.to_datetime(vendas2["HoraAbertura"], format="%H:%M:%S", errors="coerce").dt.hour
+                vendas_ate_agora = vendas2[vendas2["hora"] <= hora_atual]
+                n_vendas = len(vendas_ate_agora)
+            else:
+                n_vendas = len(vendas2)
 
             if n_vendas == 0 and hora_atual >= 10:
                 alertas.append(
@@ -350,51 +389,103 @@ async def enviar_alertas_proativos():
                     f"Verifique se o sistema está operando normalmente."
                 )
 
-            # Alerta 3: horário de pico sem vendas
-            pico_horas = [19, 20, 21, 22]
-            if hora_atual in pico_horas:
-                vendas_pico = vendas2[vendas2["hora"] == hora_atual]
-                if len(vendas_pico) == 0:
-                    alertas.append(
-                        f"🕐 Às {hora_atual}h (horário de pico) não houve vendas ainda. "
-                        f"Verifique se o totem está funcionando."
-                    )
+            # Alerta 3: horário de pico sem vendas (19h–22h)
+            if "hora" in vendas2.columns:
+                pico_horas = [19, 20, 21, 22]
+                if hora_atual in pico_horas:
+                    vendas_pico = vendas2[vendas2["hora"] == hora_atual]
+                    if len(vendas_pico) == 0:
+                        alertas.append(
+                            f"🕐 Às {hora_atual}h (horário de pico) não houve vendas ainda. "
+                            f"Verifique os totens."
+                        )
 
-            # Só envia se tiver algo relevante
-            if alertas:
-                texto = f"🔔 <b>Alertas do dia</b>\n\n" + "\n\n".join(alertas)
-                await bot.send_message(chat_id=chat_id, text=texto, parse_mode="HTML")
-                logger.info(f"Alerta proativo enviado para {chat_id}: {len(alertas)} alerta(s)")
+            if not alertas:
+                logger.info(f"Alertas: nenhum alerta para {chat_id} às {hora_atual}h")
+                continue
 
-            await asyncio.sleep(5)
+            texto = f"🔔 <b>Alertas do MercadoBot</b> — {agora:%H:%M}\n\n" + "\n\n".join(alertas)
+            texto += f"\n\n<i>Dados atualizados às {agora:%H:%M}. Use o menu para analisar.</i>"
+
+            await bot.send_message(
+                chat_id=chat_id,
+                text=texto,
+                parse_mode="HTML",
+                reply_markup=kb_menu(f"Hoje ({hoje})")
+            )
+            await asyncio.sleep(3)
 
         except Exception as e:
-            logger.error(f"Erro no alerta proativo para {chat_id}: {e}")
+            logger.error(f"Erro nos alertas proativos para {chat_id}: {e}")
 
 
 async def enviar_alerta_pico():
-    """Avisa às 20h que entrou no horário de pico — informativo, sem pedir interação."""
+    """
+    Dispara às 19h qui-dom.
+    Busca dados frescos, atualiza dados_usuario,
+    e alerta só se não houver vendas entre 19h e 19h59.
+    """
     from database import listar_usuarios_ativos
     usuarios = await listar_usuarios_ativos()
     if not usuarios:
         return
 
-    bot = Bot(token=TELEGRAM_TOKEN)
+    bot   = Bot(token=TELEGRAM_TOKEN)
+    agora = datetime.now(BRASILIA)
+    hoje  = agora.strftime("%d/%m/%Y")
+
     for usuario in usuarios:
-        chat_id = usuario["chat_id"]
+        chat_id   = usuario["chat_id"]
+        pdv_email = usuario.get("pdv_email")
+        pdv_senha = usuario.get("pdv_senha")
+        if not pdv_email or not pdv_senha:
+            continue
         try:
-            await bot.send_message(
-                chat_id=chat_id,
-                text=(
-                    "🕐 <b>Horário de pico iniciando!</b>\n\n"
-                    "São 20h — seus moradores estão chegando em casa.\n\n"
-                    "✅ Garanta que os totens estão operando\n"
-                    "✅ Produtos âncora repostos (bebidas, snacks)\n"
-                    "✅ Conexão com internet estável\n\n"
-                    "Boas vendas nessa noite! 🚀"
-                ),
-                parse_mode="HTML"
+            from scraper import baixar_relatorios_periodo
+            from bot import normalizar_vendas, normalizar_produtos, dados_usuario, kb_menu
+
+            # Busca dados frescos do dia
+            path_vendas, path_produtos, total_cancel = await asyncio.get_event_loop().run_in_executor(
+                None, baixar_relatorios_periodo, hoje, hoje, pdv_email, pdv_senha
             )
+            vendas   = normalizar_vendas(pd.read_excel(path_vendas))
+            produtos = normalizar_produtos(pd.read_excel(path_produtos))
+
+            # Atualiza dados_usuario
+            dados_usuario[chat_id] = {
+                "vendas":        vendas,
+                "produtos":      produtos,
+                "total_cancel":  total_cancel,
+                "periodo_label": f"Hoje ({hoje})",
+                "data_ini":      hoje,
+                "data_fim":      hoje,
+            }
+            logger.info(f"Alerta pico: dados_usuario[{chat_id}] atualizado ({hoje})")
+
+            if vendas.empty or "HoraAbertura" not in vendas.columns:
+                continue
+
+            vendas["hora"] = pd.to_datetime(vendas["HoraAbertura"], format="%H:%M:%S", errors="coerce").dt.hour
+            vendas_pico    = vendas[vendas["hora"] == 19]
+
+            if len(vendas_pico) == 0:
+                await bot.send_message(
+                    chat_id=chat_id,
+                    text=(
+                        "⚠️ <b>Atenção — sem vendas no horário de pico!</b>\n\n"
+                        "São 19h e não registrei nenhuma venda ainda.\n\n"
+                        "Verifique:\n"
+                        "• Totens ligados e conectados\n"
+                        "• PDV Legal sincronizando\n"
+                        "• Produtos disponíveis nas prateleiras"
+                    ),
+                    parse_mode="HTML",
+                    reply_markup=kb_menu(f"Hoje ({hoje})")
+                )
+                logger.info(f"Alerta pico disparado para {chat_id} — sem vendas às 19h")
+            else:
+                logger.info(f"Alerta pico: {len(vendas_pico)} venda(s) às 19h para {chat_id} — sem alerta")
+
             await asyncio.sleep(3)
         except Exception as e:
             logger.error(f"Erro no alerta de pico para {chat_id}: {e}")
