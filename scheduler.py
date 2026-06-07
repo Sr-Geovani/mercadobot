@@ -183,9 +183,9 @@ def iniciar_scheduler():
         replace_existing=True,
     )
 
-    # Alertas proativos às 13h
+    # Alertas proativos às 13h — só zero vendas
     scheduler.add_job(
-        enviar_alertas_proativos,
+        lambda: asyncio.ensure_future(enviar_alertas_proativos(modo="basico")),
         trigger="cron",
         hour=13,
         minute=0,
@@ -193,24 +193,47 @@ def iniciar_scheduler():
         replace_existing=True,
     )
 
-    # Alerta de pico quinta a domingo às 19h
+    # Atualiza dados às 19h (sem alerta) — quinta a domingo
     scheduler.add_job(
         enviar_alerta_pico,
         trigger="cron",
         day_of_week="thu,fri,sat,sun",
         hour=19,
         minute=0,
-        id="alerta_pico",
+        id="atualiza_pico_19h",
         replace_existing=True,
     )
 
-    # Alertas proativos às 22h
+    # Verifica pico às 20h (alerta se sem vendas 19h-20h) — quinta a domingo
     scheduler.add_job(
-        enviar_alertas_proativos,
+        enviar_alerta_pico,
         trigger="cron",
+        day_of_week="thu,fri,sat,sun",
+        hour=20,
+        minute=0,
+        id="alerta_pico_20h",
+        replace_existing=True,
+    )
+
+    # Alertas 22h — todos os dias: só zero vendas
+    scheduler.add_job(
+        lambda: asyncio.ensure_future(enviar_alertas_proativos(modo="basico")),
+        trigger="cron",
+        day_of_week="mon,tue,wed",
         hour=22,
         minute=0,
-        id="alertas_noite",
+        id="alertas_noite_basico",
+        replace_existing=True,
+    )
+
+    # Alertas 22h — qui a dom: completo (cancelamentos + pico noturno + zero vendas)
+    scheduler.add_job(
+        lambda: asyncio.ensure_future(enviar_alertas_proativos(modo="completo")),
+        trigger="cron",
+        day_of_week="thu,fri,sat,sun",
+        hour=22,
+        minute=0,
+        id="alertas_noite_completo",
         replace_existing=True,
     )
 
@@ -316,10 +339,11 @@ async def enviar_fechamento_semanal():
             logger.error(f"Erro no fechamento semanal para {chat_id}: {e}")
 
 
-async def enviar_alertas_proativos():
+async def enviar_alertas_proativos(modo: str = "completo"):
     """
-    Busca dados frescos do dia para cada usuário, atualiza dados_usuario,
-    e envia alertas apenas quando há algo relevante.
+    Busca dados frescos e envia alertas relevantes.
+    modo='basico'   → só zero vendas (seg–qua)
+    modo='completo' → zero vendas + cancelamentos + pico noturno (qui–dom)
     """
     from database import listar_usuarios_ativos
     usuarios = await listar_usuarios_ativos()
@@ -365,9 +389,8 @@ async def enviar_alertas_proativos():
             alertas = []
             hora_atual = agora.hour
 
-            # Alerta de cancelamentos — só às 22h quando o dia está encerrado
-            # e o percentual é representativo do volume real
-            if hora_atual >= 22:
+            # Alerta de cancelamentos — só no modo completo (qui-dom às 22h)
+            if modo == "completo":
                 cancel = vendas["ValorItensCancelados"].sum() if "ValorItensCancelados" in vendas.columns else 0
                 total  = vendas["valor"].sum()
                 if total > 0 and cancel > 0 and (cancel / total) > 0.05:
@@ -386,7 +409,7 @@ async def enviar_alertas_proativos():
                         f"Limite saudável: até 5%."
                     )
 
-            # Alerta zero vendas — válido em qualquer horário (13h e 22h)
+            # Alerta zero vendas — todos os modos
             vendas2 = vendas.copy()
             if "HoraAbertura" in vendas2.columns:
                 vendas2["hora"] = pd.to_datetime(vendas2["HoraAbertura"], format="%H:%M:%S", errors="coerce").dt.hour
@@ -401,8 +424,8 @@ async def enviar_alertas_proativos():
                     f"Verifique se o sistema está operando normalmente."
                 )
 
-            # Alerta pico noturno — só às 22h
-            if hora_atual >= 22 and "hora" in vendas2.columns:
+            # Pico noturno — só no modo completo (qui-dom às 22h)
+            if modo == "completo" and "hora" in vendas2.columns:
                 vendas_noite = vendas2[vendas2["hora"].between(19, 21)]
                 if len(vendas_noite) == 0:
                     alertas.append(
@@ -476,14 +499,39 @@ async def enviar_alerta_pico():
                 continue
 
             vendas["hora"] = pd.to_datetime(vendas["HoraAbertura"], format="%H:%M:%S", errors="coerce").dt.hour
-            vendas_pico    = vendas[vendas["hora"] == 19]
 
+            # Às 19h: verifica se houve vendas entre 17h e 18h59
+            # Se não houve → alerta preditivo antes do pico
+            if agora.hour == 19:
+                vendas_pre_pico = vendas[vendas["hora"].between(17, 18)]
+                if len(vendas_pre_pico) == 0:
+                    await bot.send_message(
+                        chat_id=chat_id,
+                        text=(
+                            "⚠️ <b>Atenção — sem vendas nas últimas 2h!</b>\n\n"
+                            "Não registrei nenhuma venda entre 17h e 19h.\n\n"
+                            "O horário de pico está prestes a começar — verifique a operação:\n"
+                            "• Totens ligados e conectados\n"
+                            "• PDV Legal sincronizando\n"
+                            "• Produtos disponíveis nas prateleiras"
+                        ),
+                        parse_mode="HTML",
+                        reply_markup=kb_menu(f"Hoje ({hoje})")
+                    )
+                    logger.info(f"Alerta pré-pico disparado para {chat_id} — sem vendas 17h-19h")
+                else:
+                    logger.info(f"Alerta pico 19h: {len(vendas_pre_pico)} venda(s) entre 17h-19h para {chat_id} — sem alerta")
+                await asyncio.sleep(3)
+                continue
+
+            # Às 20h: verifica se houve vendas entre 19h e 20h
+            vendas_pico = vendas[vendas["hora"] == 19]
             if len(vendas_pico) == 0:
                 await bot.send_message(
                     chat_id=chat_id,
                     text=(
                         "⚠️ <b>Atenção — sem vendas no horário de pico!</b>\n\n"
-                        "São 19h e não registrei nenhuma venda ainda.\n\n"
+                        "Não registrei nenhuma venda entre 19h e 20h.\n\n"
                         "Verifique:\n"
                         "• Totens ligados e conectados\n"
                         "• PDV Legal sincronizando\n"
@@ -492,9 +540,9 @@ async def enviar_alerta_pico():
                     parse_mode="HTML",
                     reply_markup=kb_menu(f"Hoje ({hoje})")
                 )
-                logger.info(f"Alerta pico disparado para {chat_id} — sem vendas às 19h")
+                logger.info(f"Alerta pico 20h disparado para {chat_id} — sem vendas às 19h")
             else:
-                logger.info(f"Alerta pico: {len(vendas_pico)} venda(s) às 19h para {chat_id} — sem alerta")
+                logger.info(f"Alerta pico 20h: {len(vendas_pico)} venda(s) às 19h para {chat_id} — sem alerta")
 
             await asyncio.sleep(3)
         except Exception as e:
