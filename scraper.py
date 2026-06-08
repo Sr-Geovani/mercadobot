@@ -91,10 +91,17 @@ async def exportar_vendas(page, data_ini: str, data_fim: str) -> Path:
 
     # Clica em Gerar Relatório
     logger.info("Clicando em Gerar Relatório...")
-    async with page.expect_download(timeout=45000) as download_info:
-        await page.evaluate("document.getElementById('ContentPlaceHolder1_btnGerarRelatorio').click()")
+    try:
+        async with page.expect_download(timeout=60000) as download_info:
+            await page.evaluate("document.getElementById('ContentPlaceHolder1_btnGerarRelatorio').click()")
+        download = await download_info.value
+    except Exception as e:
+        logger.error(f"Timeout no download de vendas: {e}")
+        # Tenta clicar novamente via selector direto
+        async with page.expect_download(timeout=60000) as download_info:
+            await page.click("#ContentPlaceHolder1_btnGerarRelatorio")
+        download = await download_info.value
 
-    download = await download_info.value
     destino = DOWNLOAD_DIR / "vendas.xlsx"
     await download.save_as(destino)
     logger.info(f"Vendas baixado: {destino}")

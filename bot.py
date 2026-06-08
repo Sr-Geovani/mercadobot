@@ -1306,10 +1306,21 @@ async def executar_atualizacao(msg, chat_id: int, data_ini: str, data_fim: str, 
             )
             return
 
+        # Timeout de download — PDV online mas demorou para gerar o arquivo
+        elif "timeout" in erro.lower() and any(x in erro.lower() for x in ["download", "expect_download", "waiting for"]):
+            logger.error(f"Timeout no download para {chat_id}: {erro[:300]}")
+            await atualizar_status(
+                f"🔄 Buscando dados — {b(label)}\n\n"
+                f"⏳ O PDV Legal demorou para gerar o arquivo.\n\n"
+                f"Isso costuma acontecer em períodos com muitos dados.\n"
+                f"Tente novamente — geralmente resolve na segunda tentativa."
+            )
+
         # Erro externo — site fora, manutenção
         elif any(x in erro.lower() for x in ["timeout", "manutenção", "maintenance",
                                               "txtemail", "txtsenha", "btnentrar",
                                               "net::err", "connection"]):
+            logger.error(f"Erro de conexão PDV para {chat_id}: {erro[:300]}")
             await atualizar_status(
                 f"🔄 Buscando dados — {b(label)}\n\n"
                 f"⚠️ Não foi possível conectar ao PDV Legal\n\n"
