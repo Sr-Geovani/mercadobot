@@ -89,18 +89,14 @@ async def exportar_vendas(page, data_ini: str, data_fim: str) -> Path:
     await page.wait_for_timeout(500)
     logger.info("Todas as lojas selecionadas")
 
-    # Clica em Gerar Relatório
+    # Clica em Gerar Relatório via postback — mesmo mecanismo do PDV Legal
     logger.info("Clicando em Gerar Relatório...")
-    try:
-        async with page.expect_download(timeout=60000) as download_info:
-            await page.evaluate("document.getElementById('ContentPlaceHolder1_btnGerarRelatorio').click()")
-        download = await download_info.value
-    except Exception as e:
-        logger.error(f"Timeout no download de vendas: {e}")
-        # Tenta clicar novamente via selector direto
-        async with page.expect_download(timeout=60000) as download_info:
-            await page.click("#ContentPlaceHolder1_btnGerarRelatorio")
-        download = await download_info.value
+    async with page.expect_download(timeout=60000) as download_info:
+        await page.evaluate("""
+            __doPostBack('ctl00$ContentPlaceHolder1$ImageButton1', '');
+        """)
+
+    download = await download_info.value
 
     destino = DOWNLOAD_DIR / "vendas.xlsx"
     await download.save_as(destino)
