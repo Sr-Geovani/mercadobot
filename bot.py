@@ -1072,8 +1072,8 @@ async def comando_alertas(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cancel = vendas["ValorItensCancelados"].sum()
     total  = vendas["valor"].sum()
     pct    = cancel / total * 100 if total > 0 else 0
-    if pct > 5:
-        linhas.append(f"⚠️ Cancelamentos em {b(f'{pct:.1f}%')} do faturamento — acima do ideal (5%)")
+    if pct > 10:
+        linhas.append(f"⚠️ Cancelamentos em {b(f'{pct:.1f}%')} do faturamento — acima do ideal (10%)")
         linhas.append(f"   Valor: {c(f'R$ {cancel:,.2f}')}\n")
 
     sem = vendas.copy()
@@ -1508,14 +1508,29 @@ async def verificar_status_callback(msg, chat_id: int):
     usuario  = await buscar_usuario(chat_id)
 
     if not usuario or usuario["status"] == "pendente":
-        kb = InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔍 Verificar novamente", callback_data="verificar_status")],
-        ])
+        # Tenta recuperar o link de pagamento existente para manter no botão
+        link = None
+        try:
+            from pagamento import buscar_assinatura_ativa, buscar_link_assinatura
+            asaas_id = usuario.get("asaas_id") if usuario else None
+            if asaas_id:
+                assinatura_id = await buscar_assinatura_ativa(asaas_id)
+                if assinatura_id:
+                    link = await buscar_link_assinatura(assinatura_id)
+        except Exception:
+            pass
+
+        botoes = []
+        if link:
+            botoes.append([InlineKeyboardButton("💳 Cadastrar cartão e ativar", url=link)])
+        botoes.append([InlineKeyboardButton("🔍 Verificar novamente", callback_data="verificar_status")])
+
         await msg.reply_text(
             f"⏳ {b('Ainda aguardando confirmação.')}\n\n"
-            f"Se já cadastrou o cartão, aguarde alguns instantes e tente novamente.",
+            f"Se ainda não cadastrou o cartão, clique no botão abaixo.\n"
+            f"Se já cadastrou, aguarde alguns instantes e clique em Verificar novamente.",
             parse_mode="HTML",
-            reply_markup=kb
+            reply_markup=InlineKeyboardMarkup(botoes)
         )
         return
 

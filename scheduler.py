@@ -183,13 +183,13 @@ def iniciar_scheduler():
         replace_existing=True,
     )
 
-    # Alertas proativos às 13h — só zero vendas
+    # Parcial do dia às 13h — sempre envia resumo + atualiza dados_usuario
     scheduler.add_job(
-        lambda: asyncio.ensure_future(enviar_alertas_proativos(modo="basico")),
+        enviar_parcial_dia,
         trigger="cron",
         hour=13,
         minute=0,
-        id="alertas_tarde",
+        id="parcial_dia",
         replace_existing=True,
     )
 
@@ -339,6 +339,114 @@ async def enviar_fechamento_semanal():
             logger.error(f"Erro no fechamento semanal para {chat_id}: {e}")
 
 
+async def enviar_parcial_dia():
+    """
+    Dispara às 13h todos os dias.
+    Busca dados frescos do dia, atualiza dados_usuario,
+    e envia sempre um resumo parcial do dia — independente de alertas.
+    """
+    from database import listar_usuarios_ativos
+    usuarios = await listar_usuarios_ativos()
+    if not usuarios:
+        return
+
+    bot   = Bot(token=TELEGRAM_TOKEN)
+    agora = datetime.now(BRASILIA)
+    hoje  = agora.strftime("%d/%m/%Y")
+
+    for usuario in usuarios:
+        chat_id   = usuario["chat_id"]
+        pdv_email = usuario.get("pdv_email")
+        pdv_senha = usuario.get("pdv_senha")
+        nome      = usuario.get("nome", "Operador")
+        if not pdv_email or not pdv_senha:
+            continue
+        try:
+            from scraper import baixar_relatorios_periodo
+            from bot import normalizar_vendas, normalizar_produtos, \
+                bloco_faturamento, dados_usuario, kb_menu, b
+
+            path_vendas, path_produtos, total_cancel = await asyncio.get_event_loop().run_in_executor(
+                None, baixar_relatorios_periodo, hoje, hoje, pdv_email, pdv_senha
+            )
+            vendas   = normalizar_vendas(pd.read_excel(path_vendas))
+            produtos = normalizar_produtos(pd.read_excel(path_produtos))
+
+            # Atualiza dados_usuario — garante que menu funciona após restart
+            dados_usuario[chat_id] = {
+                "vendas":        vendas,
+                "produtos":      produtos,
+                "total_cancel":  total_cancel,
+                "periodo_label": f"Hoje ({hoje})",
+                "data_ini":      hoje,
+                "data_fim":      hoje,
+            }
+            logger.info(f"Parcial 13h: dados_usuario[{chat_id}] atualizado ({hoje})")
+
+            if len(vendas) == 0:
+                await bot.send_message(
+                    chat_id=chat_id,
+                    text=(
+                        f"📊 <b>Parcial do dia — {hoje}</b>\n\n"
+                        f"🚨 Nenhuma venda registrada até as 13h.\n"
+                        f"Verifique se os totens estão operando normalmente."
+                    ),
+                    parse_mode="HTML",
+                    reply_markup=kb_menu(f"Hoje ({hoje})")
+                )
+                await asyncio.sleep(3)
+                continue
+
+            total  = vendas["valor"].sum()
+            n      = len(vendas)
+            ticket = vendas["valor"].mean()
+
+            # Verifica cancelamentos
+            cancel_total = total_cancel.get("_total", 0) if isinstance(total_cancel, dict) else float(total_cancel or 0)
+            pct_cancel   = (cancel_total / (total + cancel_total) * 100) if (total + cancel_total) > 0 else 0
+            alerta_cancel = pct_cancel > 10
+
+            # Só envia se houver algo relevante — senão silêncio (atualiza dados_usuario por baixo)
+            if not alerta_cancel:
+                logger.info(f"Parcial 13h: tudo normal para {chat_id} — sem mensagem")
+                await asyncio.sleep(3)
+                continue
+
+            # Faturamento por filial
+            filiais_txt = ""
+            if "nomeFilial" in vendas.columns:
+                por_filial = vendas.groupby("nomeFilial")["valor"].sum()
+                linhas_f   = [f"  • {f.title()}: R$ {v:,.2f}" for f, v in por_filial.items()]
+                filiais_txt = "\n" + "\n".join(linhas_f)
+
+            # Cancelamentos por filial
+            cancel_txt = ""
+            if alerta_cancel:
+                cancel_txt = f"\n\n⚠️ <b>Cancelamentos: R$ {cancel_total:.2f} ({pct_cancel:.1f}%)</b> — acima de 10%"
+                if isinstance(total_cancel, dict):
+                    linhas_c = [f"  • {f.title()}: R$ {v:.2f}" for f, v in total_cancel.items() if not f.startswith("_") and v > 0]
+                    if linhas_c:
+                        cancel_txt += "\n" + "\n".join(linhas_c)
+
+            await bot.send_message(
+                chat_id=chat_id,
+                text=(
+                    f"📊 <b>Parcial do dia — {hoje}</b>\n\n"
+                    f"💰 Faturamento: {b(f'R$ {total:,.2f}')}{filiais_txt}\n\n"
+                    f"🛒 Transações: {b(str(n))} | Ticket: R$ {ticket:.2f}"
+                    f"{cancel_txt}\n\n"
+                    f"<i>Dados de hoje até 13h.</i>"
+                ),
+                parse_mode="HTML",
+                reply_markup=kb_menu(f"Hoje ({hoje})")
+            )
+            logger.info(f"Parcial 13h enviado para {chat_id} — cancelamentos {pct_cancel:.1f}%")
+            await asyncio.sleep(3)
+
+        except Exception as e:
+            logger.error(f"Erro no parcial do dia para {chat_id}: {e}")
+
+
 async def enviar_alertas_proativos(modo: str = "completo"):
     """
     Busca dados frescos e envia alertas relevantes.
@@ -393,7 +501,7 @@ async def enviar_alertas_proativos(modo: str = "completo"):
             if modo == "completo":
                 cancel = vendas["ValorItensCancelados"].sum() if "ValorItensCancelados" in vendas.columns else 0
                 total  = vendas["valor"].sum()
-                if total > 0 and cancel > 0 and (cancel / total) > 0.05:
+                if total > 0 and cancel > 0 and (cancel / total) > 0.10:
                     detalhe_filiais = ""
                     if isinstance(total_cancel, dict):
                         linhas_filial = []
@@ -406,7 +514,7 @@ async def enviar_alertas_proativos(modo: str = "completo"):
                     alertas.append(
                         f"⚠️ <b>Cancelamentos acima do limite</b>\n"
                         f"Total: R$ {cancel:.2f} ({cancel/total*100:.1f}% do faturamento){detalhe_filiais}\n"
-                        f"Limite saudável: até 5%."
+                        f"Limite saudável: até 10%."
                     )
 
             # Alerta zero vendas — todos os modos
