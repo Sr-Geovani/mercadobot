@@ -1027,20 +1027,181 @@ async def comando_pagamentos(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await enviar(update.message, f"💡 {b('INSIGHTS')}\n\n{insight}")
     await abrir_menu(update.message, update.effective_chat.id)
 
+async def abrir_submenu_semana(msg, chat_id: int):
+    """Abre o submenu com as 3 visões semanais."""
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("📅 Semana atual",                  callback_data="semana_atual")],
+        [InlineKeyboardButton("🗓️ Mês atual",                     callback_data="semana_mes")],
+        [InlineKeyboardButton("📊 Mês atual x Mês anterior",      callback_data="semana_comparativo")],
+        [InlineKeyboardButton("◀️ Voltar ao menu",                callback_data="menu")],
+    ])
+    await msg.reply_text(
+        f"📅 {b('Análise Semanal')}\n\nEscolha a visão que deseja:",
+        parse_mode="HTML",
+        reply_markup=kb
+    )
+
+
+async def comando_semana_atual(msg, chat_id: int):
+    """Semana atual — seg a dom da semana corrente."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    br    = ZoneInfo("America/Sao_Paulo")
+    agora = datetime.now(br)
+    # Segunda-feira da semana atual
+    seg   = agora - timedelta(days=agora.weekday())
+    ini   = seg.strftime("%d/%m/%Y")
+    fim   = agora.strftime("%d/%m/%Y")
+
+    d      = dados_usuario.get(chat_id, {})
+    vendas = d.get("vendas")
+
+    # Se dados carregados já cobrem a semana, usa — senão busca
+    data_ini_carregada = d.get("data_ini", "")
+    if vendas is not None and not vendas.empty and data_ini_carregada <= ini:
+        v = vendas
+    else:
+        await msg.reply_text("⏳ Buscando dados da semana atual...")
+        try:
+            from scraper import baixar_relatorios_periodo
+            import asyncio
+            loop = asyncio.get_event_loop()
+            pdv_email = d.get("pdv_email") or dados_usuario.get(chat_id, {}).get("pdv_email")
+            pdv_senha = d.get("pdv_senha") or dados_usuario.get(chat_id, {}).get("pdv_senha")
+            path_v, path_p, total_c = await loop.run_in_executor(
+                None, baixar_relatorios_periodo, ini, fim, pdv_email, pdv_senha
+            )
+            v = normalizar_vendas(pd.read_excel(path_v))
+            dados_usuario[chat_id]["vendas"]       = v
+            dados_usuario[chat_id]["periodo_label"] = f"Semana atual ({ini} – {fim})"
+        except Exception as e:
+            await msg.reply_text(f"❌ Erro ao buscar dados: {e}")
+            return
+
+    await enviar(msg, bloco_semanal(v))
+    await msg.reply_photo(photo=g_semanal(v))
+    ctx = f"Semana atual {ini} a {fim}. Faturamento: R$ {v['valor'].sum():.2f}"
+    insight = await insight_ia(ctx, "tendência da semana e comparativo entre filiais")
+    await enviar(msg, f"💡 {b('INSIGHT')}\n\n{insight}")
+    await abrir_menu(msg, chat_id)
+
+
+async def comando_semana_comparativo(msg, chat_id: int):
+    """Mês atual x Mês anterior — semana a semana."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    br    = ZoneInfo("America/Sao_Paulo")
+    agora = datetime.now(br)
+
+    # Mês atual: do dia 1 até hoje
+    ini_atual = agora.replace(day=1).strftime("%d/%m/%Y")
+    fim_atual  = agora.strftime("%d/%m/%Y")
+
+    # Mês anterior: do dia 1 ao último dia
+    primeiro_atual   = agora.replace(day=1)
+    ultimo_anterior  = primeiro_atual - timedelta(days=1)
+    ini_anterior     = ultimo_anterior.replace(day=1).strftime("%d/%m/%Y")
+    fim_anterior     = ultimo_anterior.strftime("%d/%m/%Y")
+
+    await msg.reply_text(f"⏳ Buscando {agora.strftime('%B')} e mês anterior...")
+    try:
+        d         = dados_usuario.get(chat_id, {})
+        pdv_email = d.get("pdv_email")
+        pdv_senha = d.get("pdv_senha")
+        from scraper import baixar_relatorios_periodo
+        import asyncio
+        loop = asyncio.get_event_loop()
+
+        # Busca os dois períodos
+        path_atual, _, _    = await loop.run_in_executor(None, baixar_relatorios_periodo, ini_atual,    fim_atual,    pdv_email, pdv_senha)
+        path_anterior, _, _ = await loop.run_in_executor(None, baixar_relatorios_periodo, ini_anterior, fim_anterior, pdv_email, pdv_senha)
+
+        v_atual    = normalizar_vendas(pd.read_excel(path_atual))
+        v_anterior = normalizar_vendas(pd.read_excel(path_anterior))
+    except Exception as e:
+        await msg.reply_text(f"❌ Erro ao buscar dados: {e}")
+        return
+
+    # Bloco comparativo
+    fat_atual    = v_atual["valor"].sum()
+    fat_anterior = v_anterior["valor"].sum()
+    var          = fat_atual - fat_anterior
+    var_pct      = (var / fat_anterior * 100) if fat_anterior > 0 else 0
+    sinal        = "📈" if var >= 0 else "📉"
+
+    nome_atual    = agora.strftime("%B/%Y").capitalize()
+    nome_anterior = ultimo_anterior.strftime("%B/%Y").capitalize()
+
+    texto = (
+        f"📊 {b('Mês atual x Mês anterior')}\n\n"
+        f"📅 {b(nome_atual)}: R$ {fat_atual:,.2f}\n"
+        f"📅 {b(nome_anterior)}: R$ {fat_anterior:,.2f}\n\n"
+        f"{sinal} Variação: {b(f'R$ {abs(var):,.2f}')} ({var_pct:+.1f}%)\n"
+    )
+
+    # Detalhamento por filial
+    if "nomeFilial" in v_atual.columns and "nomeFilial" in v_anterior.columns:
+        filiais_atual    = v_atual.groupby("nomeFilial")["valor"].sum()
+        filiais_anterior = v_anterior.groupby("nomeFilial")["valor"].sum()
+        texto += f"\n{b('Por filial:')}\n"
+        for filial in filiais_atual.index:
+            fa = filiais_atual.get(filial, 0)
+            fb = filiais_anterior.get(filial, 0)
+            vf = fa - fb
+            pf = (vf / fb * 100) if fb > 0 else 0
+            sf = "📈" if vf >= 0 else "📉"
+            texto += f"  {sf} {filial.title()}: R$ {fa:,.2f} ({pf:+.1f}%)\n"
+
+    await enviar(msg, texto)
+
+    # Gráfico usando dados combinados com label de mês
+    v_atual["mes"]    = nome_atual
+    v_anterior["mes"] = nome_anterior
+    v_combined = pd.concat([v_anterior, v_atual])
+    await msg.reply_photo(photo=g_semanal(v_combined))
+
+    ctx = f"Comparativo {nome_atual} (R$ {fat_atual:.2f}) vs {nome_anterior} (R$ {fat_anterior:.2f}). Variação: {var_pct:+.1f}%"
+    insight = await insight_ia(ctx, "comparativo entre os dois meses e oportunidades de melhoria")
+    await enviar(msg, f"💡 {b('INSIGHT')}\n\n{insight}")
+    await abrir_menu(msg, chat_id)
+
+
+async def comando_semana_mes(msg, chat_id: int):
+    """Mês atual agrupado por semana."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    br    = ZoneInfo("America/Sao_Paulo")
+    agora = datetime.now(br)
+    ini   = agora.replace(day=1).strftime("%d/%m/%Y")
+    fim   = agora.strftime("%d/%m/%Y")
+
+    await msg.reply_text("⏳ Buscando dados do mês...")
+    try:
+        d         = dados_usuario.get(chat_id, {})
+        pdv_email = d.get("pdv_email")
+        pdv_senha = d.get("pdv_senha")
+        from scraper import baixar_relatorios_periodo
+        import asyncio
+        loop = asyncio.get_event_loop()
+        path_v, _, _ = await loop.run_in_executor(
+            None, baixar_relatorios_periodo, ini, fim, pdv_email, pdv_senha
+        )
+        v = normalizar_vendas(pd.read_excel(path_v))
+    except Exception as e:
+        await msg.reply_text(f"❌ Erro ao buscar dados: {e}")
+        return
+
+    await enviar(msg, bloco_semanal(v))
+    await msg.reply_photo(photo=g_semanal(v))
+    ctx = f"Mês atual {ini} a {fim}. Faturamento: R$ {v['valor'].sum():.2f}"
+    insight = await insight_ia(ctx, "ritmo do mês e projeção de fechamento")
+    await enviar(msg, f"💡 {b('INSIGHT')}\n\n{insight}")
+    await abrir_menu(msg, chat_id)
+
+
 async def comando_semana(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
-    d       = dados_usuario.get(chat_id, {})
-    vendas  = d.get("vendas")
-    if vendas is None or vendas.empty:
-        await pedir_periodo(update.message)
-        return
-    await update.message.reply_text("⏳ Calculando evolução semanal...")
-    await enviar(update.message, bloco_semanal(vendas))
-    await update.message.reply_photo(photo=g_semanal(vendas))
-    ctx = resumo_dados(chat_id)
-    insight = await insight_ia(ctx, "variação semanal de faturamento entre as unidades")
-    await enviar(update.message, f"💡 {b('INSIGHTS')}\n\n{insight}")
-    await abrir_menu(update.message, update.effective_chat.id)
+    await abrir_submenu_semana(update.message, chat_id)
 
 async def comando_pico(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
@@ -1186,6 +1347,7 @@ async def comando_atualizar(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("📅 Últimos 30 dias", callback_data="atualizar_30dias")],
         [InlineKeyboardButton("📅 Mês atual",       callback_data="atualizar_mes")],
         [InlineKeyboardButton("📅 Mês anterior",    callback_data="atualizar_mes_anterior")],
+        [InlineKeyboardButton("◀️ Voltar ao menu",  callback_data="menu")],
     ])
     await update.message.reply_text(
         f"🔄 {b('ATUALIZAR DADOS')}\n\nQual período deseja buscar agora?",
@@ -1595,7 +1757,10 @@ async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "produtos":         "📦 Analisando produtos...",
         "categorias":       "🗂 Calculando categorias...",
         "pagamentos":       "💳 Analisando pagamentos...",
-        "semana":           "📅 Calculando semanas...",
+        "semana":             "📅 Abrindo opções semanais...",
+        "semana_atual":       "📅 Buscando semana atual...",
+        "semana_comparativo": "📊 Buscando últimas 4 semanas...",
+        "semana_mes":         "🗓️ Buscando mês atual...",
         "pico":             "🕐 Analisando horários...",
         "alertas":          "⚠️ Verificando alertas...",
         "reposicao":        "🛒 Abrindo reposição...",
@@ -1771,6 +1936,7 @@ async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("📅 Últimos 30 dias", callback_data="atualizar_30dias")],
             [InlineKeyboardButton("📅 Mês atual",       callback_data="atualizar_mes")],
             [InlineKeyboardButton("📅 Mês anterior",    callback_data="atualizar_mes_anterior")],
+            [InlineKeyboardButton("◀️ Voltar ao menu",  callback_data="menu")],
         ])
         await msg.reply_text(titulo, parse_mode="HTML", reply_markup=kb_periodos)
         return
@@ -1814,6 +1980,7 @@ async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 [InlineKeyboardButton("📅 Últimos 15 dias", callback_data="rep_per_15dias")],
                 [InlineKeyboardButton("📅 Últimos 30 dias", callback_data="rep_per_30dias")],
                 [InlineKeyboardButton("📅 Mês atual",       callback_data="rep_per_mes")],
+                [InlineKeyboardButton("◀️ Voltar ao menu",  callback_data="menu")],
             ])
             await msg.reply_text(
                 f"✅ Modo: {b(label)}\n\n"
@@ -1844,6 +2011,7 @@ async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 [InlineKeyboardButton("💬 Receber no chat",        callback_data="rep_fmt_chat")],
                 [InlineKeyboardButton("📊 Excel por loja",         callback_data="rep_fmt_excel_loja")],
                 [InlineKeyboardButton("📊 Excel unificado",        callback_data="rep_fmt_excel_unificado")],
+                [InlineKeyboardButton("◀️ Voltar ao menu",         callback_data="menu")],
             ])
             await msg.reply_text(
                 f"📅 Período: {b(label_per)}\n\n"
@@ -1985,6 +2153,7 @@ async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 [InlineKeyboardButton("📅 Últimos 15 dias", callback_data="rep_per_15dias")],
                 [InlineKeyboardButton("📅 Últimos 30 dias", callback_data="rep_per_30dias")],
                 [InlineKeyboardButton("📅 Mês atual",       callback_data="rep_per_mes")],
+                [InlineKeyboardButton("◀️ Voltar ao menu",  callback_data="menu")],
             ])
             await msg.reply_text(
                 f"✅ Modo: {b(label)}\n\nQual período deseja usar?",
@@ -2000,9 +2169,13 @@ async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "produtos":   comando_produtos,
         "categorias": comando_categorias,
         "pagamentos": comando_pagamentos,
-        "semana":     comando_semana,
+        "semana":             lambda u, c: abrir_submenu_semana(u.callback_query.message, u.effective_chat.id),
+        "semana_atual":       lambda u, c: comando_semana_atual(u.callback_query.message, u.effective_chat.id),
+        "semana_comparativo": lambda u, c: comando_semana_comparativo(u.callback_query.message, u.effective_chat.id),
+        "semana_mes":         lambda u, c: comando_semana_mes(u.callback_query.message, u.effective_chat.id),
         "pico":       comando_pico,
         "alertas":    comando_alertas,
+        "menu":       lambda u, c: abrir_menu(u.callback_query.message, u.effective_chat.id),
         "reposicao":  comando_reposicao,
         "comparativo":comando_comparativo,
         "projecao":   comando_projecao,
