@@ -91,8 +91,19 @@ async def exportar_vendas(page, data_ini: str, data_fim: str) -> Path:
 
     # Clica em Gerar Relatório
     logger.info("Clicando em Gerar Relatório...")
-    async with page.expect_download(timeout=60000) as download_info:
-        await page.click("#ContentPlaceHolder1_btnGerarRelatorio")
+    await page.click("#ContentPlaceHolder1_btnGerarRelatorio")
+
+    # Nova etapa: PDV Legal mostra modal SweetAlert com botão "Baixar Excel"
+    try:
+        await page.wait_for_selector(".swal-button--confirm", state="visible", timeout=10000)
+        logger.info("Modal SweetAlert detectado — clicando em Baixar Excel...")
+        async with page.expect_download(timeout=60000) as download_info:
+            await page.click(".swal-button--confirm")
+    except Exception:
+        # Fallback: se não aparecer o modal, tenta download direto
+        logger.info("Modal não detectado — aguardando download direto...")
+        async with page.expect_download(timeout=60000) as download_info:
+            await page.click("#ContentPlaceHolder1_btnGerarRelatorio")
 
     download = await download_info.value
     destino = DOWNLOAD_DIR / "vendas.xlsx"
