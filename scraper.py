@@ -92,11 +92,7 @@ async def exportar_vendas(page, data_ini: str, data_fim: str) -> Path:
     # Clica em Gerar Relatório
     logger.info("Clicando em Gerar Relatório...")
     async with page.expect_download(timeout=60000) as download_info:
-        await page.evaluate("""
-            WebForm_DoPostBackWithOptions(new WebForm_PostBackOptions(
-                "ctl00$ContentPlaceHolder1$btnGerarRelatorio", "", true, "", "", false, true
-            ));
-        """)
+        await page.click("#ContentPlaceHolder1_btnGerarRelatorio")
 
     download = await download_info.value
     destino = DOWNLOAD_DIR / "vendas.xlsx"
