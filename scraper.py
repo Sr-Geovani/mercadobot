@@ -91,43 +91,14 @@ async def exportar_vendas(page, data_ini: str, data_fim: str) -> Path:
 
     # Clica em Gerar Relatório
     logger.info("Clicando em Gerar Relatório...")
+    async with page.expect_download(timeout=60000) as download_info:
+        await page.evaluate("""
+            WebForm_DoPostBackWithOptions(new WebForm_PostBackOptions(
+                "ctl00$ContentPlaceHolder1$btnGerarRelatorio", "", true, "", "", false, true
+            ));
+        """)
 
-    # Log do estado do botão para diagnóstico
-    btn_info = await page.evaluate("""
-        (function() {
-            var btn = document.getElementById('ContentPlaceHolder1_btnGerarRelatorio');
-            if (!btn) return 'not found';
-            var rect = btn.getBoundingClientRect();
-            return {
-                onclick: btn.getAttribute('onclick'),
-                href: btn.getAttribute('href'),
-                visible: rect.width > 0 && rect.height > 0,
-                text: btn.innerText.trim()
-            };
-        })()
-    """)
-    logger.info(f"Botão Gerar Relatório: {btn_info}")
-
-    # Tenta clique via evaluate primeiro
-    try:
-        async with page.expect_download(timeout=15000) as download_info:
-            await page.evaluate("document.getElementById('ContentPlaceHolder1_btnGerarRelatorio').click()")
-        download = await download_info.value
-        logger.info("Download via evaluate OK")
-    except Exception as e1:
-        logger.warning(f"Clique via evaluate falhou ({e1}) — tentando via ImageButton direto")
-        # Fallback: abre modal e clica no ImageButton diretamente
-        try:
-            await page.click("#imgDownload")
-            await page.wait_for_timeout(1000)
-            async with page.expect_download(timeout=45000) as download_info:
-                await page.click("#ContentPlaceHolder1_ImageButton1")
-            download = await download_info.value
-            logger.info("Download via ImageButton OK")
-        except Exception as e2:
-            logger.error(f"Fallback também falhou: {e2}")
-            raise
-
+    download = await download_info.value
     destino = DOWNLOAD_DIR / "vendas.xlsx"
     await download.save_as(destino)
     logger.info(f"Vendas baixado: {destino}")
