@@ -75,15 +75,17 @@ async def briefing_usuario(bot: Bot, usuario: dict):
             )
             return
 
-        # Busca 30 dias para evolução semanal — período separado
+        # Busca 30 dias para evolução semanal — em arquivo separado
         d30 = (agora - timedelta(days=30)).strftime("%d/%m/%Y")
         try:
             path_v30, _, _ = await loop.run_in_executor(
                 None, baixar_relatorios_periodo, d30, ontem, pdv_email, pdv_senha
             )
+            # Lê imediatamente antes de qualquer sobrescrita
             vendas_30 = normalizar_vendas(pd.read_excel(path_v30))
-        except Exception:
-            vendas_30 = vendas  # fallback: usa ontem mesmo
+        except Exception as e:
+            logger.warning(f"Briefing: erro ao buscar 30 dias para semanal: {e}")
+            vendas_30 = vendas  # fallback
 
         # ── Salva dados de ontem em dados_usuario para o menu funcionar ──
         dados_usuario[chat_id] = {
@@ -133,16 +135,18 @@ async def briefing_usuario(bot: Bot, usuario: dict):
 
     except Exception as e:
         logger.error(f"Erro no briefing do usuário {chat_id}: {e}")
+        from bot import kb_menu
         await bot.send_message(
             chat_id=chat_id,
             text=(
                 f"⚠️ Não consegui gerar o briefing automático hoje.\n\n"
                 f"Possíveis causas:\n"
-                f"• PDV Legal fora do ar\n"
+                f"• PDV Legal fora do ar ou lento\n"
                 f"• Instabilidade na conexão\n\n"
-                f"Use {b('🔄 Atualizar dados agora')} para tentar manualmente."
+                f"Use o menu abaixo para tentar manualmente quando quiser."
             ),
-            parse_mode="HTML"
+            parse_mode="HTML",
+            reply_markup=kb_menu()
         )
 
 
