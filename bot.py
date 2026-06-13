@@ -1471,37 +1471,49 @@ async def executar_atualizacao(msg, chat_id: int, data_ini: str, data_fim: str, 
         # Timeout de download — PDV online mas demorou para gerar o arquivo
         elif "timeout" in erro.lower() and any(x in erro.lower() for x in ["download", "expect_download", "waiting for"]):
             logger.error(f"Timeout no download para {chat_id}: {erro[:300]}")
-            await atualizar_status(
-                f"🔄 Buscando dados — {b(label)}\n\n"
-                f"⏳ O PDV Legal demorou para gerar o arquivo.\n\n"
-                f"Isso costuma acontecer em períodos com muitos dados.\n"
-                f"Tente novamente — geralmente resolve na segunda tentativa."
-            )
+            try:
+                await atualizar_status(
+                    f"🔄 Buscando dados — {b(label)}\n\n"
+                    f"⏳ O PDV Legal demorou para gerar o arquivo.\n\n"
+                    f"Tente novamente — geralmente resolve na segunda tentativa."
+                )
+            except Exception:
+                pass
 
-        # Erro externo — site fora, manutenção
+        # Erro externo — site fora, manutenção, timeout de conexão
         elif any(x in erro.lower() for x in ["timeout", "manutenção", "maintenance",
                                               "txtemail", "txtsenha", "btnentrar",
                                               "net::err", "connection"]):
             logger.error(f"Erro de conexão PDV para {chat_id}: {erro[:300]}")
-            await atualizar_status(
-                f"🔄 Buscando dados — {b(label)}\n\n"
-                f"⚠️ Não foi possível conectar ao PDV Legal\n\n"
-                f"Possíveis causas:\n"
-                f"• Site em manutenção\n"
-                f"• Instabilidade na conexão do servidor\n"
-                f"• Lentidão no PDV Legal\n\n"
-                f"💡 Isso não é um problema no MercadoBot.\n"
-                f"Tente novamente em alguns minutos."
-            )
+            try:
+                await atualizar_status(
+                    f"🔄 Buscando dados — {b(label)}\n\n"
+                    f"⚠️ Não foi possível conectar ao PDV Legal\n\n"
+                    f"• Site em manutenção ou instável\n"
+                    f"• Lentidão no servidor do PDV Legal\n\n"
+                    f"Tente novamente em alguns minutos."
+                )
+            except Exception:
+                pass
         else:
-            await atualizar_status(
-                f"🔄 Buscando dados — {b(label)}\n\n"
-                f"❌ Erro inesperado\n\n"
-                f"{i(erro[:200])}\n\n"
-                f"Tente novamente ou importe os arquivos manualmente."
-            )
+            logger.error(f"Erro inesperado para {chat_id}: {erro[:300]}")
+            try:
+                await atualizar_status(
+                    f"🔄 Buscando dados — {b(label)}\n\n"
+                    f"❌ Erro inesperado\n\n"
+                    f"{i(erro[:200])}"
+                )
+            except Exception:
+                pass
 
-        await abrir_menu(msg, chat_id)
+        # Sempre abre o menu ao final — mesmo se editMessageText falhou
+        try:
+            await abrir_menu(msg, chat_id)
+        except Exception:
+            await msg.reply_text(
+                "Use o menu para tentar novamente:",
+                reply_markup=kb_menu()
+            )
 
 async def mensagem_livre(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id

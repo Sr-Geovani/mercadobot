@@ -45,12 +45,12 @@ async def fazer_login(page, email: str, senha: str):
     # Tenta até 2 vezes — PDV Legal pode estar lento
     for tentativa in range(2):
         try:
-            await page.goto(PDV_URL, wait_until="networkidle", timeout=60000)
+            await page.goto(PDV_URL, wait_until="domcontentloaded", timeout=60000)
             break
         except Exception as e:
             if tentativa == 0:
-                logger.warning(f"Timeout no goto (tentativa 1) — tentando novamente: {e}")
-                await asyncio.sleep(3)
+                logger.warning(f"Timeout no goto (tentativa 1) — tentando novamente")
+                await page.wait_for_timeout(3000)
             else:
                 raise
     await page.fill("#txtEmail", email)
