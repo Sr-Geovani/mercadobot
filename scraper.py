@@ -216,8 +216,7 @@ async def exportar_produtos(page, data_ini: str, data_fim: str) -> Path:
 async def exportar_cancelamentos(page, data_ini: str, data_fim: str) -> dict:
     """
     Retorna dict com cancelamentos por filial + total.
-    Ex: {"CONDOMINIO FRANCA": 123.45, "CALIFÓRNIA": 67.89, "_total": 191.34}
-    Seleciona cada filial individualmente e lê o LiteralFaturado.
+    Carrega todas as filiais de uma vez e lê a tabela do DOM — mais rápido e confiável.
     """
     logger.info(f"Buscando cancelamentos: {data_ini} -> {data_fim}")
     new_page = None
@@ -228,13 +227,13 @@ async def exportar_cancelamentos(page, data_ini: str, data_fim: str) -> dict:
 
         await new_page.goto(
             "https://pdvlegal.com.br/dashboard_vendas.aspx?tp=2",
-            wait_until="networkidle"
+            wait_until="domcontentloaded",
+            timeout=60000
         )
-        await new_page.wait_for_timeout(2000)
         await new_page.wait_for_function("typeof $ !== 'undefined'", timeout=10000)
-        await new_page.wait_for_timeout(500)
+        await new_page.wait_for_timeout(1000)
 
-        # Injeta datas no daterangepicker
+        # Injeta datas via daterangepicker API
         ini_d, ini_m, ini_y = data_ini.split("/")
         fim_d, fim_m, fim_y = data_fim.split("/")
         await new_page.evaluate(f"""
@@ -251,50 +250,79 @@ async def exportar_cancelamentos(page, data_ini: str, data_fim: str) -> dict:
         """)
         await new_page.wait_for_timeout(300)
 
-        # Descobre as filiais disponíveis no select
-        filiais_options = await new_page.evaluate("""
-            Array.from(document.querySelectorAll('#ContentPlaceHolder1_ddlfilial option'))
-                .map(o => ({value: o.value, text: o.text.trim()}))
+        # Garante todas as filiais selecionadas
+        await new_page.evaluate("""
+            var opts = Array.from(document.querySelectorAll('#ContentPlaceHolder1_ddlfilial option'))
+                           .map(o => o.value);
+            $('#ContentPlaceHolder1_ddlfilial').val(opts);
+            $('#ContentPlaceHolder1_ddlfilial').selectpicker('refresh');
         """)
-        logger.info(f"Cancelamentos — filiais encontradas: {filiais_options}")
+        await new_page.wait_for_timeout(300)
 
+        # Aguarda GetDadosProdutos disponível e filtra
         await new_page.wait_for_function("typeof GetDadosProdutos === 'function'", timeout=10000)
+        await new_page.evaluate("GetDadosProdutos();")
 
-        for opt in filiais_options:
-            filial_val  = opt["value"]
-            filial_nome = opt["text"]
+        # Aguarda tabela carregar com dados reais (até 10s)
+        try:
+            await new_page.wait_for_function(
+                "document.querySelectorAll('#gdvPaged tbody tr').length > 0 && "
+                "document.querySelector('#gdvPaged tbody tr td') && "
+                "document.querySelector('#gdvPaged tbody tr td').textContent.trim().length > 0",
+                timeout=10000
+            )
+        except Exception:
+            logger.warning("Cancelamentos — timeout aguardando tabela")
 
+        # Lê a tabela e soma por filial via JavaScript
+        dados = await new_page.evaluate(f"""
+            (function() {{
+                var iniDt = new Date({ini_y}, {int(ini_m)-1}, {ini_d});
+                var fimDt = new Date({fim_y}, {int(fim_m)-1}, {fim_d}, 23, 59, 59);
+                var rows  = document.querySelectorAll('#gdvPaged tbody tr');
+                var por_filial = {{}};
+                var total = 0;
+                rows.forEach(function(row) {{
+                    var cells = row.querySelectorAll('td');
+                    if (cells.length < 6) return;
+                    var dataStr = cells[0].textContent.trim().substring(0, 10);
+                    var p = dataStr.split('/');
+                    if (p.length < 3) return;
+                    var dt = new Date(parseInt(p[2]), parseInt(p[1])-1, parseInt(p[0]));
+                    if (dt < iniDt || dt > fimDt) return;
+                    var filial = cells[2].textContent.trim();
+                    var valStr = cells[5].textContent.trim().replace(/[.]/g,'').replace(',','.');
+                    var val = parseFloat(valStr);
+                    if (isNaN(val)) return;
+                    por_filial[filial] = (por_filial[filial] || 0) + val;
+                    total += val;
+                }});
+                return {{por_filial: por_filial, total: parseFloat(total.toFixed(2))}};
+            }})()
+        """)
+
+        resultado = dados.get("por_filial", {})
+        resultado["_total"] = dados.get("total", 0.0)
+
+        # Fallback: se tabela vazia, lê LiteralFaturado como total
+        if resultado["_total"] == 0:
+            val_str = await new_page.evaluate(
+                "document.getElementById('ContentPlaceHolder1_LiteralFaturado') ? "
+                "document.getElementById('ContentPlaceHolder1_LiteralFaturado').textContent.trim() : '0'"
+            )
             try:
-                # Seleciona apenas essa filial via selectpicker
-                await new_page.evaluate(f"""
-                    $('#ContentPlaceHolder1_ddlfilial').val(['{filial_val}']);
-                    $('#ContentPlaceHolder1_ddlfilial').selectpicker('refresh');
-                """)
-                await new_page.wait_for_timeout(300)
+                total_fb = float(val_str.replace(".", "").replace(",", ".")) if val_str not in ("0", "0,00", "") else 0.0
+                if total_fb > 0:
+                    resultado["_total"] = total_fb
+                    logger.info(f"Cancelamentos — fallback LiteralFaturado: R$ {total_fb:.2f}")
+            except ValueError:
+                pass
 
-                # Filtra
-                await new_page.evaluate("GetDadosProdutos();")
-                await new_page.wait_for_timeout(4000)
-
-                # Lê total cancelado
-                val_str = await new_page.evaluate(
-                    "document.getElementById('ContentPlaceHolder1_LiteralFaturado') ? "
-                    "document.getElementById('ContentPlaceHolder1_LiteralFaturado').textContent.trim() : '0'"
-                )
-                try:
-                    val = float(val_str.replace(".", "").replace(",", ".")) if val_str and val_str not in ("0", "0,00") else 0.0
-                except ValueError:
-                    val = 0.0
-
-                resultado[filial_nome] = val
-                logger.info(f"Cancelamentos — {filial_nome}: R$ {val:.2f}")
-
-            except Exception as e_filial:
-                logger.warning(f"Cancelamentos — erro na filial {filial_nome}: {e_filial}")
-                resultado[filial_nome] = 0.0
-
-        resultado["_total"] = sum(v for k, v in resultado.items() if not k.startswith("_"))
+        for k, v in resultado.items():
+            if not k.startswith("_"):
+                logger.info(f"Cancelamentos — {k}: R$ {v:.2f}")
         logger.info(f"Cancelamentos — total: R$ {resultado['_total']:.2f}")
+
         await new_page.close()
         return resultado
 
