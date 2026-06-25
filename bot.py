@@ -774,7 +774,12 @@ async def insight_ia(ctx: str, tema: str = "") -> str:
     try:
         client = anthropic.Anthropic(api_key=ANTHROPIC_KEY)
         prompt = (
-            f"Você é consultor de mercadinhos autônomos em condomínios no Brasil.\n"
+            f"Você é consultor de mercadinhos autônomos em condomínios no Brasil.\n\n"
+            f"Contexto importante: nesses mercados não há operador presente — o cliente "
+            f"escaneia e paga sozinho. Por isso cancelamentos (erro de operação, item não "
+            f"reconhecido, desistência) são NORMAIS e ESPERADOS nesse modelo. "
+            f"Só é motivo de alerta quando o cancelamento passa de 25% do faturamento. "
+            f"Abaixo de 25%, não trate como problema nem sugira investigar causas ou treinar equipe.\n\n"
             f"Dados: {ctx}\n\n"
             f"Tema: {tema}\n\n"
             f"Escreva exatamente 2 bullets curtos (máx 15 palavras cada). "
