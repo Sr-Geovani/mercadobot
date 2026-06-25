@@ -447,12 +447,19 @@ def bloco_faturamento(vendas: pd.DataFrame, produtos: pd.DataFrame = None, total
 
     pct_cancel = (cancel / (total + cancel) * 100) if (total + cancel) else 0
 
+    def _normaliza(s):
+        import unicodedata
+        s = unicodedata.normalize("NFKD", str(s)).encode("ascii", "ignore").decode("ascii")
+        return " ".join(s.upper().split())
+
     def cancel_filial(filial_nome):
+        nome_norm = _normaliza(filial_nome)
         # Primeiro tenta match direto pelo nome da filial no dict
         for k, v in cancel_dict.items():
             if k.startswith("_"):
                 continue
-            if filial_nome.upper() in k.upper() or k.upper() in filial_nome.upper():
+            k_norm = _normaliza(k)
+            if nome_norm in k_norm or k_norm in nome_norm:
                 return v
         # Fallback proporcional pelo ValorItensCancelados
         if "ValorItensCancelados" not in vendas.columns or cancel == 0:

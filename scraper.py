@@ -263,16 +263,33 @@ async def exportar_cancelamentos(page, data_ini: str, data_fim: str) -> dict:
         await new_page.wait_for_function("typeof GetDadosProdutos === 'function'", timeout=10000)
         await new_page.evaluate("GetDadosProdutos();")
 
-        # Aguarda tabela carregar com dados reais (até 10s)
+        # Aguarda tabela carregar com dados reais (até 6s — reduzido pois pode legitimamente estar vazia)
+        tabela_tem_dados = True
         try:
             await new_page.wait_for_function(
                 "document.querySelectorAll('#gdvPaged tbody tr').length > 0 && "
                 "document.querySelector('#gdvPaged tbody tr td') && "
                 "document.querySelector('#gdvPaged tbody tr td').textContent.trim().length > 0",
-                timeout=10000
+                timeout=6000
             )
         except Exception:
-            logger.warning("Cancelamentos — timeout aguardando tabela")
+            tabela_tem_dados = False
+
+        if not tabela_tem_dados:
+            # Diagnóstico: confirma se é "sem cancelamentos" ou erro real
+            diag = await new_page.evaluate("""
+                (function() {
+                    var faturado = document.getElementById('ContentPlaceHolder1_LiteralFaturado');
+                    var nrows = document.querySelectorAll('#gdvPaged tbody tr').length;
+                    var msgVazio = document.body.innerText.includes('Nenhuma') || document.body.innerText.includes('nenhum');
+                    return {
+                        literal_faturado: faturado ? faturado.textContent.trim() : null,
+                        n_rows: nrows,
+                        tem_msg_vazio: msgVazio
+                    };
+                })()
+            """)
+            logger.info(f"Cancelamentos — tabela vazia, diagnóstico: {diag}")
 
         # Lê a tabela e soma por filial via JavaScript
         dados = await new_page.evaluate(f"""
