@@ -1240,8 +1240,8 @@ async def comando_alertas(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cancel = vendas["ValorItensCancelados"].sum()
     total  = vendas["valor"].sum()
     pct    = cancel / total * 100 if total > 0 else 0
-    if pct > 10:
-        linhas.append(f"⚠️ Cancelamentos em {b(f'{pct:.1f}%')} do faturamento — acima do ideal (10%)")
+    if pct > 25:
+        linhas.append(f"⚠️ Cancelamentos em {b(f'{pct:.1f}%')} do faturamento — acima do ideal (25%)")
         linhas.append(f"   Valor: {c(f'R$ {cancel:,.2f}')}\n")
 
     sem = vendas.copy()

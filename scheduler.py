@@ -408,7 +408,7 @@ async def enviar_parcial_dia():
             # Verifica cancelamentos
             cancel_total = total_cancel.get("_total", 0) if isinstance(total_cancel, dict) else float(total_cancel or 0)
             pct_cancel   = (cancel_total / (total + cancel_total) * 100) if (total + cancel_total) > 0 else 0
-            alerta_cancel = pct_cancel > 10
+            alerta_cancel = pct_cancel > 25
 
             # Só envia se houver algo relevante — senão silêncio (atualiza dados_usuario por baixo)
             if not alerta_cancel:
@@ -426,7 +426,7 @@ async def enviar_parcial_dia():
             # Cancelamentos por filial
             cancel_txt = ""
             if alerta_cancel:
-                cancel_txt = f"\n\n⚠️ <b>Cancelamentos: R$ {cancel_total:.2f} ({pct_cancel:.1f}%)</b> — acima de 10%"
+                cancel_txt = f"\n\n⚠️ <b>Cancelamentos: R$ {cancel_total:.2f} ({pct_cancel:.1f}%)</b> — acima de 25%"
                 if isinstance(total_cancel, dict):
                     linhas_c = [f"  • {f.title()}: R$ {v:.2f}" for f, v in total_cancel.items() if not f.startswith("_") and v > 0]
                     if linhas_c:
@@ -505,7 +505,7 @@ async def enviar_alertas_proativos(modo: str = "completo"):
             if modo == "completo":
                 cancel = vendas["ValorItensCancelados"].sum() if "ValorItensCancelados" in vendas.columns else 0
                 total  = vendas["valor"].sum()
-                if total > 0 and cancel > 0 and (cancel / total) > 0.10:
+                if total > 0 and cancel > 0 and (cancel / total) > 0.25:
                     detalhe_filiais = ""
                     if isinstance(total_cancel, dict):
                         linhas_filial = []
@@ -518,7 +518,7 @@ async def enviar_alertas_proativos(modo: str = "completo"):
                     alertas.append(
                         f"⚠️ <b>Cancelamentos acima do limite</b>\n"
                         f"Total: R$ {cancel:.2f} ({cancel/total*100:.1f}% do faturamento){detalhe_filiais}\n"
-                        f"Limite saudável: até 10%."
+                        f"Limite saudável: até 25%."
                     )
 
             # Alerta zero vendas — todos os modos
