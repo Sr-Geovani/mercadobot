@@ -474,7 +474,7 @@ async def enviar_fechamento_semanal():
             from bot import (normalizar_vendas, normalizar_produtos,
                              bloco_faturamento, bloco_comparativo,
                              bloco_produto_mes, bloco_score,
-                             bloco_projecao_mes, kb_menu, b)
+                             bloco_projecao_mes, kb_menu, b, i)
 
             vendas   = normalizar_vendas(vendas)
             produtos = normalizar_produtos(produtos)
@@ -502,6 +502,34 @@ async def enviar_fechamento_semanal():
             projecao = bloco_projecao_mes(vendas)
             if projecao:
                 await bot.send_message(chat_id=chat_id, text=projecao, parse_mode="HTML")
+
+            # Sugestão de aumento de preço por alto giro (oportunidade de margem)
+            try:
+                from padroes import sugerir_aumento_preco_alto_giro
+                sugestoes_preco = sugerir_aumento_preco_alto_giro(produtos, top_n=5, giro_minimo=30)
+                if sugestoes_preco:
+                    linhas = [f"💰 {b('Oportunidade de margem — produtos de alto giro')}\n"]
+                    linhas.append(
+                        "Estes são seus produtos que mais saem. Por venderem muito, "
+                        "costumam aguentar um pequeno reajuste sem perder cliente — "
+                        "vale avaliar:\n"
+                    )
+                    for s in sugestoes_preco:
+                        linhas.append(
+                            f"• {b(s['produto'])}\n"
+                            f"   {s['quantidade_vendida']} un. na semana · "
+                            f"hoje R$ {s['preco_medio_atual']:.2f}\n"
+                            f"   Testar R$ {s['novo_preco_sugerido_5pct']:.2f} (+5%) "
+                            f"a R$ {s['novo_preco_sugerido_8pct']:.2f} (+8%)"
+                        )
+                    linhas.append(
+                        f"\n{i('Sugestão para avaliação — considere seu custo e a concorrência local antes de reajustar.')}"
+                    )
+                    await bot.send_message(
+                        chat_id=chat_id, text="\n".join(linhas), parse_mode="HTML"
+                    )
+            except Exception as e:
+                logger.warning(f"Erro ao gerar sugestão de preço para {chat_id}: {e}")
 
             await bot.send_message(
                 chat_id=chat_id,

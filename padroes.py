@@ -241,3 +241,50 @@ async def consolidar_fatos_cliente(chat_id: int, vendas, produtos=None):
                 await salvar_fato_cliente(chat_id, "produto", "campeao", str(campeao.index[0]))
         except Exception as e:
             logger.warning(f"Erro ao consolidar produto campeão para {chat_id}: {e}")
+
+
+def sugerir_aumento_preco_alto_giro(produtos, top_n: int = 5, giro_minimo: int = 30) -> list[dict]:
+    """
+    Identifica produtos de ALTO GIRO (mais vendidos em quantidade) como
+    candidatos a um pequeno aumento de preço para ganho de margem.
+
+    IMPORTANTE — limite de honestidade: o PDV Legal nos dá preço de venda e
+    quantidade, mas NÃO o custo de compra. Portanto NÃO calculamos margem
+    real. A lógica é: produtos de altíssimo giro costumam ter baixa
+    sensibilidade a preço (o cliente compra de qualquer jeito), então um
+    reajuste pequeno tende a passar despercebido e cair direto na margem.
+    A sugestão é sempre para o operador AVALIAR, nunca uma ordem — ele conhece
+    o custo e a concorrência local, nós não.
+
+    Retorna lista de dicts com produto, quantidade vendida e preço médio
+    praticado, ordenada por giro. Só inclui produtos acima de giro_minimo
+    para não sugerir reajuste em item de baixo volume (onde o ganho seria
+    irrelevante e o risco de perder o cliente, maior).
+    """
+    if produtos is None or len(produtos) == 0 or "produto" not in produtos.columns:
+        return []
+
+    df = produtos.groupby("produto").agg(
+        quantidade=("quantidade", "sum"),
+        valor_total=("valor", "sum"),
+    )
+    df = df[df["quantidade"] >= giro_minimo]
+    if len(df) == 0:
+        return []
+
+    df["preco_medio"] = (df["valor_total"] / df["quantidade"]).round(2)
+    df = df.sort_values("quantidade", ascending=False).head(top_n)
+
+    sugestoes = []
+    for nome, row in df.iterrows():
+        preco = float(row["preco_medio"])
+        # Sugere uma faixa conservadora de reajuste (5% a 8%)
+        sugestoes.append({
+            "produto": str(nome),
+            "quantidade_vendida": int(row["quantidade"]),
+            "preco_medio_atual": preco,
+            "novo_preco_sugerido_5pct": round(preco * 1.05, 2),
+            "novo_preco_sugerido_8pct": round(preco * 1.08, 2),
+            "ganho_mensal_estimado_5pct": round(preco * 0.05 * int(row["quantidade"]), 2),
+        })
+    return sugestoes

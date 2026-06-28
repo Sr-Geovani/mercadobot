@@ -198,6 +198,27 @@ async def exportar_produtos(page, data_ini: str, data_fim: str) -> Path:
     await page.click("#btnFiltro")
     await page.wait_for_timeout(3000)
 
+    # Verificação de segurança: confirma que o período realmente aplicado na
+    # tela bate com o solicitado, antes de baixar o Excel. Sem isso, uma falha
+    # silenciosa no datepicker (especialmente no caminho de Intervalo
+    # customizado) geraria um relatório de período errado sem ninguém perceber
+    # — era uma causa provável de "reposição não respeitar o período".
+    try:
+        periodo_exibido = await page.evaluate(
+            "document.querySelector('#reportrange span') ? "
+            "document.querySelector('#reportrange span').textContent.trim() : ''"
+        )
+        esperado = f"{data_ini} - {data_fim}"
+        if periodo_exibido and periodo_exibido != esperado:
+            logger.warning(
+                f"Produtos — período exibido '{periodo_exibido}' difere do solicitado "
+                f"'{esperado}'. O relatório pode sair com o período errado."
+            )
+        else:
+            logger.info(f"Produtos — período confirmado na tela: {periodo_exibido}")
+    except Exception as e:
+        logger.warning(f"Produtos — não foi possível verificar período exibido: {e}")
+
     # Abre modal de download
     await page.click("#imgDownload")
     await page.wait_for_timeout(1000)
@@ -346,22 +367,19 @@ async def exportar_cancelamentos(page, data_ini: str, data_fim: str) -> dict:
             """)
             logger.info(f"Cancelamentos — tabela vazia, diagnóstico: {diag}")
 
-        # Lê a tabela e soma por filial via JavaScript
+        # Lê a tabela e soma por filial via JavaScript.
+        # NÃO filtramos por data aqui — o servidor já aplicou o período via
+        # daterangepicker + GetDadosProdutos. Filtrar de novo no JS, linha a
+        # linha, arriscava descartar linhas válidas por divergência de parsing
+        # de data (era uma das causas do "desvio para menos").
         dados = await new_page.evaluate(f"""
             (function() {{
-                var iniDt = new Date({ini_y}, {int(ini_m)-1}, {ini_d});
-                var fimDt = new Date({fim_y}, {int(fim_m)-1}, {fim_d}, 23, 59, 59);
                 var rows  = document.querySelectorAll('#gdvPaged tbody tr');
                 var por_filial = {{}};
                 var total = 0;
                 rows.forEach(function(row) {{
                     var cells = row.querySelectorAll('td');
                     if (cells.length < 6) return;
-                    var dataStr = cells[0].textContent.trim().substring(0, 10);
-                    var p = dataStr.split('/');
-                    if (p.length < 3) return;
-                    var dt = new Date(parseInt(p[2]), parseInt(p[1])-1, parseInt(p[0]));
-                    if (dt < iniDt || dt > fimDt) return;
                     var filial = cells[2].textContent.trim();
                     var valStr = cells[5].textContent.trim().replace(/[.]/g,'').replace(',','.');
                     var val = parseFloat(valStr);
@@ -374,9 +392,56 @@ async def exportar_cancelamentos(page, data_ini: str, data_fim: str) -> dict:
         """)
 
         resultado = dados.get("por_filial", {})
-        resultado["_total"] = dados.get("total", 0.0)
+        soma_tabela = dados.get("total", 0.0)
 
-        # Fallback: se tabela vazia, lê LiteralFaturado como total
+        # FONTE DA VERDADE DO TOTAL: o card "Total cancelado" do PDV Legal, que
+        # já vem agregado pelo próprio sistema — não está sujeito a paginação,
+        # parsing de data linha-a-linha ou truncamento. A soma manual da tabela
+        # (soma_tabela) é usada só para DISTRIBUIR o total por filial.
+        # Esta era a abordagem original que funcionava; a soma manual sozinha
+        # estava dando "desvio para menos" em períodos longos.
+        total_oficial = await new_page.evaluate("""
+            (function() {
+                var cards = document.querySelectorAll('.info-box-number');
+                for (var c of cards) {
+                    var box = c.closest('.info-box');
+                    var label = box ? box.querySelector('.info-box-text') : null;
+                    if (label && label.textContent.toLowerCase().includes('cancelad')) {
+                        return c.textContent.trim();
+                    }
+                }
+                return null;
+            })()
+        """)
+
+        total_card = None
+        if total_oficial:
+            try:
+                limpo = total_oficial.replace("R$", "").replace(".", "").replace(",", ".").strip()
+                total_card = float(limpo) if limpo else None
+            except ValueError:
+                total_card = None
+
+        if total_card is not None and total_card > 0:
+            # Usa o total oficial do card. Se a soma da tabela bate (mesma base),
+            # mantém a distribuição por filial como está. Se diverge, ajusta a
+            # distribuição proporcionalmente para somar o total oficial.
+            if soma_tabela > 0 and abs(soma_tabela - total_card) > 0.01:
+                fator = total_card / soma_tabela
+                for k in list(resultado.keys()):
+                    resultado[k] = round(resultado[k] * fator, 2)
+                logger.info(
+                    f"Cancelamentos — soma da tabela (R$ {soma_tabela:.2f}) divergiu do "
+                    f"total oficial do card (R$ {total_card:.2f}); distribuição por filial "
+                    f"ajustada proporcionalmente (fator {fator:.4f})."
+                )
+            resultado["_total"] = round(total_card, 2)
+        else:
+            # Sem card oficial — cai na soma manual da tabela (melhor que nada)
+            resultado["_total"] = round(soma_tabela, 2)
+            logger.info("Cancelamentos — card oficial não encontrado, usando soma manual da tabela.")
+
+        # Fallback final: se ainda zero, tenta LiteralFaturado
         if resultado["_total"] == 0:
             val_str = await new_page.evaluate(
                 "document.getElementById('ContentPlaceHolder1_LiteralFaturado') ? "

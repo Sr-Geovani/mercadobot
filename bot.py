@@ -841,6 +841,7 @@ def kb_menu(periodo_label: str = ""):
          InlineKeyboardButton("⭐ Score Saúde",   callback_data="score")],
         [InlineKeyboardButton("🔍 Padrões da Operação", callback_data="agente_padroes"),
          InlineKeyboardButton("💬 Pergunte à IA",        callback_data="agente_ajuda")],
+        [InlineKeyboardButton("💡 Oportunidades de Mix", callback_data="agente_oportunidades")],
         [InlineKeyboardButton("🛒 Lista de Reposição",  callback_data="reposicao")],
         [InlineKeyboardButton(btn_periodo,               callback_data="atualizar_menu")],
     ])
@@ -2158,6 +2159,16 @@ async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"Pode escrever sua pergunta agora 👇",
             parse_mode="HTML"
         )
+        return
+
+    if acao == "agente_oportunidades":
+        from agente import processar_mensagem_agente
+        await msg.reply_text("💡 Procurando oportunidades de novos produtos para o seu mix...")
+        resposta = await processar_mensagem_agente(
+            chat_id, "Quais produtos vendem bem em outros mercadinhos que eu ainda não tenho no meu mix?"
+        )
+        await enviar(msg, resposta)
+        await abrir_menu(msg, chat_id)
         return
 
     if acao == "confirmar_cancelamento":
