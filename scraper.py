@@ -373,52 +373,16 @@ async def exportar_cancelamentos(page, data_ini: str, data_fim: str) -> dict:
         except Exception:
             tabela_tem_dados = False
 
-        # Soma a tabela de forma ACUMULATIVA por página. Isso é robusto tanto
-        # se o botão "Mais" ANEXA linhas quanto se SUBSTITUI a página: somamos
-        # cada bloco de linhas conforme carrega, usando um identificador de
-        # linha para não contar a mesma linha duas vezes (dedup por conteúdo).
+        # Estratégia: o botão "Mais" (GetRecords) ANEXA linhas à tabela —
+        # ela cresce a cada clique. Então primeiro carregamos TODAS as páginas
+        # (clicando em "Mais" até ele sumir), e só depois lemos a tabela
+        # inteira de uma vez, somando TODAS as linhas SEM deduplicação.
+        # IMPORTANTE: não deduplica por conteúdo — dois cancelamentos legítimos
+        # podem ser idênticos (mesma data/filial/valor/produto), e descartá-los
+        # como "duplicata" fazia o total vir a menos em períodos longos (bug
+        # que aparecia a partir de ~15 dias, quando há mais linhas repetidas).
         if tabela_tem_dados:
-            max_paginas = 50  # ampliado: períodos longos podem ter muitas páginas
-            vistos = set()
-            por_filial_acc = {}
-            total_acc = 0.0
-
-            async def somar_pagina_atual():
-                nonlocal total_acc
-                linhas = await new_page.evaluate("""
-                    (function() {
-                        var rows = document.querySelectorAll('#gdvPaged tbody tr');
-                        var out = [];
-                        rows.forEach(function(row) {
-                            var cells = row.querySelectorAll('td');
-                            if (cells.length < 6) return;
-                            out.push({
-                                chave: row.textContent.trim(),
-                                filial: cells[2].textContent.trim(),
-                                valStr: cells[5].textContent.trim()
-                            });
-                        });
-                        return out;
-                    })()
-                """)
-                for ln in linhas:
-                    if ln["chave"] in vistos:
-                        continue
-                    vistos.add(ln["chave"])
-                    try:
-                        val = float(ln["valStr"].replace(".", "").replace(",", "."))
-                    except ValueError:
-                        continue
-                    if val <= 0:
-                        continue
-                    fil = ln["filial"]
-                    por_filial_acc[fil] = por_filial_acc.get(fil, 0.0) + val
-                    total_acc += val
-
-            # Soma a primeira página
-            await somar_pagina_atual()
-
-            # Pagina e soma cada bloco novo
+            max_paginas = 100  # rede de segurança contra loop infinito
             for pagina in range(max_paginas):
                 tem_botao_mais = await new_page.evaluate("""
                     (function() {
@@ -430,18 +394,48 @@ async def exportar_cancelamentos(page, data_ini: str, data_fim: str) -> dict:
                 """)
                 if not tem_botao_mais:
                     break
-                n_antes = len(vistos)
+
+                n_antes = await new_page.evaluate(
+                    "document.querySelectorAll('#gdvPaged tbody tr').length"
+                )
                 await new_page.evaluate("if (typeof GetRecords === 'function') GetRecords();")
-                await new_page.wait_for_timeout(1200)
-                await somar_pagina_atual()
-                if len(vistos) == n_antes:
-                    logger.info(f"Cancelamentos — paginação parou na página {pagina + 1} (sem linhas novas)")
+                # Aguarda a tabela crescer (novas linhas anexadas)
+                try:
+                    await new_page.wait_for_function(
+                        f"document.querySelectorAll('#gdvPaged tbody tr').length > {n_antes}",
+                        timeout=8000
+                    )
+                except Exception:
+                    logger.info(f"Cancelamentos — paginação parou na página {pagina + 1} (sem novas linhas)")
                     break
             else:
                 logger.warning(f"Cancelamentos — atingiu limite de {max_paginas} páginas")
 
-            logger.info(f"Cancelamentos — {len(vistos)} linhas únicas somadas, total R$ {total_acc:.2f}")
-            dados = {"por_filial": por_filial_acc, "total": round(total_acc, 2)}
+            # Agora soma a tabela COMPLETA de uma vez, todas as linhas, sem dedup
+            dados = await new_page.evaluate("""
+                (function() {
+                    var rows = document.querySelectorAll('#gdvPaged tbody tr');
+                    var por_filial = {};
+                    var total = 0;
+                    var n = 0;
+                    rows.forEach(function(row) {
+                        var cells = row.querySelectorAll('td');
+                        if (cells.length < 6) return;
+                        var filial = cells[2].textContent.trim();
+                        var valStr = cells[5].textContent.trim().replace(/[.]/g,'').replace(',','.');
+                        var val = parseFloat(valStr);
+                        if (isNaN(val) || val <= 0) return;
+                        por_filial[filial] = (por_filial[filial] || 0) + val;
+                        total += val;
+                        n += 1;
+                    });
+                    return {por_filial: por_filial, total: parseFloat(total.toFixed(2)), n_linhas: n};
+                })()
+            """)
+            logger.info(
+                f"Cancelamentos — {dados.get('n_linhas', 0)} linhas somadas (sem dedup), "
+                f"total R$ {dados.get('total', 0.0):.2f}"
+            )
         else:
             dados = {"por_filial": {}, "total": 0.0}
 
