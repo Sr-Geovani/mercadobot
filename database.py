@@ -53,6 +53,9 @@ async def inicializar_banco():
             ("nome_mercadinho",     "TEXT"),
             ("assinatura_asaas_id", "TEXT"),
             ("trial_usado",         "BOOLEAN DEFAULT FALSE"),
+            ("telefone",            "TEXT"),
+            ("cep",                 "TEXT"),
+            ("endereco_numero",     "TEXT"),
         ]:
             try:
                 await conn.execute(f"ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS {col} {tipo}")

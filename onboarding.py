@@ -17,6 +17,9 @@ AGUARDA_CPF             = 3
 AGUARDA_NOME_MERCADINHO = 4
 AGUARDA_NOVO_PDV_EMAIL  = 5
 AGUARDA_NOVO_PDV_SENHA  = 6
+AGUARDA_TELEFONE        = 7
+AGUARDA_CEP             = 8
+AGUARDA_NUMERO_ENDERECO = 9
 
 def b(t): return f"<b>{t}</b>"
 def i(t): return f"<i>{t}</i>"
@@ -194,6 +197,58 @@ async def receber_cpf(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(
         f"✅ Documento registrado.\n\n"
+        f"📱 Agora preciso do seu {b('telefone com DDD')} (exigido pela plataforma de pagamentos):\n\n"
+        f"Exemplo: 11987654321",
+        parse_mode="HTML"
+    )
+    return AGUARDA_TELEFONE
+
+
+async def receber_telefone(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    telefone = "".join(filter(str.isdigit, update.message.text.strip()))
+
+    if len(telefone) not in (10, 11):
+        await update.message.reply_text(
+            "⚠️ Telefone inválido. Digite com DDD, só números (ex: 11987654321):"
+        )
+        return AGUARDA_TELEFONE
+
+    context.user_data["telefone"] = telefone
+
+    await update.message.reply_text(
+        f"✅ Telefone registrado.\n\n"
+        f"📍 Por último, informe seu {b('CEP')} (só números) para o endereço de cobrança:\n\n"
+        f"Exemplo: 89223005",
+        parse_mode="HTML"
+    )
+    return AGUARDA_CEP
+
+
+async def receber_cep(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    cep = "".join(filter(str.isdigit, update.message.text.strip()))
+
+    if len(cep) != 8:
+        await update.message.reply_text(
+            "⚠️ CEP inválido. Digite só os 8 números (ex: 89223005):"
+        )
+        return AGUARDA_CEP
+
+    context.user_data["cep"] = cep
+
+    await update.message.reply_text(
+        f"✅ CEP registrado.\n\n"
+        f"🏠 Agora o {b('número')} do seu endereço:",
+        parse_mode="HTML"
+    )
+    return AGUARDA_NUMERO_ENDERECO
+
+
+async def receber_numero_endereco(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    numero = update.message.text.strip()
+    context.user_data["endereco_numero"] = numero
+
+    await update.message.reply_text(
+        f"✅ Endereço registrado.\n\n"
         f"🔐 {b('Sobre a segurança das suas credenciais:')}\n\n"
         f"Sua senha é usada {b('exclusivamente')} para acessar o PDV Legal e baixar seus relatórios automaticamente.\n\n"
         f"• Não compartilhamos suas credenciais com terceiros\n"
@@ -213,6 +268,9 @@ async def receber_pdv_senha(update: Update, context: ContextTypes.DEFAULT_TYPE):
     pdv_email         = context.user_data["pdv_email"]
     cpf               = context.user_data.get("cpf", "")
     nome_mercadinho   = context.user_data.get("nome_mercadinho", "")
+    telefone          = context.user_data.get("telefone", "")
+    cep               = context.user_data.get("cep", "")
+    endereco_numero   = context.user_data.get("endereco_numero", "")
     pdv_senha         = update.message.text.strip()
     ja_tem_acesso     = context.user_data.get("ja_tem_acesso", False)
 
@@ -269,11 +327,26 @@ async def receber_pdv_senha(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pdv_email=pdv_email,
             pdv_senha=pdv_senha,
             nome_mercadinho=nome_mercadinho,
+            telefone=telefone,
+            cep=cep,
+            endereco_numero=endereco_numero,
             status="pendente"
         )
 
-        cliente  = await criar_cliente_asaas(nome, pdv_email, cpf, nome_mercadinho)
+        cliente  = await criar_cliente_asaas(
+            nome, pdv_email, cpf, nome_mercadinho,
+            telefone=telefone, cep=cep, endereco_numero=endereco_numero
+        )
         asaas_id = cliente.get("id")
+        if not asaas_id:
+            logger.error(f"Falha ao criar cliente Asaas para {chat_id}: {cliente}")
+            await update.message.reply_text(
+                f"⚠️ {b('Não consegui finalizar seu cadastro de pagamento.')}\n\n"
+                f"Houve um problema com os dados informados. "
+                f"Use /start para tentar novamente, revisando CPF, telefone e CEP.",
+                parse_mode="HTML"
+            )
+            return ConversationHandler.END
         await atualizar_usuario(chat_id, asaas_id=asaas_id)
 
         # Verifica se já tem assinatura ativa no Asaas (reativação)
@@ -475,6 +548,9 @@ def conversation_handler():
             AGUARDA_PDV_EMAIL:       [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_pdv_email)],
             AGUARDA_NOME_MERCADINHO: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_nome_mercadinho)],
             AGUARDA_CPF:             [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_cpf)],
+            AGUARDA_TELEFONE:        [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_telefone)],
+            AGUARDA_CEP:             [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_cep)],
+            AGUARDA_NUMERO_ENDERECO: [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_numero_endereco)],
             AGUARDA_PDV_SENHA:       [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_pdv_senha)],
             AGUARDA_NOVO_PDV_EMAIL:  [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_novo_pdv_email)],
             AGUARDA_NOVO_PDV_SENHA:  [MessageHandler(filters.TEXT & ~filters.COMMAND, receber_novo_pdv_senha)],

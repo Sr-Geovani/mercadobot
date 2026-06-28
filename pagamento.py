@@ -39,8 +39,19 @@ async def buscar_cliente_por_email(email: str) -> dict | None:
         return clientes[0] if clientes else None
 
 
-async def criar_cliente_asaas(nome: str, email: str, cpf: str = None, empresa: str = None) -> dict:
-    """Cria ou busca cliente no Asaas, atualizando CPF e empresa se necessário."""
+async def criar_cliente_asaas(nome: str, email: str, cpf: str = None, empresa: str = None,
+                               telefone: str = None, cep: str = None,
+                               endereco_numero: str = None) -> dict:
+    """
+    Cria ou busca cliente no Asaas, atualizando CPF, empresa, telefone e endereço.
+
+    telefone, cep e endereco_numero são necessários para o Checkout de cartão de
+    crédito recorrente — sem eles o Asaas rejeita a criação do checkout com
+    invalid_object (phone, cpfCnpj, address, addressNumber, postalCode, etc).
+
+    Quando postalCode é informado, o Asaas preenche automaticamente province e
+    city com base no CEP, então não precisamos coletar tudo manualmente.
+    """
     async with httpx.AsyncClient() as client:
         resp = await client.get(
             f"{ASAAS_URL}/customers",
@@ -57,6 +68,13 @@ async def criar_cliente_asaas(nome: str, email: str, cpf: str = None, empresa: s
                 update_payload["cpfCnpj"] = cpf
             if empresa and not cliente.get("company"):
                 update_payload["company"] = empresa
+            if telefone and not cliente.get("mobilePhone"):
+                update_payload["mobilePhone"] = telefone
+                update_payload["phone"] = telefone
+            if cep and not cliente.get("postalCode"):
+                update_payload["postalCode"] = cep
+            if endereco_numero and not cliente.get("addressNumber"):
+                update_payload["addressNumber"] = endereco_numero
             if update_payload:
                 await client.put(
                     f"{ASAAS_URL}/customers/{cliente['id']}",
@@ -64,6 +82,7 @@ async def criar_cliente_asaas(nome: str, email: str, cpf: str = None, empresa: s
                     headers=_headers()
                 )
                 logger.info(f"Cliente atualizado: {update_payload}")
+                cliente.update(update_payload)
             return cliente
 
         payload = {"name": nome, "email": email}
@@ -71,6 +90,13 @@ async def criar_cliente_asaas(nome: str, email: str, cpf: str = None, empresa: s
             payload["cpfCnpj"] = cpf
         if empresa:
             payload["company"] = empresa
+        if telefone:
+            payload["mobilePhone"] = telefone
+            payload["phone"] = telefone
+        if cep:
+            payload["postalCode"] = cep
+        if endereco_numero:
+            payload["addressNumber"] = endereco_numero
 
         resp = await client.post(
             f"{ASAAS_URL}/customers",
@@ -78,7 +104,10 @@ async def criar_cliente_asaas(nome: str, email: str, cpf: str = None, empresa: s
             headers=_headers()
         )
         cliente = resp.json()
-        logger.info(f"Cliente criado no Asaas: {cliente.get('id')}")
+        if cliente.get("errors"):
+            logger.error(f"Erro ao criar cliente no Asaas: {cliente.get('errors')}")
+        else:
+            logger.info(f"Cliente criado no Asaas: {cliente.get('id')}")
         return cliente
 
 
