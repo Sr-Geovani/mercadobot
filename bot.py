@@ -800,6 +800,7 @@ async def insight_ia(ctx: str, tema: str = "") -> str:
 async def configurar_menu(app):
     cmds = [
         BotCommand("start",      "Início e instruções"),
+        BotCommand("perguntar",  "💬 Perguntar à IA"),
         BotCommand("briefing",   "📊 Briefing completo"),
         BotCommand("produtos",   "📦 Top produtos"),
         BotCommand("categorias", "🗂 Receita por categoria"),
@@ -1627,12 +1628,36 @@ async def mensagem_livre(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await _continuar_reativacao(update.message, chat_id, usuario)
         return
 
-    # ─── Mensagem livre normal ────────────────────────────────
-    ctx = resumo_dados(chat_id)
+    # ─── Mensagem livre normal — agora processada pelo agente conversacional ──
+    from agente import processar_mensagem_agente
     await update.message.reply_text("⏳ Pensando...")
-    insight = await insight_ia(ctx, texto)
-    await enviar(update.message, insight)
+    resposta = await processar_mensagem_agente(chat_id, texto)
+    await enviar(update.message, resposta)
     await abrir_menu(update.message, update.effective_chat.id)
+
+async def cmd_perguntar_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Comando dedicado para o agente conversacional — /perguntar <pergunta>."""
+    chat_id = update.effective_chat.id
+    texto   = " ".join(context.args).strip() if context.args else ""
+
+    if not texto:
+        await update.message.reply_text(
+            f"💬 {b('Pergunte qualquer coisa sobre o seu negócio')}\n\n"
+            f"Exemplos:\n"
+            f"• /perguntar quanto vendi hoje?\n"
+            f"• /perguntar como foi o faturamento da semana?\n"
+            f"• /perguntar qual filial vendeu mais ontem?\n\n"
+            f"Ou apenas escreva sua pergunta direto no chat, sem precisar do comando.",
+            parse_mode="HTML"
+        )
+        return
+
+    from agente import processar_mensagem_agente
+    await update.message.reply_text("⏳ Pensando...")
+    resposta = await processar_mensagem_agente(chat_id, texto)
+    await enviar(update.message, resposta)
+    await abrir_menu(update.message, chat_id)
+
 
 async def cmd_status_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     from onboarding import cmd_status
@@ -2483,6 +2508,7 @@ def main():
     app.add_handler(CommandHandler("score",       exige_acesso(comando_score)))
     app.add_handler(CommandHandler("produto_mes", exige_acesso(comando_produto_mes)))
     app.add_handler(CommandHandler("giro",        exige_acesso(comando_giro)))
+    app.add_handler(CommandHandler("perguntar",   exige_acesso(cmd_perguntar_handler)))
     # Comandos sempre liberados, independente de status de assinatura:
     # admin (tem seu próprio gate via is_admin), status, reativar, cancelar
     # e configuracoes (precisa funcionar para o usuário corrigir credenciais

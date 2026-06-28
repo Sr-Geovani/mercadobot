@@ -1,0 +1,258 @@
+"""
+agente.py — Agente conversacional com tool-use (function calling).
+
+Arquitetura: o usuário manda uma mensagem livre (texto, e futuramente
+áudio/foto). O Claude recebe a mensagem + uma lista de "ferramentas"
+(funções Python já existentes no bot, reaproveitadas, não reescritas) e
+decide sozinho se/quais ferramentas chamar para responder.
+
+Este módulo NÃO substitui os botões existentes — é uma camada nova e
+paralela, acionada só quando o usuário escreve uma pergunta livre.
+
+Fluxo de uma chamada:
+  1. Usuário pergunta: "quanto vendi ontem?"
+  2. Claude analisa a pergunta + as tools disponíveis
+  3. Claude decide chamar a tool "buscar_faturamento" com data_ini/data_fim
+  4. Nós executamos essa função Python de verdade (scraper real)
+  5. Devolvemos o resultado pro Claude
+  6. Claude formula a resposta final em linguagem natural
+"""
+import logging
+import os
+import json
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
+
+import anthropic
+
+logger   = logging.getLogger(__name__)
+BRASILIA = ZoneInfo("America/Sao_Paulo")
+ANTHROPIC_KEY = os.environ.get("ANTHROPIC_KEY")
+
+MODEL = "claude-sonnet-4-5"
+
+# ─── DEFINIÇÃO DAS FERRAMENTAS (formato esperado pela API da Anthropic) ────
+# Cada tool tem um nome, descrição (que ajuda o Claude a decidir quando usá-la)
+# e um schema dos parâmetros que ela aceita.
+TOOLS = [
+    {
+        "name": "buscar_faturamento",
+        "description": (
+            "Busca o faturamento e vendas de um mercadinho autônomo em um período "
+            "específico, conectando diretamente ao PDV Legal (dados reais e atualizados, "
+            "não estimativas). Use esta ferramenta sempre que o usuário perguntar sobre "
+            "vendas, faturamento, quanto vendeu, receita, ticket médio, número de "
+            "transações ou cancelamentos em um período (hoje, ontem, esta semana, "
+            "este mês, ou um intervalo de datas específico)."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "data_ini": {
+                    "type": "string",
+                    "description": "Data inicial do período no formato DD/MM/AAAA.",
+                },
+                "data_fim": {
+                    "type": "string",
+                    "description": "Data final do período no formato DD/MM/AAAA.",
+                },
+                "descricao_periodo": {
+                    "type": "string",
+                    "description": "Descrição curta e amigável do período em português, ex: 'hoje', 'ontem', 'esta semana'. Usada só para exibição.",
+                },
+            },
+            "required": ["data_ini", "data_fim", "descricao_periodo"],
+        },
+    },
+]
+
+
+def _resolver_periodo_relativo(texto_periodo: str) -> tuple[str, str] | None:
+    """
+    Resolve expressões relativas comuns ('hoje', 'ontem', 'esta semana', 'este mês')
+    para datas DD/MM/AAAA. Retorna None se não reconhecer — nesse caso o próprio
+    Claude já deve ter calculado e enviado data_ini/data_fim diretamente.
+    """
+    agora = datetime.now(BRASILIA)
+    texto = texto_periodo.lower().strip()
+
+    if texto in ("hoje",):
+        d = agora.strftime("%d/%m/%Y")
+        return d, d
+    if texto in ("ontem",):
+        d = (agora - timedelta(days=1)).strftime("%d/%m/%Y")
+        return d, d
+    if "esta semana" in texto or "essa semana" in texto:
+        seg = agora - timedelta(days=agora.weekday())
+        return seg.strftime("%d/%m/%Y"), agora.strftime("%d/%m/%Y")
+    if "este mês" in texto or "esse mês" in texto or "mes atual" in texto:
+        primeiro = agora.replace(day=1)
+        return primeiro.strftime("%d/%m/%Y"), agora.strftime("%d/%m/%Y")
+    return None
+
+
+async def executar_tool_buscar_faturamento(chat_id: int, data_ini: str, data_fim: str,
+                                            descricao_periodo: str) -> dict:
+    """
+    Executa de fato a busca de faturamento — reaproveita o MESMO caminho que
+    o botão 'Briefing'/'Atualizar' já usa: scraper real do PDV Legal +
+    normalização de dados. Não há lógica duplicada nem dado simulado.
+    """
+    import asyncio
+    import pandas as pd
+    from scraper import baixar_relatorios_periodo
+    from database import buscar_usuario
+    from bot import normalizar_vendas, dados_usuario
+
+    usuario = await buscar_usuario(chat_id)
+    if not usuario or not usuario.get("pdv_email"):
+        return {"erro": "Usuário sem credenciais do PDV Legal cadastradas."}
+
+    pdv_email = usuario.get("pdv_email")
+    pdv_senha = usuario.get("pdv_senha")
+
+    try:
+        loop = asyncio.get_event_loop()
+        path_vendas, path_produtos, total_cancel = await loop.run_in_executor(
+            None, baixar_relatorios_periodo, data_ini, data_fim, pdv_email, pdv_senha
+        )
+        vendas = normalizar_vendas(pd.read_excel(path_vendas))
+    except Exception as e:
+        logger.error(f"Agente: erro ao buscar faturamento para {chat_id}: {e}")
+        return {"erro": f"Não consegui buscar os dados no PDV Legal agora: {e}"}
+
+    if len(vendas) == 0:
+        return {
+            "periodo": descricao_periodo,
+            "data_ini": data_ini,
+            "data_fim": data_fim,
+            "total_vendas": 0,
+            "faturamento_total": 0.0,
+            "ticket_medio": 0.0,
+            "mensagem": "Nenhuma venda registrada nesse período.",
+        }
+
+    total      = float(vendas["valor"].sum())
+    n          = int(len(vendas))
+    ticket     = float(vendas["valor"].mean()) if n else 0.0
+    cancel_val = total_cancel.get("_total", 0.0) if isinstance(total_cancel, dict) else float(total_cancel or 0)
+
+    por_filial = {}
+    if "nomeFilial" in vendas.columns:
+        por_filial = vendas.groupby("nomeFilial")["valor"].sum().round(2).to_dict()
+
+    # Mantém dados_usuario sincronizado — assim os botões existentes (menu)
+    # continuam funcionando com o período que o agente acabou de buscar.
+    if chat_id not in dados_usuario:
+        dados_usuario[chat_id] = {}
+    dados_usuario[chat_id]["vendas"]        = vendas
+    dados_usuario[chat_id]["periodo_label"] = descricao_periodo
+    dados_usuario[chat_id]["total_cancel"]  = total_cancel
+    dados_usuario[chat_id]["data_ini"]      = data_ini
+    dados_usuario[chat_id]["data_fim"]      = data_fim
+
+    return {
+        "periodo": descricao_periodo,
+        "data_ini": data_ini,
+        "data_fim": data_fim,
+        "total_vendas": n,
+        "faturamento_total": round(total, 2),
+        "ticket_medio": round(ticket, 2),
+        "cancelamentos_total": round(cancel_val, 2),
+        "faturamento_por_filial": por_filial,
+    }
+
+
+# Mapa de nome de tool -> função Python que efetivamente a executa
+EXECUTORES = {
+    "buscar_faturamento": executar_tool_buscar_faturamento,
+}
+
+
+SYSTEM_PROMPT = (
+    "Você é o assistente do MercadoBot, um SaaS de inteligência para operadores de "
+    "mercadinhos autônomos em condomínios no Brasil. Você conversa direto com o "
+    "operador do mercadinho via Telegram.\n\n"
+    "Contexto importante sobre o negócio: nesses mercados não há operador/caixa "
+    "presente — o cliente final escaneia e paga sozinho. Por isso cancelamentos "
+    "(erro de operação, item não reconhecido, desistência) são NORMAIS e ESPERADOS "
+    "nesse modelo. Só é motivo de alerta quando o cancelamento passa de 25% do "
+    "faturamento bruto. Abaixo disso, não trate como problema.\n\n"
+    "Você tem ferramentas reais para buscar dados atualizados direto do sistema "
+    "PDV Legal do usuário. Use-as sempre que a pergunta envolver números, vendas, "
+    "faturamento ou qualquer dado concreto — nunca invente ou estime valores.\n\n"
+    "Quando o usuário mencionar um período relativo (hoje, ontem, esta semana, "
+    "este mês), calcule você mesmo as datas exatas em formato DD/MM/AAAA antes de "
+    "chamar a ferramenta — hoje é " + datetime.now(BRASILIA).strftime("%d/%m/%Y") + ".\n\n"
+    "Responda em português do Brasil, direto ao ponto, sem rodeios. Pode usar "
+    "negrito (**texto**) e emojis com moderação. Evite respostas longas — "
+    "operadores de mercadinho leem isso rápido, no celular, entre uma tarefa e outra."
+)
+
+
+async def processar_mensagem_agente(chat_id: int, texto_usuario: str,
+                                     historico: list[dict] = None) -> str:
+    """
+    Ponto de entrada principal do agente. Recebe a mensagem do usuário,
+    decide com o Claude se precisa chamar ferramentas, executa o que for
+    necessário, e retorna a resposta final em texto.
+
+    historico: lista opcional de mensagens anteriores [{"role": ..., "content": ...}]
+    para dar contexto de conversas anteriores na mesma sessão.
+    """
+    client = anthropic.AsyncAnthropic(api_key=ANTHROPIC_KEY)
+
+    messages = list(historico) if historico else []
+    messages.append({"role": "user", "content": texto_usuario})
+
+    try:
+        # Loop de tool-use: o Claude pode pedir para chamar uma ou mais
+        # ferramentas antes de dar a resposta final. Repetimos até ele
+        # parar de pedir ferramentas (stop_reason != "tool_use").
+        for _ in range(5):  # limite de segurança contra loop infinito
+            resp = await client.messages.create(
+                model=MODEL,
+                max_tokens=1024,
+                system=SYSTEM_PROMPT,
+                tools=TOOLS,
+                messages=messages,
+            )
+
+            if resp.stop_reason != "tool_use":
+                # Claude decidiu responder direto, sem (mais) ferramentas
+                texto_final = "".join(
+                    block.text for block in resp.content if block.type == "text"
+                )
+                return texto_final.strip() or "Não consegui formular uma resposta. Tente reformular a pergunta."
+
+            # Claude pediu para usar uma ou mais ferramentas — executamos cada uma
+            messages.append({"role": "assistant", "content": resp.content})
+
+            tool_results = []
+            for block in resp.content:
+                if block.type != "tool_use":
+                    continue
+
+                nome_tool = block.name
+                args      = block.input
+                logger.info(f"Agente chat_id={chat_id}: chamando tool '{nome_tool}' com {args}")
+
+                executor = EXECUTORES.get(nome_tool)
+                if not executor:
+                    resultado = {"erro": f"Ferramenta '{nome_tool}' não implementada."}
+                else:
+                    resultado = await executor(chat_id, **args)
+
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": block.id,
+                    "content": json.dumps(resultado, ensure_ascii=False),
+                })
+
+            messages.append({"role": "user", "content": tool_results})
+
+        return "Sua pergunta envolveu muitas etapas — tente perguntar de forma mais direta."
+
+    except Exception as e:
+        logger.error(f"Erro no agente para chat_id={chat_id}: {e}")
+        return "⚠️ Não consegui processar sua pergunta agora. Tente de novo em alguns instantes."
