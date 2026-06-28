@@ -287,21 +287,54 @@ async def exportar_cancelamentos(page, data_ini: str, data_fim: str) -> dict:
         # Aguarda GetDadosProdutos disponível e filtra
         await new_page.wait_for_function("typeof GetDadosProdutos === 'function'", timeout=10000)
         await new_page.evaluate("GetDadosProdutos();")
-        await new_page.wait_for_timeout(500)
+        await new_page.wait_for_timeout(800)
 
-        # Verificação de segurança: confirma que o período exibido na tela é o esperado
-        periodo_exibido = await new_page.evaluate(
-            "document.querySelector('#reportrange span') ? "
-            "document.querySelector('#reportrange span').textContent.trim() : ''"
-        )
+        # Verificação de segurança CRÍTICA: confirma que o período exibido na
+        # tela é exatamente o solicitado antes de ler qualquer dado. Se não
+        # bater, reaplica o daterangepicker + GetDadosProdutos e tenta de novo.
+        # Sem isso, a tela pode ficar no período padrão (hoje) e retornar o
+        # cancelamento do dia errado — foi o bug "briefing de ontem trouxe
+        # cancelamento de hoje".
         esperado = f"{data_ini} - {data_fim}"
-        if periodo_exibido and periodo_exibido != esperado:
-            logger.warning(
-                f"Cancelamentos — período exibido '{periodo_exibido}' difere do esperado "
-                f"'{esperado}'. Forçando GetDadosProdutos novamente."
+        periodo_ok = False
+        for tentativa in range(3):
+            periodo_exibido = await new_page.evaluate(
+                "document.querySelector('#reportrange span') ? "
+                "document.querySelector('#reportrange span').textContent.trim() : ''"
             )
+            if periodo_exibido == esperado:
+                periodo_ok = True
+                break
+            logger.warning(
+                f"Cancelamentos — período exibido '{periodo_exibido}' != esperado "
+                f"'{esperado}' (tentativa {tentativa+1}/3). Reaplicando período..."
+            )
+            # Reaplica o daterangepicker do zero e refiltra
+            await new_page.evaluate(f"""
+                (function() {{
+                    var ini = moment('{ini_y}-{ini_m}-{ini_d}', 'YYYY-MM-DD');
+                    var fim = moment('{fim_y}-{fim_m}-{fim_d}', 'YYYY-MM-DD');
+                    var el  = $('#reportrange');
+                    var dr  = el.data('daterangepicker');
+                    if (dr) {{
+                        dr.setStartDate(ini);
+                        dr.setEndDate(fim);
+                        el.find('span').html(ini.format('DD/MM/YYYY') + ' - ' + fim.format('DD/MM/YYYY'));
+                        el.trigger('apply.daterangepicker', dr);
+                    }}
+                }})();
+            """)
+            await new_page.wait_for_timeout(500)
             await new_page.evaluate("GetDadosProdutos();")
             await new_page.wait_for_timeout(1500)
+
+        if not periodo_ok:
+            logger.error(
+                f"Cancelamentos — NÃO foi possível aplicar o período {esperado} após 3 tentativas. "
+                f"Retornando zero para evitar reportar cancelamento do período errado."
+            )
+            await new_page.close()
+            return {"_total": 0.0}
 
         # Aguarda tabela carregar com dados reais (até 6s — reduzido pois pode legitimamente estar vazia)
         tabela_tem_dados = True
@@ -394,54 +427,46 @@ async def exportar_cancelamentos(page, data_ini: str, data_fim: str) -> dict:
         resultado = dados.get("por_filial", {})
         soma_tabela = dados.get("total", 0.0)
 
-        # FONTE DA VERDADE DO TOTAL: o card "Total cancelado" do PDV Legal, que
-        # já vem agregado pelo próprio sistema — não está sujeito a paginação,
-        # parsing de data linha-a-linha ou truncamento. A soma manual da tabela
-        # (soma_tabela) é usada só para DISTRIBUIR o total por filial.
-        # Esta era a abordagem original que funcionava; a soma manual sozinha
-        # estava dando "desvio para menos" em períodos longos.
-        total_oficial = await new_page.evaluate("""
-            (function() {
-                var cards = document.querySelectorAll('.info-box-number');
-                for (var c of cards) {
-                    var box = c.closest('.info-box');
-                    var label = box ? box.querySelector('.info-box-text') : null;
-                    if (label && label.textContent.toLowerCase().includes('cancelad')) {
-                        return c.textContent.trim();
-                    }
-                }
-                return null;
-            })()
-        """)
+        # FONTE DA VERDADE DO TOTAL: a soma da TABELA, que está sincronizada
+        # com o período filtrado (GetDadosProdutos após apply.daterangepicker)
+        # e agora carrega todas as páginas (paginação corrigida) — então não
+        # trunca mais. O card "Total cancelado" da tela NÃO é confiável como
+        # fonte primária porque pode refletir o período padrão da tela (hoje),
+        # não o período que pedimos — foi o que causou "briefing de ontem
+        # trazendo cancelamento de hoje". Usamos o card apenas para VALIDAR.
+        resultado["_total"] = round(soma_tabela, 2)
 
+        # Validação: lê o card e, se divergir muito da tabela, apenas registra
+        # um aviso no log (não sobrescreve — a tabela é quem respeita o período).
         total_card = None
-        if total_oficial:
-            try:
+        try:
+            total_oficial = await new_page.evaluate("""
+                (function() {
+                    var cards = document.querySelectorAll('.info-box-number');
+                    for (var c of cards) {
+                        var box = c.closest('.info-box');
+                        var label = box ? box.querySelector('.info-box-text') : null;
+                        if (label && label.textContent.toLowerCase().includes('cancelad')) {
+                            return c.textContent.trim();
+                        }
+                    }
+                    return null;
+                })()
+            """)
+            if total_oficial:
                 limpo = total_oficial.replace("R$", "").replace(".", "").replace(",", ".").strip()
                 total_card = float(limpo) if limpo else None
-            except ValueError:
-                total_card = None
+        except Exception:
+            total_card = None
 
-        if total_card is not None and total_card > 0:
-            # Usa o total oficial do card. Se a soma da tabela bate (mesma base),
-            # mantém a distribuição por filial como está. Se diverge, ajusta a
-            # distribuição proporcionalmente para somar o total oficial.
-            if soma_tabela > 0 and abs(soma_tabela - total_card) > 0.01:
-                fator = total_card / soma_tabela
-                for k in list(resultado.keys()):
-                    resultado[k] = round(resultado[k] * fator, 2)
-                logger.info(
-                    f"Cancelamentos — soma da tabela (R$ {soma_tabela:.2f}) divergiu do "
-                    f"total oficial do card (R$ {total_card:.2f}); distribuição por filial "
-                    f"ajustada proporcionalmente (fator {fator:.4f})."
-                )
-            resultado["_total"] = round(total_card, 2)
-        else:
-            # Sem card oficial — cai na soma manual da tabela (melhor que nada)
-            resultado["_total"] = round(soma_tabela, 2)
-            logger.info("Cancelamentos — card oficial não encontrado, usando soma manual da tabela.")
+        if total_card is not None and soma_tabela > 0 and abs(soma_tabela - total_card) > 0.01:
+            logger.info(
+                f"Cancelamentos — soma da tabela (R$ {soma_tabela:.2f}, período {data_ini}-{data_fim}) "
+                f"difere do card da tela (R$ {total_card:.2f}). Usando a tabela, que respeita o "
+                f"período filtrado (o card pode estar no período padrão da tela)."
+            )
 
-        # Fallback final: se ainda zero, tenta LiteralFaturado
+        # Fallback: se a tabela veio vazia/zerada, tenta LiteralFaturado
         if resultado["_total"] == 0:
             val_str = await new_page.evaluate(
                 "document.getElementById('ContentPlaceHolder1_LiteralFaturado') ? "
