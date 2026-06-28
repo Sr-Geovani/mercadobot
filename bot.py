@@ -839,6 +839,8 @@ def kb_menu(periodo_label: str = ""):
          InlineKeyboardButton("📦 Giro",          callback_data="giro")],
         [InlineKeyboardButton("🎯 Projeção Mês",  callback_data="projecao"),
          InlineKeyboardButton("⭐ Score Saúde",   callback_data="score")],
+        [InlineKeyboardButton("🔍 Padrões da Operação", callback_data="agente_padroes"),
+         InlineKeyboardButton("💬 Pergunte à IA",        callback_data="agente_ajuda")],
         [InlineKeyboardButton("🛒 Lista de Reposição",  callback_data="reposicao")],
         [InlineKeyboardButton(btn_periodo,               callback_data="atualizar_menu")],
     ])
@@ -2133,6 +2135,31 @@ async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # ─── Confirmar cancelamento de assinatura ────────────────
+    if acao == "agente_padroes":
+        from agente import processar_mensagem_agente
+        await msg.reply_text("🔍 Analisando padrões na sua operação...")
+        resposta = await processar_mensagem_agente(
+            chat_id, "Identifique padrões relevantes na minha operação dos últimos 30 dias."
+        )
+        await enviar(msg, resposta)
+        await abrir_menu(msg, chat_id)
+        return
+
+    if acao == "agente_ajuda":
+        await msg.reply_text(
+            f"💬 {b('Pergunte qualquer coisa sobre o seu negócio')}\n\n"
+            f"Você pode digitar perguntas livres, mandar uma {b('foto')} de um "
+            f"produto, ou até um {b('áudio')} — tudo direto no chat.\n\n"
+            f"Exemplos:\n"
+            f"• \"Quanto vendi hoje?\"\n"
+            f"• \"Qual meu produto campeão do mês?\"\n"
+            f"• \"Esse produto vende bem comparado a outros mercadinhos?\"\n"
+            f"• Envie uma foto de um produto na gôndola\n\n"
+            f"Pode escrever sua pergunta agora 👇",
+            parse_mode="HTML"
+        )
+        return
+
     if acao == "confirmar_cancelamento":
         from database import buscar_usuario, atualizar_usuario
         from pagamento import cancelar_assinatura, cancelar_cobrancas_futuras

@@ -91,25 +91,30 @@ async def handle_webhook(request: web.Request) -> web.Response:
 
             if _bot:
                 try:
+                    from bot import kb_menu
                     await _bot.send_message(
                         chat_id=chat_id,
                         text=(
                             f"✅ <b>Cartão validado! Seu trial de 7 dias começou agora.</b>\n\n"
-                            f"Você não será cobrado até o fim do trial. "
-                            f"Para começar, use /atualizar para buscar seus dados do PDV Legal.\n\n"
-                            f"<b>Comandos disponíveis:</b>\n"
-                            f"/briefing — resumo completo do período\n"
-                            f"/atualizar — buscar dados por período\n"
-                            f"/reposicao — lista de reposição inteligente\n"
-                            f"/score — score de saúde da operação\n"
-                            f"/projecao — projeção do mês\n"
-                            f"/comparativo — comparativo entre unidades\n"
-                            f"/alertas — alertas e pontos de atenção\n"
-                            f"/configuracoes — atualizar credenciais\n"
-                            f"/status — status da assinatura\n\n"
-                            f"Ou use o /menu para ver todas as opções com um toque. 👇"
+                            f"Você não será cobrado até o fim do trial.\n\n"
+                            f"🚀 <b>Novidade: agora você tem um assistente de IA completo</b>\n\n"
+                            f"Além dos botões e relatórios automáticos, você pode simplesmente "
+                            f"<b>conversar</b> com o MercadoBot:\n\n"
+                            f"💬 <b>Pergunte qualquer coisa</b> — \"quanto vendi hoje?\", \"qual "
+                            f"meu produto campeão?\", sem precisar lembrar comandos\n"
+                            f"📸 <b>Mande uma foto</b> de um produto na gôndola — a IA identifica "
+                            f"e já te diz se ele vende bem na sua loja\n"
+                            f"🎤 <b>Mande um áudio</b> — fale sua pergunta em vez de digitar\n"
+                            f"🔍 <b>Padrões automáticos</b> — toda semana a IA analisa sua "
+                            f"operação e avisa se encontrar algo relevante (dia fraco "
+                            f"recorrente, produto em alta, etc), sem você precisar perguntar\n"
+                            f"🌐 <b>Comparativo de mercado</b> — veja como seus produtos campeões "
+                            f"performam comparado a outros mercadinhos autônomos\n\n"
+                            f"Para começar, use o menu abaixo ou simplesmente escreva uma "
+                            f"pergunta no chat. 👇"
                         ),
-                        parse_mode="HTML"
+                        parse_mode="HTML",
+                        reply_markup=kb_menu()
                     )
                 except Exception as e_envio:
                     logger.error(f"FALHA AO NOTIFICAR chat_id={chat_id} sobre cartao_validado: {e_envio}")

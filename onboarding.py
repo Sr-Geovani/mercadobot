@@ -99,7 +99,16 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"👋 Olá, {b(nome)}! Bem-vindo(a) ao {b('MercadoBot')}!\n\n"
         f"Sou o assistente de inteligência para mercadinhos autônomos em condomínios. "
-        f"Conecto direto ao seu PDV Legal e entrego análises, alertas e insights no Telegram — sem você abrir nenhum relatório.\n\n"
+        f"Conecto direto ao seu PDV Legal e entrego análises, alertas e insights no "
+        f"Telegram — sem você abrir nenhum relatório.\n\n"
+        f"✨ {b('O que você pode fazer:')}\n\n"
+        f"📊 Briefings automáticos todos os dias\n"
+        f"💬 Conversar livremente — \"quanto vendi hoje?\", \"qual meu produto campeão?\"\n"
+        f"📸 Mandar uma {b('foto')} de um produto e a IA identifica e analisa\n"
+        f"🎤 Mandar um {b('áudio')} em vez de digitar\n"
+        f"🔍 Receber alertas automáticos quando a IA detectar padrões na sua operação\n"
+        f"🌐 Comparar seus produtos campeões com outros mercadinhos autônomos\n"
+        f"🛒 Listas de reposição inteligentes, score de saúde, projeção de faturamento\n\n"
         f"🎁 {b('7 dias grátis')} para experimentar tudo.\n"
         f"Depois, apenas {b('R$ 29,90/mês')} com renovação automática.\n\n"
         f"Para começar, preciso do seu {b('e-mail de login do PDV Legal')}:",

@@ -344,10 +344,90 @@ def iniciar_scheduler():
         replace_existing=True,
     )
 
+    # Detecção de padrões por IA — semanal (segunda 8h), evita virar spam diário.
+    # Roda só para quem já tem histórico suficiente (>=14 dias) e nunca repete
+    # o mesmo padrão notificado nos últimos 7 dias (controle anti-spam no banco).
+    scheduler.add_job(
+        enviar_padroes_detectados_automatico,
+        trigger="cron",
+        day_of_week="mon",
+        hour=8,
+        minute=0,
+        id="padroes_semanais",
+        replace_existing=True,
+    )
+
     scheduler.start()
     logger.info(f"Briefing agendado para {HORARIO_HORA:02d}:{HORARIO_MINUTO:02d} (Brasília)")
     logger.info("Alertas proativos agendados para 13h e 19h")
     return scheduler
+
+
+async def enviar_padroes_detectados_automatico():
+    """
+    Roda semanalmente (segunda 8h). Busca os últimos 30 dias de cada usuário
+    ativo, detecta padrões via IA, e notifica só os que ainda não foram
+    avisados nos últimos 7 dias (anti-spam). Também registra os produtos
+    campeões no benchmark agregado entre clientes nesse mesmo passo —
+    aproveitando o mesmo download de dados.
+    """
+    from database import listar_usuarios_ativos
+    from padroes import detectar_padroes_vendas, notificar_padroes_novos, registrar_produto_campeao_benchmark
+    from bot import normalizar_vendas, normalizar_produtos, kb_menu, b
+
+    usuarios = await listar_usuarios_ativos()
+    if not usuarios:
+        return
+
+    bot   = Bot(token=TELEGRAM_TOKEN)
+    agora = datetime.now(BRASILIA)
+    d30   = (agora - timedelta(days=30)).strftime("%d/%m/%Y")
+    hoje  = agora.strftime("%d/%m/%Y")
+
+    for usuario in usuarios:
+        chat_id   = usuario["chat_id"]
+        pdv_email = usuario.get("pdv_email")
+        pdv_senha = usuario.get("pdv_senha")
+        if not pdv_email or not pdv_senha:
+            continue
+        try:
+            from scraper import baixar_relatorios_periodo
+            path_vendas, path_produtos, _ = await asyncio.get_event_loop().run_in_executor(
+                None, baixar_relatorios_periodo, d30, hoje, pdv_email, pdv_senha
+            )
+            vendas   = normalizar_vendas(pd.read_excel(path_vendas))
+            produtos = normalizar_produtos(pd.read_excel(path_produtos))
+
+            if len(vendas) == 0:
+                continue
+
+            # Registra benchmark (produtos campeões) — independente de haver
+            # padrão notificável ou não, alimenta a base de comparação.
+            try:
+                await registrar_produto_campeao_benchmark(chat_id, produtos, d30, hoje, top_n=3)
+            except Exception as e:
+                logger.warning(f"Erro ao registrar benchmark para {chat_id}: {e}")
+
+            # Detecta padrões e filtra pelos ainda não notificados
+            padroes = await detectar_padroes_vendas(chat_id, vendas, produtos)
+            if not padroes:
+                continue
+
+            padroes_novos = await notificar_padroes_novos(chat_id, padroes, janela_dias=7)
+            if not padroes_novos:
+                logger.info(f"Padrões: {chat_id} tem {len(padroes)} padrão(ões), mas já notificados recentemente")
+                continue
+
+            texto = f"🔍 {b('Padrões identificados na sua operação')}\n\n"
+            texto += "\n".join(p.get("descricao", "") for p in padroes_novos)
+            texto += "\n\n<i>Análise baseada nos últimos 30 dias de vendas.</i>"
+
+            await bot.send_message(chat_id=chat_id, text=texto, parse_mode="HTML", reply_markup=kb_menu())
+            logger.info(f"Padrões: {len(padroes_novos)} padrão(ões) novo(s) notificado(s) para {chat_id}")
+            await asyncio.sleep(3)
+
+        except Exception as e:
+            logger.error(f"Erro na detecção de padrões para {chat_id}: {e}")
 
 
 async def enviar_fechamento_semanal():

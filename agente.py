@@ -153,6 +153,47 @@ TOOLS = [
             "required": ["nome_produto", "data_ini", "data_fim", "descricao_periodo"],
         },
     },
+    {
+        "name": "detectar_padroes_operacao",
+        "description": (
+            "Analisa o histórico recente de vendas (últimos 30 dias) e identifica "
+            "padrões reais — como um dia da semana consistentemente mais fraco ou "
+            "mais forte, ou o produto campeão do período. Use esta ferramenta quando "
+            "o usuário perguntar algo como 'tem algum padrão estranho?', 'que dia eu "
+            "vendo menos?', 'qual produto é meu campeão?', 'tem alguma tendência que "
+            "eu deveria saber?'. Requer pelo menos 14 dias de histórico para ter "
+            "significância estatística — se não houver dados suficientes, a "
+            "ferramenta avisa isso."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+        },
+    },
+    {
+        "name": "comparar_com_outros_mercadinhos",
+        "description": (
+            "Compara o desempenho de um produto campeão do usuário com a média de "
+            "outros mercadinhos autônomos que vendem esse mesmo produto (benchmark "
+            "anonimizado entre clientes do MercadoBot). Use quando o usuário "
+            "perguntar coisas como 'esse produto vende bem comparado a outros "
+            "mercadinhos?', 'estou vendendo bem isso?', 'é normal vender X por mês "
+            "desse produto?'. IMPORTANTE: só funciona bem para produtos universais "
+            "(refrigerantes, salgadinhos, águas, energéticos) — produtos muito "
+            "nichados ou regionais não têm amostra suficiente para comparação justa, "
+            "e a ferramenta vai avisar isso quando for o caso."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "nome_produto": {
+                    "type": "string",
+                    "description": "Nome do produto a comparar, ex: 'coca cola', 'doritos'.",
+                },
+            },
+            "required": ["nome_produto"],
+        },
+    },
 ]
 
 
@@ -487,11 +528,83 @@ async def executar_tool_buscar_produto(chat_id: int, nome_produto: str, data_ini
     return resultado
 
 
+async def executar_tool_detectar_padroes(chat_id: int) -> dict:
+    """
+    Busca os últimos 30 dias e roda a detecção de padrões via IA, retornando
+    os padrões já filtrados pelo controle anti-spam (chamada sob demanda
+    não tem restrição de janela, só o job automático tem).
+    """
+    from padroes import detectar_padroes_vendas
+
+    agora = datetime.now(BRASILIA)
+    d30   = (agora - timedelta(days=30)).strftime("%d/%m/%Y")
+    hoje  = agora.strftime("%d/%m/%Y")
+
+    dados = await garantir_dados_periodo(chat_id, d30, hoje, "últimos 30 dias")
+    if "erro" in dados:
+        return dados
+
+    padroes = await detectar_padroes_vendas(chat_id, dados.get("vendas"), dados.get("produtos"))
+    if not padroes:
+        return {
+            "padroes_encontrados": 0,
+            "mensagem": "Não identifiquei nenhum padrão estatisticamente relevante nos últimos 30 dias — ou os dados ainda são insuficientes (mínimo de 14 dias de histórico).",
+        }
+
+    return {"padroes_encontrados": len(padroes), "padroes": padroes}
+
+
+async def executar_tool_comparar_benchmark(chat_id: int, nome_produto: str) -> dict:
+    """
+    Compara um produto do usuário com o benchmark agregado de outros
+    clientes. Avisa explicitamente quando a amostra é pequena demais para
+    uma comparação confiável.
+    """
+    from database import buscar_benchmark_produto
+
+    benchmark = await buscar_benchmark_produto(nome_produto, chat_id_excluir=chat_id)
+
+    if benchmark.get("amostras", 0) == 0:
+        return {
+            "produto": nome_produto,
+            "comparavel": False,
+            "mensagem": (
+                "Ainda não temos dados de outros mercadinhos vendendo esse produto "
+                "para comparar — a base de comparação está crescendo conforme mais "
+                "operadores usam o MercadoBot."
+            ),
+        }
+
+    if benchmark.get("outros_clientes", 0) < 3:
+        return {
+            "produto": nome_produto,
+            "comparavel": False,
+            "amostra_pequena": True,
+            "outros_clientes": benchmark["outros_clientes"],
+            "mensagem": (
+                f"Encontrei dados de apenas {benchmark['outros_clientes']} outro(s) "
+                f"mercadinho(s) vendendo esse produto — amostra pequena demais para "
+                f"uma comparação confiável ainda. Trate com cautela."
+            ),
+        }
+
+    return {
+        "produto": nome_produto,
+        "comparavel": True,
+        "outros_clientes": benchmark["outros_clientes"],
+        "quantidade_media_outros": benchmark["quantidade_media"],
+        "quantidade_max_outros": benchmark["quantidade_max"],
+        "quantidade_min_outros": benchmark["quantidade_min"],
+    }
+
+
 # Mapa de nome de tool -> função Python que efetivamente a executa
 EXECUTORES = {
     "buscar_faturamento": executar_tool_buscar_faturamento,
     "analisar_operacao": executar_tool_analise,
     "buscar_produto_especifico": executar_tool_buscar_produto,
+    "detectar_padroes_operacao": executar_tool_detectar_padroes,
+    "comparar_com_outros_mercadinhos": executar_tool_comparar_benchmark,
 }
 
 
@@ -525,6 +638,9 @@ def _construir_system_prompt() -> str:
         "Você tem ferramentas reais para buscar dados atualizados direto do sistema "
         "PDV Legal do usuário. Use-as sempre que a pergunta envolver números, vendas, "
         "faturamento ou qualquer dado concreto — nunca invente ou estime valores.\n\n"
+        "Você tem memória das mensagens anteriores trocadas HOJE com este usuário "
+        "(a sessão expira à meia-noite). Pode fazer referência a perguntas anteriores "
+        "do mesmo dia sem precisar que o usuário repita o contexto.\n\n"
         f"IMPORTANTE — datas EXATAS para usar nas ferramentas (não calcule por conta "
         f"própria, use estas):\n"
         f"  • 'hoje' = data_ini: {hoje}, data_fim: {hoje}\n"
@@ -611,10 +727,47 @@ async def transcrever_audio(caminho_arquivo: str) -> str | None:
         return None
 
 
+def obter_historico_sessao(chat_id: int) -> list[dict]:
+    """
+    Recupera o histórico de conversa do agente para o dia atual. A memória
+    é só em RAM (dados_usuario, já usado para outros estados do bot) e
+    expira automaticamente à meia-noite — sem custo de banco, sem reter
+    dados sensíveis por mais tempo do que o necessário.
+    """
+    from bot import dados_usuario
+
+    hoje = datetime.now(BRASILIA).strftime("%d/%m/%Y")
+    sessao = dados_usuario.get(chat_id, {}).get("agente_sessao", {})
+
+    if sessao.get("data") != hoje:
+        return []  # sessão de outro dia — não reaproveita
+
+    return sessao.get("historico", [])
+
+
+def salvar_historico_sessao(chat_id: int, historico: list[dict], limite_mensagens: int = 20):
+    """
+    Salva o histórico atualizado, truncando para as últimas N mensagens
+    (evita o histórico crescer sem limite dentro do mesmo dia e inflar o
+    custo de cada chamada nova).
+    """
+    from bot import dados_usuario
+
+    hoje = datetime.now(BRASILIA).strftime("%d/%m/%Y")
+    if chat_id not in dados_usuario:
+        dados_usuario[chat_id] = {}
+
+    dados_usuario[chat_id]["agente_sessao"] = {
+        "data": hoje,
+        "historico": historico[-limite_mensagens:],
+    }
+
+
 async def processar_mensagem_agente(chat_id: int, texto_usuario: str = None,
                                      historico: list[dict] = None,
                                      imagem_base64: str = None,
-                                     imagem_media_type: str = None) -> str:
+                                     imagem_media_type: str = None,
+                                     usar_memoria_sessao: bool = True) -> str:
     """
     Ponto de entrada principal do agente. Recebe a mensagem do usuário
     (texto e/ou imagem), decide com o Claude se precisa chamar ferramentas,
@@ -626,12 +779,20 @@ async def processar_mensagem_agente(chat_id: int, texto_usuario: str = None,
     Legal, tudo em uma única interação, em vez de duas chamadas separadas
     sem contexto compartilhado.
 
-    historico: lista opcional de mensagens anteriores [{"role": ..., "content": ...}]
-    para dar contexto de conversas anteriores na mesma sessão.
+    historico: lista opcional de mensagens anteriores, passada explicitamente
+    (sobrepõe a memória de sessão automática se usar_memoria_sessao=True).
+    usar_memoria_sessao: se True (padrão), recupera e salva automaticamente
+    o histórico do dia atual em dados_usuario — o usuário não precisa repetir
+    contexto de perguntas anteriores na mesma sessão/dia.
     """
     client = anthropic.AsyncAnthropic(api_key=ANTHROPIC_KEY)
 
-    messages = list(historico) if historico else []
+    if historico is not None:
+        messages = list(historico)
+    elif usar_memoria_sessao:
+        messages = obter_historico_sessao(chat_id)
+    else:
+        messages = []
 
     if imagem_base64:
         texto_pedido = (texto_usuario or "").strip() or (
@@ -674,7 +835,13 @@ async def processar_mensagem_agente(chat_id: int, texto_usuario: str = None,
                 texto_final = "".join(
                     block.text for block in resp.content if block.type == "text"
                 )
-                return texto_final.strip() or "Não consegui formular uma resposta. Tente reformular a pergunta."
+                resposta_final = texto_final.strip() or "Não consegui formular uma resposta. Tente reformular a pergunta."
+
+                if usar_memoria_sessao:
+                    messages.append({"role": "assistant", "content": resp.content})
+                    salvar_historico_sessao(chat_id, messages)
+
+                return resposta_final
 
             # Claude pediu para usar uma ou mais ferramentas — executamos cada uma
             messages.append({"role": "assistant", "content": resp.content})

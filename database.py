@@ -62,6 +62,40 @@ async def inicializar_banco():
                 await conn.execute(f"ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS {col} {tipo}")
             except Exception:
                 pass
+        # ─── Benchmark entre clientes — produtos campeões, dados agregados
+        # e anonimizados (nunca por chat_id individual em consultas externas) ──
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS benchmark_produtos (
+                id              SERIAL PRIMARY KEY,
+                chat_id         BIGINT NOT NULL,
+                nome_produto    TEXT NOT NULL,
+                quantidade      INTEGER NOT NULL,
+                valor_total     NUMERIC(12,2) NOT NULL,
+                periodo_ini     TEXT NOT NULL,
+                periodo_fim     TEXT NOT NULL,
+                registrado_em   TEXT NOT NULL
+            )
+        """)
+        await conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_benchmark_produto_nome ON benchmark_produtos (nome_produto)"
+        )
+
+        # ─── Histórico de padrões detectados — evita re-alertar o mesmo
+        # padrão repetidamente (rede de segurança contra spam) ──
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS padroes_detectados (
+                id              SERIAL PRIMARY KEY,
+                chat_id         BIGINT NOT NULL,
+                tipo_padrao     TEXT NOT NULL,
+                chave_padrao    TEXT NOT NULL,
+                detectado_em    TEXT NOT NULL,
+                notificado      BOOLEAN DEFAULT FALSE
+            )
+        """)
+        await conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_padroes_chat_chave ON padroes_detectados (chat_id, chave_padrao)"
+        )
+
     logger.info("✅ Banco PostgreSQL inicializado.")
 
 
@@ -150,3 +184,96 @@ async def listar_usuarios_ativos() -> list:
             "SELECT * FROM usuarios WHERE status IN ('trial', 'ativo')"
         )
         return [dict(r) for r in rows]
+
+
+# ─── BENCHMARK ENTRE CLIENTES ──────────────────────────────────────────────
+
+async def registrar_benchmark_produto(chat_id: int, nome_produto: str, quantidade: int,
+                                       valor_total: float, periodo_ini: str, periodo_fim: str):
+    """
+    Registra o desempenho de um produto campeão de um cliente, para
+    alimentar o benchmark entre operadores. Só deve ser chamado para
+    produtos campeões (top do período) — nunca para a base completa,
+    evitando registrar itens muito nichados/regionais que não servem
+    para comparação justa entre mercadinhos diferentes.
+    """
+    agora = datetime.now(BRASILIA).isoformat()
+    pool  = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute("""
+            INSERT INTO benchmark_produtos
+                (chat_id, nome_produto, quantidade, valor_total, periodo_ini, periodo_fim, registrado_em)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)
+        """, chat_id, nome_produto, quantidade, valor_total, periodo_ini, periodo_fim, agora)
+
+
+async def buscar_benchmark_produto(nome_produto: str, chat_id_excluir: int = None) -> dict:
+    """
+    Busca como um produto específico performa em OUTROS clientes (benchmark
+    agregado). Retorna média/mediana de quantidade vendida entre os clientes
+    que têm esse produto registrado como campeão, excluindo o próprio
+    cliente que está perguntando (comparar consigo mesmo não tem valor).
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        if chat_id_excluir:
+            rows = await conn.fetch("""
+                SELECT chat_id, quantidade, valor_total
+                FROM benchmark_produtos
+                WHERE nome_produto ILIKE $1 AND chat_id != $2
+                ORDER BY registrado_em DESC
+                LIMIT 50
+            """, f"%{nome_produto}%", chat_id_excluir)
+        else:
+            rows = await conn.fetch("""
+                SELECT chat_id, quantidade, valor_total
+                FROM benchmark_produtos
+                WHERE nome_produto ILIKE $1
+                ORDER BY registrado_em DESC
+                LIMIT 50
+            """, f"%{nome_produto}%")
+
+        if not rows:
+            return {"amostras": 0}
+
+        outros_clientes = len(set(r["chat_id"] for r in rows))
+        quantidades = [r["quantidade"] for r in rows]
+        return {
+            "amostras": len(rows),
+            "outros_clientes": outros_clientes,
+            "quantidade_media": round(sum(quantidades) / len(quantidades), 1),
+            "quantidade_max": max(quantidades),
+            "quantidade_min": min(quantidades),
+        }
+
+
+# ─── PADRÕES DETECTADOS (anti-spam) ────────────────────────────────────────
+
+async def ja_notificou_padrao(chat_id: int, chave_padrao: str, dias_validade: int = 7) -> bool:
+    """
+    Verifica se um padrão específico (ex: 'queda_terca_filial_A') já foi
+    notificado para esse usuário nos últimos N dias — evita repetir o mesmo
+    alerta todo dia e virar spam. chave_padrao deve ser um identificador
+    estável do padrão (tipo + contexto), não um texto livre.
+    """
+    pool = await get_pool()
+    limite = (datetime.now(BRASILIA) - timedelta(days=dias_validade)).isoformat()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow("""
+            SELECT id FROM padroes_detectados
+            WHERE chat_id = $1 AND chave_padrao = $2
+                  AND notificado = TRUE AND detectado_em >= $3
+            ORDER BY detectado_em DESC LIMIT 1
+        """, chat_id, chave_padrao, limite)
+        return row is not None
+
+
+async def registrar_padrao_notificado(chat_id: int, tipo_padrao: str, chave_padrao: str):
+    """Registra que um padrão foi notificado, para a checagem anti-spam acima."""
+    agora = datetime.now(BRASILIA).isoformat()
+    pool  = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute("""
+            INSERT INTO padroes_detectados (chat_id, tipo_padrao, chave_padrao, detectado_em, notificado)
+            VALUES ($1, $2, $3, $4, TRUE)
+        """, chat_id, tipo_padrao, chave_padrao, agora)
