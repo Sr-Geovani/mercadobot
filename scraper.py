@@ -279,260 +279,124 @@ async def exportar_cancelamentos(page, data_ini: str, data_fim: str) -> dict:
         await new_page.wait_for_function("typeof $ !== 'undefined'", timeout=10000)
         await new_page.wait_for_timeout(1000)
 
-        # Injeta datas via daterangepicker API e dispara o evento que o PDV Legal escuta
         ini_d, ini_m, ini_y = data_ini.split("/")
         fim_d, fim_m, fim_y = data_fim.split("/")
-        data_aplicada = await new_page.evaluate(f"""
-            (function() {{
-                var ini = moment('{ini_y}-{ini_m}-{ini_d}', 'YYYY-MM-DD');
-                var fim = moment('{fim_y}-{fim_m}-{fim_d}', 'YYYY-MM-DD');
-                var el  = $('#reportrange');
-                var dr  = el.data('daterangepicker');
-                if (!dr) return 'sem_daterangepicker';
-                dr.setStartDate(ini);
-                dr.setEndDate(fim);
-                el.find('span').html(ini.format('DD/MM/YYYY') + ' - ' + fim.format('DD/MM/YYYY'));
-                // Dispara o evento que o PDV Legal escuta para atualizar variáveis internas
-                el.trigger('apply.daterangepicker', dr);
-                return dr.startDate.format('DD/MM/YYYY') + ' - ' + dr.endDate.format('DD/MM/YYYY');
-            }})();
-        """)
-        logger.info(f"Cancelamentos — daterangepicker aplicado: {data_aplicada}")
-        await new_page.wait_for_timeout(500)
 
-        # Garante todas as filiais selecionadas
-        await new_page.evaluate("""
-            var opts = Array.from(document.querySelectorAll('#ContentPlaceHolder1_ddlfilial option'))
-                           .map(o => o.value);
-            $('#ContentPlaceHolder1_ddlfilial').val(opts);
-            $('#ContentPlaceHolder1_ddlfilial').selectpicker('refresh');
-        """)
-        await new_page.wait_for_timeout(300)
-
-        # Aguarda GetDadosProdutos disponível e filtra
-        await new_page.wait_for_function("typeof GetDadosProdutos === 'function'", timeout=10000)
-        await new_page.evaluate("GetDadosProdutos();")
-        await new_page.wait_for_timeout(800)
-
-        # Verificação de segurança CRÍTICA: confirma que o período exibido na
-        # tela é exatamente o solicitado antes de ler qualquer dado. Se não
-        # bater, reaplica o daterangepicker + GetDadosProdutos e tenta de novo.
-        # Sem isso, a tela pode ficar no período padrão (hoje) e retornar o
-        # cancelamento do dia errado — foi o bug "briefing de ontem trouxe
-        # cancelamento de hoje".
-        esperado = f"{data_ini} - {data_fim}"
-        periodo_ok = False
-        for tentativa in range(3):
-            periodo_exibido = await new_page.evaluate(
-                "document.querySelector('#reportrange span') ? "
-                "document.querySelector('#reportrange span').textContent.trim() : ''"
-            )
-            if periodo_exibido == esperado:
-                periodo_ok = True
-                break
-            logger.warning(
-                f"Cancelamentos — período exibido '{periodo_exibido}' != esperado "
-                f"'{esperado}' (tentativa {tentativa+1}/3). Reaplicando período..."
-            )
-            # Reaplica o daterangepicker do zero e refiltra
-            await new_page.evaluate(f"""
+        # ── Funções auxiliares ────────────────────────────────────────────
+        def _aplica_periodo_js() -> str:
+            return f"""
                 (function() {{
                     var ini = moment('{ini_y}-{ini_m}-{ini_d}', 'YYYY-MM-DD');
                     var fim = moment('{fim_y}-{fim_m}-{fim_d}', 'YYYY-MM-DD');
                     var el  = $('#reportrange');
                     var dr  = el.data('daterangepicker');
-                    if (dr) {{
-                        dr.setStartDate(ini);
-                        dr.setEndDate(fim);
-                        el.find('span').html(ini.format('DD/MM/YYYY') + ' - ' + fim.format('DD/MM/YYYY'));
-                        el.trigger('apply.daterangepicker', dr);
-                    }}
+                    if (!dr) return 'sem_dr';
+                    dr.setStartDate(ini);
+                    dr.setEndDate(fim);
+                    el.find('span').html(ini.format('DD/MM/YYYY') + ' - ' + fim.format('DD/MM/YYYY'));
+                    el.trigger('apply.daterangepicker', dr);
+                    return dr.startDate.format('DD/MM/YYYY') + ' - ' + dr.endDate.format('DD/MM/YYYY');
                 }})();
-            """)
-            await new_page.wait_for_timeout(500)
-            await new_page.evaluate("GetDadosProdutos();")
-            await new_page.wait_for_timeout(1500)
+            """
 
-        if not periodo_ok:
-            logger.error(
-                f"Cancelamentos — NÃO foi possível aplicar o período {esperado} após 3 tentativas. "
-                f"Retornando zero para evitar reportar cancelamento do período errado."
-            )
-            await new_page.close()
-            return {"_total": 0.0}
-
-        # Aguarda tabela carregar com dados reais (até 6s — reduzido pois pode legitimamente estar vazia)
-        tabela_tem_dados = True
-        try:
-            await new_page.wait_for_function(
-                "document.querySelectorAll('#gdvPaged tbody tr').length > 0 && "
-                "document.querySelector('#gdvPaged tbody tr td') && "
-                "document.querySelector('#gdvPaged tbody tr td').textContent.trim().length > 0",
-                timeout=6000
-            )
-        except Exception:
-            tabela_tem_dados = False
-
-        # Estratégia: o botão "Mais" (GetRecords) ANEXA linhas à tabela —
-        # ela cresce a cada clique. Então primeiro carregamos TODAS as páginas
-        # (clicando em "Mais" até ele sumir), e só depois lemos a tabela
-        # inteira de uma vez, somando TODAS as linhas SEM deduplicação.
-        # IMPORTANTE: não deduplica por conteúdo — dois cancelamentos legítimos
-        # podem ser idênticos (mesma data/filial/valor/produto), e descartá-los
-        # como "duplicata" fazia o total vir a menos em períodos longos (bug
-        # que aparecia a partir de ~15 dias, quando há mais linhas repetidas).
-        if tabela_tem_dados:
-            max_paginas = 100  # rede de segurança contra loop infinito
-            for pagina in range(max_paginas):
-                tem_botao_mais = await new_page.evaluate("""
-                    (function() {
-                        var btn = document.getElementById('Mais');
-                        if (!btn) return false;
-                        var estilo = window.getComputedStyle(btn);
-                        return estilo.display !== 'none' && !btn.classList.contains('escondido');
-                    })()
-                """)
-                if not tem_botao_mais:
-                    break
-
-                n_antes = await new_page.evaluate(
-                    "document.querySelectorAll('#gdvPaged tbody tr').length"
+        async def _confirma_periodo() -> bool:
+            """Garante que a tela está no período pedido (com retry)."""
+            esperado_local = f"{data_ini} - {data_fim}"
+            for _ in range(3):
+                exibido = await new_page.evaluate(
+                    "document.querySelector('#reportrange span') ? "
+                    "document.querySelector('#reportrange span').textContent.trim() : ''"
                 )
-                await new_page.evaluate("if (typeof GetRecords === 'function') GetRecords();")
-                # Aguarda a tabela crescer (novas linhas anexadas)
-                try:
-                    await new_page.wait_for_function(
-                        f"document.querySelectorAll('#gdvPaged tbody tr').length > {n_antes}",
-                        timeout=8000
-                    )
-                except Exception:
-                    logger.info(f"Cancelamentos — paginação parou na página {pagina + 1} (sem novas linhas)")
-                    break
-            else:
-                logger.warning(f"Cancelamentos — atingiu limite de {max_paginas} páginas")
+                if exibido == esperado_local:
+                    return True
+                await new_page.evaluate(_aplica_periodo_js())
+                await new_page.wait_for_timeout(500)
+                await new_page.evaluate("if (typeof GetDadosProdutos === 'function') GetDadosProdutos();")
+                await new_page.wait_for_timeout(1200)
+            return False
 
-            # Agora soma a tabela COMPLETA de uma vez, todas as linhas, sem dedup
-            dados = await new_page.evaluate("""
-                (function() {
-                    var rows = document.querySelectorAll('#gdvPaged tbody tr');
-                    var por_filial = {};
-                    var total = 0;
-                    var n = 0;
-                    rows.forEach(function(row) {
-                        var cells = row.querySelectorAll('td');
-                        if (cells.length < 6) return;
-                        var filial = cells[2].textContent.trim();
-                        var valStr = cells[5].textContent.trim().replace(/[.]/g,'').replace(',','.');
-                        var val = parseFloat(valStr);
-                        if (isNaN(val) || val <= 0) return;
-                        por_filial[filial] = (por_filial[filial] || 0) + val;
-                        total += val;
-                        n += 1;
-                    });
-                    return {por_filial: por_filial, total: parseFloat(total.toFixed(2)), n_linhas: n};
-                })()
-            """)
-            logger.info(
-                f"Cancelamentos — {dados.get('n_linhas', 0)} linhas somadas (sem dedup), "
-                f"total R$ {dados.get('total', 0.0):.2f}"
-            )
-        else:
-            dados = {"por_filial": {}, "total": 0.0}
-
-        if not tabela_tem_dados:
-            # Diagnóstico: confirma se é "sem cancelamentos" ou erro real
-            diag = await new_page.evaluate("""
-                (function() {
-                    var faturado = document.getElementById('ContentPlaceHolder1_LiteralFaturado');
-                    var nrows = document.querySelectorAll('#gdvPaged tbody tr').length;
-                    var msgVazio = document.body.innerText.includes('Nenhuma') || document.body.innerText.includes('nenhum');
-                    return {
-                        literal_faturado: faturado ? faturado.textContent.trim() : null,
-                        n_rows: nrows,
-                        tem_msg_vazio: msgVazio
-                    };
-                })()
-            """)
-            logger.info(f"Cancelamentos — tabela vazia, diagnóstico: {diag}")
-
-        resultado = dados.get("por_filial", {})
-        soma_tabela = dados.get("total", 0.0)
-
-        # ESTRATÉGIA DEFINITIVA (período já confirmado acima com retry):
-        # O card "vendas com cancelamentos" do PDV Legal traz o TOTAL OFICIAL
-        # do período — completo, sem truncar (a tabela pagina em 100 linhas e
-        # nem sempre conseguimos clicar em "Mais" de forma confiável). Como o
-        # período JÁ foi validado antes (#reportrange == esperado), o card
-        # reflete o período correto — o bug antigo de "card trazia hoje" era
-        # justamente por não confirmar o período antes; isso está resolvido.
-        #
-        # Então: o CARD é a fonte da verdade do TOTAL. A tabela (mesmo truncada)
-        # serve só para descobrir a PROPORÇÃO entre as filiais, e rateamos o
-        # total oficial conforme essa proporção.
-        total_card = None
-        try:
-            total_oficial = await new_page.evaluate("""
+        async def _ler_card_cancelado() -> float:
+            """Lê o card oficial 'vendas com cancelamentos' (valor exato, não trunca)."""
+            txt = await new_page.evaluate("""
                 (function() {
                     var cards = document.querySelectorAll('.info-box-number');
-                    var candidato = null;
                     for (var c of cards) {
                         var box = c.closest('.info-box');
                         var label = box ? box.querySelector('.info-box-text') : null;
                         if (!label) continue;
-                        var txt = label.textContent.toLowerCase();
-                        // Card certo: "vendas com cancelamentos". Evita "estornada".
-                        if (txt.includes('cancelament') || (txt.includes('cancelad') && !txt.includes('estorn'))) {
+                        var t = label.textContent.toLowerCase();
+                        if (t.includes('cancelament') || (t.includes('cancelad') && !t.includes('estorn'))) {
                             return c.textContent.trim();
                         }
                     }
                     return null;
                 })()
             """)
-            if total_oficial:
-                limpo = total_oficial.replace("R$", "").replace(".", "").replace(",", ".").strip()
-                total_card = float(limpo) if limpo else None
-        except Exception:
-            total_card = None
-
-        if total_card is not None and total_card > 0:
-            # Rateia o total oficial entre as filiais conforme a proporção que
-            # a tabela mostra. Se a tabela e o card batem, fica igual; se a
-            # tabela está truncada, a proporção ainda é representativa.
-            if soma_tabela > 0:
-                fator = total_card / soma_tabela
-                for k in list(resultado.keys()):
-                    resultado[k] = round(resultado[k] * fator, 2)
-                if abs(soma_tabela - total_card) > 0.01:
-                    logger.info(
-                        f"Cancelamentos — tabela somou R$ {soma_tabela:.2f} (pode estar truncada "
-                        f"em 100 linhas); card oficial = R$ {total_card:.2f}. Usando o card como "
-                        f"total e rateando por filial pela proporção da tabela (fator {fator:.4f})."
-                    )
-            else:
-                # Tabela vazia mas card tem valor — usa o card direto, sem rateio
-                logger.info(f"Cancelamentos — tabela vazia; usando card oficial R$ {total_card:.2f}")
-            resultado["_total"] = round(total_card, 2)
-        else:
-            # Sem card legível — cai na soma da tabela (melhor que nada)
-            resultado["_total"] = round(soma_tabela, 2)
-            logger.info(
-                f"Cancelamentos — card não encontrado; usando soma da tabela R$ {soma_tabela:.2f} "
-                f"(atenção: pode estar truncada em 100 linhas)."
-            )
-
-        # Fallback final: se ainda zero, tenta LiteralFaturado
-        if resultado["_total"] == 0:
-            val_str = await new_page.evaluate(
-                "document.getElementById('ContentPlaceHolder1_LiteralFaturado') ? "
-                "document.getElementById('ContentPlaceHolder1_LiteralFaturado').textContent.trim() : '0'"
-            )
+            if not txt:
+                return 0.0
             try:
-                total_fb = float(val_str.replace(".", "").replace(",", ".")) if val_str not in ("0", "0,00", "") else 0.0
-                if total_fb > 0:
-                    resultado["_total"] = total_fb
-                    logger.info(f"Cancelamentos — fallback LiteralFaturado: R$ {total_fb:.2f}")
+                return float(txt.replace("R$", "").replace(".", "").replace(",", ".").strip())
             except ValueError:
-                pass
+                return 0.0
+
+        # ── Lê a lista de filiais disponíveis ──────────────────────────────
+        filiais = await new_page.evaluate("""
+            (function() {
+                var opts = document.querySelectorAll('#ContentPlaceHolder1_ddlfilial option');
+                return Array.from(opts).map(function(o) {
+                    return {value: o.value, nome: o.textContent.trim()};
+                }).filter(function(o) { return o.value !== ''; });
+            })()
+        """)
+        logger.info(f"Cancelamentos — {len(filiais)} filiais encontradas no filtro")
+
+        # ── Confirma o período antes de qualquer leitura ───────────────────
+        await new_page.wait_for_function("typeof GetDadosProdutos === 'function'", timeout=10000)
+        if not await _confirma_periodo():
+            logger.error(
+                f"Cancelamentos — não foi possível aplicar o período {data_ini}-{data_fim}. "
+                f"Retornando zero para não reportar período errado."
+            )
+            await new_page.close()
+            return {"_total": 0.0}
+
+        resultado = {}
+        total_geral = 0.0
+
+        # ── Itera filial por filial, lendo o card EXATO de cada uma ─────────
+        # Selecionar uma filial de cada vez e ler o card oficial dá o valor
+        # exato por filial, sem depender da tabela (que trunca em 100 linhas).
+        # O total é a soma dos cards — exato e bate com o PDV Legal.
+        if filiais:
+            for fil in filiais:
+                try:
+                    await new_page.evaluate(f"""
+                        (function() {{
+                            $('#ContentPlaceHolder1_ddlfilial').val(['{fil["value"]}']);
+                            $('#ContentPlaceHolder1_ddlfilial').selectpicker('refresh');
+                        }})();
+                    """)
+                    await new_page.wait_for_timeout(300)
+                    # Reaplica período + filtra para esta filial
+                    await new_page.evaluate(_aplica_periodo_js())
+                    await new_page.wait_for_timeout(400)
+                    await new_page.evaluate("GetDadosProdutos();")
+                    await new_page.wait_for_timeout(1200)
+
+                    valor_fil = await _ler_card_cancelado()
+                    nome_fil = fil["nome"]
+                    resultado[nome_fil] = round(valor_fil, 2)
+                    total_geral += valor_fil
+                    logger.info(f"Cancelamentos — {nome_fil}: R$ {valor_fil:.2f} (card exato)")
+                except Exception as e:
+                    logger.warning(f"Cancelamentos — erro ao ler filial {fil.get('nome')}: {e}")
+
+            resultado["_total"] = round(total_geral, 2)
+        else:
+            # Sem lista de filiais — lê o card com todas selecionadas
+            valor = await _ler_card_cancelado()
+            resultado["_total"] = round(valor, 2)
+            logger.info(f"Cancelamentos — sem filtro de filial, card total: R$ {valor:.2f}")
 
         for k, v in resultado.items():
             if not k.startswith("_"):
