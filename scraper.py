@@ -294,6 +294,42 @@ async def exportar_cancelamentos(page, data_ini: str, data_fim: str) -> dict:
         except Exception:
             tabela_tem_dados = False
 
+        # A tabela pagina em blocos de 100 linhas (ContentPlaceHolder1_lblTotalPorPagina).
+        # Para períodos curtos (1 dia) isso nunca importa, mas para "este mês" ou
+        # intervalos maiores pode haver mais de 100 cancelamentos — sem carregar
+        # todas as páginas, a soma fica truncada na primeira leva.
+        if tabela_tem_dados:
+            max_paginas = 20  # rede de segurança contra loop infinito
+            for pagina in range(max_paginas):
+                tem_botao_mais = await new_page.evaluate("""
+                    (function() {
+                        var btn = document.getElementById('Mais');
+                        if (!btn) return false;
+                        var estilo = window.getComputedStyle(btn);
+                        return estilo.display !== 'none' && !btn.classList.contains('escondido');
+                    })()
+                """)
+                if not tem_botao_mais:
+                    break
+
+                n_linhas_antes = await new_page.evaluate(
+                    "document.querySelectorAll('#gdvPaged tbody tr').length"
+                )
+                await new_page.evaluate("if (typeof GetRecords === 'function') GetRecords();")
+                try:
+                    await new_page.wait_for_function(
+                        f"document.querySelectorAll('#gdvPaged tbody tr').length > {n_linhas_antes}",
+                        timeout=8000
+                    )
+                except Exception:
+                    logger.info(f"Cancelamentos — paginação parou na página {pagina + 1} (sem novas linhas)")
+                    break
+            else:
+                logger.warning(f"Cancelamentos — atingiu limite de {max_paginas} páginas, pode haver mais dados")
+
+            n_linhas_total = await new_page.evaluate("document.querySelectorAll('#gdvPaged tbody tr').length")
+            logger.info(f"Cancelamentos — total de linhas carregadas após paginação: {n_linhas_total}")
+
         if not tabela_tem_dados:
             # Diagnóstico: confirma se é "sem cancelamentos" ou erro real
             diag = await new_page.evaluate("""
