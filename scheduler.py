@@ -344,14 +344,16 @@ def iniciar_scheduler():
         replace_existing=True,
     )
 
-    # Detecção de padrões por IA — semanal (segunda 8h), evita virar spam diário.
-    # Roda só para quem já tem histórico suficiente (>=14 dias) e nunca repete
-    # o mesmo padrão notificado nos últimos 7 dias (controle anti-spam no banco).
+    # Detecção de padrões por IA — semanal (segunda 16h). Horário escolhido
+    # de propósito longe do briefing das 7h e da parcial das 13h: evita
+    # sessões de scraping concorrentes e mensagens próximas demais umas das
+    # outras. Chega como um "segundo olhar" no meio da tarde, antes do
+    # movimento de pico começar.
     scheduler.add_job(
         enviar_padroes_detectados_automatico,
         trigger="cron",
         day_of_week="mon",
-        hour=8,
+        hour=16,
         minute=0,
         id="padroes_semanais",
         replace_existing=True,
