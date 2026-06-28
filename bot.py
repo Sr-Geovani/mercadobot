@@ -1808,7 +1808,7 @@ async def _continuar_reativacao(msg, chat_id: int, usuario: dict):
     """Gera o link de reativação — chamado direto se os dados já estão completos,
     ou após coletar telefone/CEP/número de cadastros antigos."""
     from database import atualizar_usuario
-    from pagamento import gerar_link_pagamento, buscar_assinatura_ativa, buscar_link_assinatura
+    from pagamento import gerar_link_pagamento, buscar_assinatura_ativa, buscar_link_assinatura, atualizar_cliente_asaas
 
     await msg.reply_text("⏳ Gerando link de reativação...")
 
@@ -1817,6 +1817,17 @@ async def _continuar_reativacao(msg, chat_id: int, usuario: dict):
         trial_usado          = usuario.get("trial_usado", False)
         dias_trial_restantes = calcular_dias_trial_restantes(usuario) if trial_usado else 0
         logger.info(f"Reativação chat_id={chat_id}: asaas_id={asaas_id}, trial_usado={trial_usado}, dias_restantes={dias_trial_restantes}")
+
+        # Sincroniza telefone/CEP/número com o Asaas — necessário para o Checkout
+        # com cartão de crédito recorrente. Esses dados ficam no nosso banco desde
+        # a coleta, mas o cliente no Asaas pode não ter sido atualizado ainda.
+        await atualizar_cliente_asaas(
+            asaas_id,
+            telefone=usuario.get("telefone"),
+            cep=usuario.get("cep"),
+            endereco_numero=usuario.get("endereco_numero"),
+        )
+        logger.info(f"Reativação chat_id={chat_id}: dados sincronizados com Asaas")
 
         assinatura_id = await buscar_assinatura_ativa(asaas_id)
         logger.info(f"Reativação chat_id={chat_id}: assinatura_ativa encontrada={assinatura_id}")

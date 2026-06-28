@@ -39,6 +39,43 @@ async def buscar_cliente_por_email(email: str) -> dict | None:
         return clientes[0] if clientes else None
 
 
+async def atualizar_cliente_asaas(asaas_cliente_id: str, telefone: str = None,
+                                   cep: str = None, endereco_numero: str = None) -> dict:
+    """
+    Atualiza diretamente um cliente já existente no Asaas (PUT por ID),
+    sem precisar buscar por email. Usado na reativação, quando já temos o
+    asaas_id salvo e só precisamos sincronizar campos novos (telefone/CEP/número)
+    que foram coletados depois da criação original do cliente.
+    """
+    if not asaas_cliente_id:
+        return {}
+
+    payload = {}
+    if telefone:
+        payload["mobilePhone"] = telefone
+        payload["phone"] = telefone
+    if cep:
+        payload["postalCode"] = cep
+    if endereco_numero:
+        payload["addressNumber"] = endereco_numero
+
+    if not payload:
+        return {}
+
+    async with httpx.AsyncClient() as client:
+        resp = await client.put(
+            f"{ASAAS_URL}/customers/{asaas_cliente_id}",
+            json=payload,
+            headers=_headers()
+        )
+        data = resp.json()
+        if data.get("errors"):
+            logger.error(f"Erro ao atualizar cliente {asaas_cliente_id} no Asaas: {data.get('errors')}")
+        else:
+            logger.info(f"Cliente {asaas_cliente_id} atualizado no Asaas: {payload}")
+        return data
+
+
 async def criar_cliente_asaas(nome: str, email: str, cpf: str = None, empresa: str = None,
                                telefone: str = None, cep: str = None,
                                endereco_numero: str = None) -> dict:
