@@ -233,22 +233,26 @@ async def exportar_cancelamentos(page, data_ini: str, data_fim: str) -> dict:
         await new_page.wait_for_function("typeof $ !== 'undefined'", timeout=10000)
         await new_page.wait_for_timeout(1000)
 
-        # Injeta datas via daterangepicker API
+        # Injeta datas via daterangepicker API e dispara o evento que o PDV Legal escuta
         ini_d, ini_m, ini_y = data_ini.split("/")
         fim_d, fim_m, fim_y = data_fim.split("/")
-        await new_page.evaluate(f"""
+        data_aplicada = await new_page.evaluate(f"""
             (function() {{
                 var ini = moment('{ini_y}-{ini_m}-{ini_d}', 'YYYY-MM-DD');
                 var fim = moment('{fim_y}-{fim_m}-{fim_d}', 'YYYY-MM-DD');
-                var dr = $('#reportrange').data('daterangepicker');
-                if (dr) {{
-                    dr.setStartDate(ini);
-                    dr.setEndDate(fim);
-                    $('#reportrange span').html(ini.format('DD/MM/YYYY') + ' - ' + fim.format('DD/MM/YYYY'));
-                }}
+                var el  = $('#reportrange');
+                var dr  = el.data('daterangepicker');
+                if (!dr) return 'sem_daterangepicker';
+                dr.setStartDate(ini);
+                dr.setEndDate(fim);
+                el.find('span').html(ini.format('DD/MM/YYYY') + ' - ' + fim.format('DD/MM/YYYY'));
+                // Dispara o evento que o PDV Legal escuta para atualizar variáveis internas
+                el.trigger('apply.daterangepicker', dr);
+                return dr.startDate.format('DD/MM/YYYY') + ' - ' + dr.endDate.format('DD/MM/YYYY');
             }})();
         """)
-        await new_page.wait_for_timeout(300)
+        logger.info(f"Cancelamentos — daterangepicker aplicado: {data_aplicada}")
+        await new_page.wait_for_timeout(500)
 
         # Garante todas as filiais selecionadas
         await new_page.evaluate("""
@@ -262,6 +266,21 @@ async def exportar_cancelamentos(page, data_ini: str, data_fim: str) -> dict:
         # Aguarda GetDadosProdutos disponível e filtra
         await new_page.wait_for_function("typeof GetDadosProdutos === 'function'", timeout=10000)
         await new_page.evaluate("GetDadosProdutos();")
+        await new_page.wait_for_timeout(500)
+
+        # Verificação de segurança: confirma que o período exibido na tela é o esperado
+        periodo_exibido = await new_page.evaluate(
+            "document.querySelector('#reportrange span') ? "
+            "document.querySelector('#reportrange span').textContent.trim() : ''"
+        )
+        esperado = f"{data_ini} - {data_fim}"
+        if periodo_exibido and periodo_exibido != esperado:
+            logger.warning(
+                f"Cancelamentos — período exibido '{periodo_exibido}' difere do esperado "
+                f"'{esperado}'. Forçando GetDadosProdutos novamente."
+            )
+            await new_page.evaluate("GetDadosProdutos();")
+            await new_page.wait_for_timeout(1500)
 
         # Aguarda tabela carregar com dados reais (até 6s — reduzido pois pode legitimamente estar vazia)
         tabela_tem_dados = True
