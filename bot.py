@@ -927,9 +927,9 @@ async def receber_arquivo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def receber_foto(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     Recebe uma foto (ex: produto na gôndola) e usa a visão nativa do Claude
-    para identificar o que é e responder à legenda/pergunta do usuário, se
-    houver. Não depende de OCR nem de banco de produtos — o Claude já
-    reconhece marcas e produtos comuns diretamente da imagem.
+    para identificar o que é — com acesso às mesmas ferramentas do agente de
+    texto, então ele pode tanto identificar o produto quanto, se fizer
+    sentido, já buscar dados reais de venda desse produto no PDV Legal.
     """
     chat_id = update.effective_chat.id
     await update.message.reply_text("📸 Analisando a imagem...")
@@ -945,8 +945,11 @@ async def receber_foto(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         legenda = update.message.caption or ""
 
-        from agente import identificar_produto_imagem
-        resposta = await identificar_produto_imagem(imagem_base64, "image/jpeg", legenda)
+        from agente import processar_mensagem_agente
+        resposta = await processar_mensagem_agente(
+            chat_id, texto_usuario=legenda,
+            imagem_base64=imagem_base64, imagem_media_type="image/jpeg"
+        )
         await enviar(update.message, resposta)
         await abrir_menu(update.message, chat_id)
     except Exception as e:

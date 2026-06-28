@@ -116,6 +116,40 @@ TOOLS = [
             "required": ["tipo_analise", "data_ini", "data_fim", "descricao_periodo"],
         },
     },
+    {
+        "name": "buscar_produto_especifico",
+        "description": (
+            "Busca informações de venda de UM produto específico pelo nome (ou parte "
+            "do nome), como quantidade vendida, valor total e em quais filiais ele "
+            "aparece. Use esta ferramenta quando o usuário perguntar sobre um produto "
+            "em particular — por exemplo depois de enviar uma foto de um produto e "
+            "perguntar 'isso vende bem?', 'quanto vendi disso?', 'tenho isso no "
+            "estoque?'. Funciona com busca parcial e não sensível a maiúsculas "
+            "(ex: 'doritos' encontra 'DORITOS QUEIJO 275G')."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "nome_produto": {
+                    "type": "string",
+                    "description": "Nome ou parte do nome do produto a buscar, ex: 'doritos', 'coca cola', 'red bull'.",
+                },
+                "data_ini": {
+                    "type": "string",
+                    "description": "Data inicial do período no formato DD/MM/AAAA.",
+                },
+                "data_fim": {
+                    "type": "string",
+                    "description": "Data final do período no formato DD/MM/AAAA.",
+                },
+                "descricao_periodo": {
+                    "type": "string",
+                    "description": "Descrição curta do período em português, ex: 'últimos 30 dias'.",
+                },
+            },
+            "required": ["nome_produto", "data_ini", "data_fim", "descricao_periodo"],
+        },
+    },
 ]
 
 
@@ -305,10 +339,57 @@ async def executar_tool_analise(chat_id: int, tipo_analise: str, data_ini: str,
     return {"erro": f"Tipo de análise '{tipo_analise}' não reconhecido."}
 
 
+async def executar_tool_buscar_produto(chat_id: int, nome_produto: str, data_ini: str,
+                                        data_fim: str, descricao_periodo: str) -> dict:
+    """
+    Busca um produto específico (por nome parcial, case-insensitive) na base
+    de produtos vendidos do período, retornando quantidade, valor e em quais
+    filiais ele aparece. Usado principalmente após identificação de produto
+    por foto, para conectar a imagem com os dados reais de venda.
+    """
+    dados = await garantir_dados_periodo(chat_id, data_ini, data_fim, descricao_periodo)
+    if "erro" in dados:
+        return dados
+
+    produtos = dados.get("produtos")
+    if produtos is None or len(produtos) == 0:
+        return {"erro": "Nenhum dado de produtos disponível para esse período."}
+
+    termo = nome_produto.strip().lower()
+    encontrados = produtos[produtos["produto"].str.lower().str.contains(termo, na=False)]
+
+    if len(encontrados) == 0:
+        return {
+            "produto_buscado": nome_produto,
+            "periodo": descricao_periodo,
+            "encontrado": False,
+            "mensagem": f"Não encontrei nenhum produto com '{nome_produto}' vendido nesse período.",
+        }
+
+    por_filial = (
+        encontrados.groupby("nomeloja")
+        .agg(quantidade=("quantidade", "sum"), valor=("valor", "sum"))
+        .round(2)
+        .to_dict(orient="index")
+    )
+    nomes_exatos = encontrados["produto"].unique().tolist()
+
+    return {
+        "produto_buscado": nome_produto,
+        "periodo": descricao_periodo,
+        "encontrado": True,
+        "nomes_exatos_encontrados": nomes_exatos,
+        "quantidade_total": int(encontrados["quantidade"].sum()),
+        "valor_total": round(float(encontrados["valor"].sum()), 2),
+        "por_filial": por_filial,
+    }
+
+
 # Mapa de nome de tool -> função Python que efetivamente a executa
 EXECUTORES = {
     "buscar_faturamento": executar_tool_buscar_faturamento,
     "analisar_operacao": executar_tool_analise,
+    "buscar_produto_especifico": executar_tool_buscar_produto,
 }
 
 
@@ -327,58 +408,17 @@ SYSTEM_PROMPT = (
     "Quando o usuário mencionar um período relativo (hoje, ontem, esta semana, "
     "este mês), calcule você mesmo as datas exatas em formato DD/MM/AAAA antes de "
     "chamar a ferramenta — hoje é " + datetime.now(BRASILIA).strftime("%d/%m/%Y") + ".\n\n"
+    "Quando o usuário enviar uma FOTO de um produto: identifique o produto pela "
+    "imagem e, IMEDIATAMENTE e sem perguntar permissão, use a ferramenta "
+    "'buscar_produto_especifico' para verificar se ele aparece na base de vendas "
+    "dos últimos 30 dias. Junte a identificação visual com o dado real de venda "
+    "numa única resposta (ex: quantidade vendida, em quais filiais, se vende bem "
+    "ou não). Só faça uma pergunta de volta se a foto não tiver um produto claro "
+    "para identificar.\n\n"
     "Responda em português do Brasil, direto ao ponto, sem rodeios. Pode usar "
     "negrito (**texto**) e emojis com moderação. Evite respostas longas — "
     "operadores de mercadinho leem isso rápido, no celular, entre uma tarefa e outra."
 )
-
-
-async def identificar_produto_imagem(imagem_base64: str, media_type: str,
-                                      pergunta_usuario: str = "") -> str:
-    """
-    Usa a visão nativa do Claude (suportada de fato pela API, ao contrário de
-    áudio) para identificar um produto a partir de uma foto, e responder à
-    pergunta do usuário sobre ele (ex: "isso vende bem?", "tenho estoque
-    disso?"). Roda como uma chamada simples (sem tool-use), pois aqui a
-    entrada principal é a imagem, não uma pergunta que precise de dados do
-    PDV Legal — ainda. Se o usuário quiser dados reais sobre o produto
-    identificado, deve perguntar em seguida em texto, e cai no fluxo normal
-    do agente com tool-use.
-    """
-    client = anthropic.AsyncAnthropic(api_key=ANTHROPIC_KEY)
-
-    texto_pedido = pergunta_usuario.strip() or (
-        "Identifique este produto (nome, marca, categoria). Depois, dê uma dica "
-        "rápida e prática para um operador de mercadinho autônomo sobre esse "
-        "produto — por exemplo, se costuma ter giro alto, onde costuma ficar "
-        "bem posicionado, ou produtos complementares para vender junto."
-    )
-
-    try:
-        resp = await client.messages.create(
-            model=MODEL,
-            max_tokens=500,
-            system=SYSTEM_PROMPT,
-            messages=[{
-                "role": "user",
-                "content": [
-                    {
-                        "type": "image",
-                        "source": {
-                            "type": "base64",
-                            "media_type": media_type,
-                            "data": imagem_base64,
-                        },
-                    },
-                    {"type": "text", "text": texto_pedido},
-                ],
-            }],
-        )
-        texto = "".join(block.text for block in resp.content if block.type == "text")
-        return texto.strip() or "Não consegui identificar o produto nessa imagem."
-    except Exception as e:
-        logger.error(f"Erro ao identificar produto por imagem: {e}")
-        return "⚠️ Não consegui analisar a imagem agora. Tente de novo em alguns instantes."
 
 
 async def transcrever_audio(caminho_arquivo: str) -> str | None:
@@ -397,8 +437,15 @@ async def transcrever_audio(caminho_arquivo: str) -> str | None:
     """
     openai_key = os.environ.get("OPENAI_KEY") or os.environ.get("OPENAI_API_KEY")
     if not openai_key:
-        logger.warning("Transcrição de áudio solicitada mas OPENAI_KEY não está configurada.")
+        logger.warning(
+            "Transcrição de áudio solicitada mas nenhuma variável de ambiente "
+            "OPENAI_KEY ou OPENAI_API_KEY foi encontrada. Variáveis disponíveis "
+            "que contêm 'OPENAI': " +
+            str([k for k in os.environ.keys() if "OPENAI" in k.upper()])
+        )
         return None
+
+    logger.info(f"Transcrição: usando chave OpenAI (prefixo: {openai_key[:7]}...), arquivo={caminho_arquivo}")
 
     try:
         import httpx
@@ -419,12 +466,20 @@ async def transcrever_audio(caminho_arquivo: str) -> str | None:
         return None
 
 
-async def processar_mensagem_agente(chat_id: int, texto_usuario: str,
-                                     historico: list[dict] = None) -> str:
+async def processar_mensagem_agente(chat_id: int, texto_usuario: str = None,
+                                     historico: list[dict] = None,
+                                     imagem_base64: str = None,
+                                     imagem_media_type: str = None) -> str:
     """
-    Ponto de entrada principal do agente. Recebe a mensagem do usuário,
-    decide com o Claude se precisa chamar ferramentas, executa o que for
-    necessário, e retorna a resposta final em texto.
+    Ponto de entrada principal do agente. Recebe a mensagem do usuário
+    (texto e/ou imagem), decide com o Claude se precisa chamar ferramentas,
+    executa o que for necessário, e retorna a resposta final em texto.
+
+    Quando há imagem, o Claude recebe a foto junto com as MESMAS ferramentas
+    disponíveis para texto — assim ele pode, por exemplo, identificar um
+    produto na foto E já buscar dados reais de venda desse produto no PDV
+    Legal, tudo em uma única interação, em vez de duas chamadas separadas
+    sem contexto compartilhado.
 
     historico: lista opcional de mensagens anteriores [{"role": ..., "content": ...}]
     para dar contexto de conversas anteriores na mesma sessão.
@@ -432,7 +487,29 @@ async def processar_mensagem_agente(chat_id: int, texto_usuario: str,
     client = anthropic.AsyncAnthropic(api_key=ANTHROPIC_KEY)
 
     messages = list(historico) if historico else []
-    messages.append({"role": "user", "content": texto_usuario})
+
+    if imagem_base64:
+        texto_pedido = (texto_usuario or "").strip() or (
+            "Identifique este produto (nome, marca, categoria). Se fizer sentido, "
+            "verifique nos dados de vendas se esse produto específico aparece no "
+            "histórico recente e comente brevemente sobre o desempenho dele."
+        )
+        messages.append({
+            "role": "user",
+            "content": [
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": imagem_media_type or "image/jpeg",
+                        "data": imagem_base64,
+                    },
+                },
+                {"type": "text", "text": texto_pedido},
+            ],
+        })
+    else:
+        messages.append({"role": "user", "content": texto_usuario})
 
     try:
         # Loop de tool-use: o Claude pode pedir para chamar uma ou mais
