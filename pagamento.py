@@ -257,6 +257,9 @@ async def verificar_pagamento_confirmado(asaas_cliente_id: str) -> bool:
     """
     Verifica se existe pagamento confirmado recente (últimos 35 dias).
     Pagamentos antigos não reativam o acesso.
+
+    Busca tanto status CONFIRMED quanto RECEIVED — pagamentos via cartão de
+    crédito recorrente costumam vir como RECEIVED, não CONFIRMED.
     """
     if not asaas_cliente_id:
         return False
@@ -267,20 +270,22 @@ async def verificar_pagamento_confirmado(asaas_cliente_id: str) -> bool:
     data_corte = (datetime.now(brasilia) - timedelta(days=35)).strftime("%Y-%m-%d")
 
     async with httpx.AsyncClient() as client:
-        resp = await client.get(
-            f"{ASAAS_URL}/payments",
-            params={
-                "customer":        asaas_cliente_id,
-                "status":          "CONFIRMED",
-                "dateCreated[ge]": data_corte,
-            },
-            headers=_headers()
-        )
-        data = resp.json()
-        pagamentos = data.get("data", [])
-        if pagamentos:
-            logger.info(f"Pagamento recente encontrado: {pagamentos[0].get('id')}")
-            return True
+        for status in ("CONFIRMED", "RECEIVED"):
+            resp = await client.get(
+                f"{ASAAS_URL}/payments",
+                params={
+                    "customer":        asaas_cliente_id,
+                    "status":          status,
+                    "dateCreated[ge]": data_corte,
+                },
+                headers=_headers()
+            )
+            data = resp.json()
+            pagamentos = data.get("data", [])
+            if pagamentos:
+                logger.info(f"Pagamento recente encontrado (status={status}): {pagamentos[0].get('id')}")
+                return True
+
         return False
 
 
