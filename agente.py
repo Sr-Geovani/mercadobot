@@ -119,20 +119,23 @@ TOOLS = [
     {
         "name": "buscar_produto_especifico",
         "description": (
-            "Busca informações de venda de UM produto específico pelo nome (ou parte "
-            "do nome), como quantidade vendida, valor total e em quais filiais ele "
-            "aparece. Use esta ferramenta quando o usuário perguntar sobre um produto "
-            "em particular — por exemplo depois de enviar uma foto de um produto e "
-            "perguntar 'isso vende bem?', 'quanto vendi disso?', 'tenho isso no "
-            "estoque?'. Funciona com busca parcial e não sensível a maiúsculas "
-            "(ex: 'doritos' encontra 'DORITOS QUEIJO 275G')."
+            "Busca informações de venda de UM produto específico na base de produtos "
+            "vendidos, com tolerância a nomes abreviados ou diferentes do que aparece "
+            "na embalagem/foto (o sistema do mercadinho costuma abreviar nomes, ex: "
+            "'DORIT QJ 275' para Doritos Queijo 275g). Use esta ferramenta quando o "
+            "usuário perguntar sobre um produto em particular — por exemplo depois de "
+            "enviar uma foto e perguntar 'isso vende bem?', 'quanto vendi disso?'. "
+            "IMPORTANTE: passe apenas a palavra-chave PRINCIPAL do produto (marca ou "
+            "primeira palavra do nome), NÃO o nome completo com gramatura/sabor — "
+            "ex: para 'Doritos Queijo 275g' passe só 'doritos', não a frase completa. "
+            "Isso aumenta a chance de encontrar o produto mesmo com nome abreviado."
         ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "nome_produto": {
                     "type": "string",
-                    "description": "Nome ou parte do nome do produto a buscar, ex: 'doritos', 'coca cola', 'red bull'.",
+                    "description": "Apenas a palavra-chave principal do produto (marca ou primeiro termo), ex: 'doritos', 'coca', 'redbull'. Evite frases completas ou gramatura.",
                 },
                 "data_ini": {
                     "type": "string",
@@ -339,13 +342,100 @@ async def executar_tool_analise(chat_id: int, tipo_analise: str, data_ini: str,
     return {"erro": f"Tipo de análise '{tipo_analise}' não reconhecido."}
 
 
+def _normalizar_texto(texto: str) -> str:
+    """Remove acentos, baixa caixa, remove pontuação simples — facilita comparação."""
+    import unicodedata
+    texto = unicodedata.normalize("NFKD", texto).encode("ascii", "ignore").decode("ascii")
+    return texto.lower().strip()
+
+
+def _tokens_significativos(texto: str) -> list[str]:
+    """
+    Quebra em palavras e descarta tokens pouco discriminantes (números
+    isolados, unidades de medida) — o que sobra tende a ser marca/sabor,
+    que é o que mais importa para encontrar o produto certo mesmo com
+    nome abreviado ou gramatura diferente.
+    """
+    import re
+    texto = _normalizar_texto(texto)
+    tokens = re.findall(r"[a-z]+", texto)  # só letras — ignora números/gramas
+    return [t for t in tokens if len(t) >= 3]
+
+
+def _bate_prefixo(a: str, b: str, min_len: int = 5) -> bool:
+    """
+    Compara dois tokens bidirecionalmente por prefixo — cobre tanto o caso
+    do termo buscado vir abreviado quanto o nome no PDV Legal estar
+    abreviado (ex: buscar 'doritos' deve bater com 'DORIT' no sistema).
+    Para tokens curtos (< min_len), exige igualdade exata para evitar
+    falsos positivos (ex: 'sal' não deveria casar com qualquer coisa).
+    """
+    menor_len = min(len(a), len(b))
+    if menor_len < min_len:
+        return a == b
+    return a[:min_len] == b[:min_len]
+
+
+def _buscar_produto_em_base(produtos, nome_produto: str):
+    """
+    Busca tolerante a abreviação, em camadas progressivas — para da
+    primeira camada que encontrar algo:
+      1. Contains direto (com e sem espaços, cobre termo buscado colado
+         como 'redbull' batendo com 'RED BULL')
+      2. Palavra-chave principal contida no nome OU prefixo bidirecional
+         por token (cobre abreviação em qualquer direção)
+      3. Similaridade aproximada (difflib) como último recurso
+
+    Retorna (DataFrame filtrado, nivel_confianca) para o Claude poder
+    avisar o usuário quando o match foi só aproximado, não exato.
+    """
+    import difflib
+
+    nomes_produtos    = produtos["produto"].astype(str)
+    nomes_norm        = nomes_produtos.apply(_normalizar_texto)
+    nomes_sem_espaco  = nomes_norm.str.replace(" ", "", regex=False)
+    termo_norm        = _normalizar_texto(nome_produto)
+    termo_sem_espaco  = termo_norm.replace(" ", "")
+
+    # Camada 1 — contains direto, com e sem espaços
+    mask = nomes_norm.str.contains(termo_norm, na=False, regex=False)
+    mask = mask | nomes_sem_espaco.str.contains(termo_sem_espaco, na=False, regex=False)
+    if mask.any():
+        return produtos[mask], "exata"
+
+    tokens_busca = _tokens_significativos(nome_produto)
+    if not tokens_busca:
+        return produtos.iloc[0:0], "nenhuma"
+    palavra_chave = tokens_busca[0]
+
+    # Camada 2 — palavra-chave contains OU prefixo bidirecional por token
+    def _bate(nome_norm: str) -> bool:
+        if palavra_chave in nome_norm:
+            return True
+        return any(_bate_prefixo(palavra_chave, tok) for tok in _tokens_significativos(nome_norm))
+
+    mask = nomes_norm.apply(_bate)
+    if mask.any():
+        return produtos[mask], "palavra_chave_ou_prefixo"
+
+    # Camada 3 — similaridade aproximada, último recurso
+    nomes_unicos = nomes_norm.unique().tolist()
+    proximos = difflib.get_close_matches(termo_norm, nomes_unicos, n=5, cutoff=0.55)
+    if proximos:
+        mask = nomes_norm.isin(proximos)
+        return produtos[mask], "aproximada"
+
+    return produtos.iloc[0:0], "nenhuma"
+
+
 async def executar_tool_buscar_produto(chat_id: int, nome_produto: str, data_ini: str,
                                         data_fim: str, descricao_periodo: str) -> dict:
     """
-    Busca um produto específico (por nome parcial, case-insensitive) na base
-    de produtos vendidos do período, retornando quantidade, valor e em quais
-    filiais ele aparece. Usado principalmente após identificação de produto
-    por foto, para conectar a imagem com os dados reais de venda.
+    Busca um produto específico na base de produtos vendidos do período,
+    com tolerância a nomes abreviados ou diferentes do PDV Legal (ex: buscar
+    'doritos' encontra 'DORIT QUEIJO 275' mesmo com gramatura ou abreviação
+    diferentes). Retorna quantidade, valor e em quais filiais aparece.
+    Usado principalmente após identificação de produto por foto.
     """
     dados = await garantir_dados_periodo(chat_id, data_ini, data_fim, descricao_periodo)
     if "erro" in dados:
@@ -355,15 +445,18 @@ async def executar_tool_buscar_produto(chat_id: int, nome_produto: str, data_ini
     if produtos is None or len(produtos) == 0:
         return {"erro": "Nenhum dado de produtos disponível para esse período."}
 
-    termo = nome_produto.strip().lower()
-    encontrados = produtos[produtos["produto"].str.lower().str.contains(termo, na=False)]
+    encontrados, confianca = _buscar_produto_em_base(produtos, nome_produto)
 
     if len(encontrados) == 0:
         return {
             "produto_buscado": nome_produto,
             "periodo": descricao_periodo,
             "encontrado": False,
-            "mensagem": f"Não encontrei nenhum produto com '{nome_produto}' vendido nesse período.",
+            "mensagem": (
+                f"Não encontrei nenhum produto parecido com '{nome_produto}' vendido "
+                f"nesse período — pode não ter vendido, ou o nome no sistema é bem "
+                f"diferente do esperado."
+            ),
         }
 
     por_filial = (
@@ -374,15 +467,24 @@ async def executar_tool_buscar_produto(chat_id: int, nome_produto: str, data_ini
     )
     nomes_exatos = encontrados["produto"].unique().tolist()
 
-    return {
+    resultado = {
         "produto_buscado": nome_produto,
         "periodo": descricao_periodo,
         "encontrado": True,
+        "nivel_confianca_match": confianca,  # "exata"/"palavra_chave"/"prefixo_abreviado"/"aproximada"
         "nomes_exatos_encontrados": nomes_exatos,
         "quantidade_total": int(encontrados["quantidade"].sum()),
         "valor_total": round(float(encontrados["valor"].sum()), 2),
         "por_filial": por_filial,
     }
+
+    if confianca == "aproximada":
+        resultado["aviso"] = (
+            "O nome encontrado é diferente do buscado — confirme com o usuário "
+            "se este é o produto certo antes de afirmar com certeza."
+        )
+
+    return resultado
 
 
 # Mapa de nome de tool -> função Python que efetivamente a executa
@@ -410,11 +512,13 @@ SYSTEM_PROMPT = (
     "chamar a ferramenta — hoje é " + datetime.now(BRASILIA).strftime("%d/%m/%Y") + ".\n\n"
     "Quando o usuário enviar uma FOTO de um produto: identifique o produto pela "
     "imagem e, IMEDIATAMENTE e sem perguntar permissão, use a ferramenta "
-    "'buscar_produto_especifico' para verificar se ele aparece na base de vendas "
-    "dos últimos 30 dias. Junte a identificação visual com o dado real de venda "
-    "numa única resposta (ex: quantidade vendida, em quais filiais, se vende bem "
-    "ou não). Só faça uma pergunta de volta se a foto não tiver um produto claro "
-    "para identificar.\n\n"
+    "'buscar_produto_especifico' com APENAS a palavra-chave principal (marca/primeira "
+    "palavra, sem gramatura) para verificar se ele aparece na base de vendas dos "
+    "últimos 30 dias. Junte a identificação visual com o dado real de venda numa "
+    "única resposta. Se o resultado vier com nivel_confianca_match 'aproximada', "
+    "deixe claro ao usuário que o nome encontrado no sistema é parecido mas não "
+    "idêntico, e mostre qual nome exato foi encontrado para ele confirmar. Só faça "
+    "uma pergunta de volta se a foto não tiver um produto claro para identificar.\n\n"
     "Responda em português do Brasil, direto ao ponto, sem rodeios. Pode usar "
     "negrito (**texto**) e emojis com moderação. Evite respostas longas — "
     "operadores de mercadinho leem isso rápido, no celular, entre uma tarefa e outra."
