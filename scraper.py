@@ -199,6 +199,15 @@ async def exportar_produtos(page, data_ini: str, data_fim: str) -> Path:
         """)
         logger.info(f"Produtos — Intervalo aplicado via API: {aplicado}")
         await page.wait_for_timeout(800)
+        # Após aplicar via API, dispara o filtro explicitamente e aguarda a
+        # tabela recarregar. O trigger apply.daterangepicker nem sempre aciona
+        # o callback interno de recálculo; clicar em Filtrar garante isso.
+        try:
+            await page.click("#btnFiltro")
+            await page.wait_for_timeout(3000)
+        except Exception:
+            await page.evaluate("if (typeof GetDadosProdutos === 'function') GetDadosProdutos();")
+            await page.wait_for_timeout(3000)
 
     # Clica em Filtrar
     await page.click("#btnFiltro")
@@ -254,6 +263,25 @@ async def exportar_produtos(page, data_ini: str, data_fim: str) -> Path:
             f"Produtos — NÃO foi possível aplicar o período {esperado} após 3 tentativas. "
             f"O relatório pode sair incorreto."
         )
+
+    # Diagnóstico: conta as linhas da tabela de produtos na tela antes de
+    # baixar. Se a tela tiver poucos produtos, o problema é o filtro/recálculo;
+    # se a tela tiver muitos mas o Excel vier truncado, o problema é o download.
+    try:
+        n_linhas_tela = await page.evaluate("""
+            (function() {
+                var sels = ['#gdvPaged tbody tr', '#ContentPlaceHolder1_GridView1 tr',
+                            'table.table tbody tr', '.dataTable tbody tr'];
+                for (var i = 0; i < sels.length; i++) {
+                    var n = document.querySelectorAll(sels[i]).length;
+                    if (n > 0) return {seletor: sels[i], linhas: n};
+                }
+                return {seletor: null, linhas: 0};
+            })()
+        """)
+        logger.info(f"Produtos — linhas na tabela da tela antes do download: {n_linhas_tela}")
+    except Exception as e:
+        logger.warning(f"Produtos — não foi possível contar linhas da tela: {e}")
 
     # Abre modal de download
     await page.click("#imgDownload")

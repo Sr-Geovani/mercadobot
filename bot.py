@@ -569,12 +569,33 @@ def bloco_categorias(produtos: pd.DataFrame) -> str:
 
 def bloco_top_produtos(produtos: pd.DataFrame) -> str:
     linhas = [f"📦 {b('TOP PRODUTOS POR UNIDADE')}\n"]
+
+    # Ranking GERAL agregado (soma todas as filiais) — top 10. Sem isso, um
+    # produto vendido em várias lojas fica fragmentado e some do topo.
+    agg = produtos.groupby("produto").agg(
+        quantidade=("quantidade", "sum"),
+        valor=("valor", "sum"),
+    ).reset_index().sort_values("quantidade", ascending=False)
+    total_geral_itens = int(agg["quantidade"].sum())
+
+    linhas.append(f"🏆 {b('Geral (todas as lojas) — top 10:')}")
+    for pos, (_, row) in enumerate(agg.head(10).iterrows(), 1):
+        pct = row["quantidade"] / total_geral_itens * 100 if total_geral_itens else 0
+        linhas.append(
+            f"   {pos}. {row['produto']} — {b(f'{int(row.quantidade)} un')} "
+            f"{i(f'({pct:.1f}%)')}"
+        )
+    linhas.append("")
+
+    # Detalhe por filial — top 5 de cada loja
     for filial in produtos["nomeloja"].unique():
         nome        = filial.split()[-1].title()
         df_filial   = produtos[produtos["nomeloja"]==filial]
         total_itens = int(df_filial["quantidade"].sum())
         total_val   = df_filial["valor"].sum()
-        top         = df_filial.sort_values("quantidade", ascending=False).head(5)
+        top         = df_filial.groupby("produto").agg(
+            quantidade=("quantidade", "sum"), valor=("valor", "sum")
+        ).reset_index().sort_values("quantidade", ascending=False).head(5)
 
         linhas.append(f"📍 {b(nome)} — {b(str(total_itens))} itens / R$ {total_val:,.2f}")
         for pos, (_, row) in enumerate(top.iterrows(), 1):
@@ -632,7 +653,18 @@ def bloco_semanal(vendas: pd.DataFrame) -> str:
 
 def bloco_pico(vendas: pd.DataFrame) -> str:
     v = vendas.copy()
-    v["hora"] = pd.to_datetime(v["HoraAbertura"], format="%H:%M:%S").dt.hour
+    # Parsing robusto da hora: aceita formatos variados e descarta inválidos
+    # sem quebrar o bloco inteiro (uma hora malformada não pode derrubar o
+    # Resumo Executivo que agrega vários blocos).
+    v["hora"] = pd.to_datetime(v["HoraAbertura"], errors="coerce").dt.hour
+    if v["hora"].isna().all():
+        # Tenta extrair a hora como número do início da string (ex: "14:30:00")
+        v["hora"] = v["HoraAbertura"].astype(str).str.extract(r"^(\d{1,2})")[0]
+        v["hora"] = pd.to_numeric(v["hora"], errors="coerce")
+    v = v[v["hora"].notna()]
+    if len(v) == 0:
+        return f"🕐 {b('HORÁRIOS DE PICO')}\n\n{i('Sem dados de horário disponíveis no período.')}"
+    v["hora"] = v["hora"].astype(int)
     pico = v.groupby(["hora","nomeFilial"])["valor"].count().unstack(fill_value=0)
 
     linhas = [f"🕐 {b('HORÁRIOS DE PICO')}\n"]

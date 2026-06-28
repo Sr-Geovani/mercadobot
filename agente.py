@@ -390,13 +390,23 @@ async def executar_tool_analise(chat_id: int, tipo_analise: str, data_ini: str,
         return {"periodo": descricao_periodo, "analise": tipo_analise, "resultado_texto": "\n\n".join(blocos)}
 
     if tipo_analise in mapa_blocos_vendas:
-        texto = mapa_blocos_vendas[tipo_analise](vendas)
+        try:
+            texto = mapa_blocos_vendas[tipo_analise](vendas)
+        except Exception as e:
+            logger.warning(f"Erro no bloco '{tipo_analise}': {e}")
+            return {"periodo": descricao_periodo, "analise": tipo_analise,
+                    "erro_parcial": f"Não foi possível gerar a análise '{tipo_analise}' para este período."}
         return {"periodo": descricao_periodo, "analise": tipo_analise, "resultado_texto": texto}
 
     if tipo_analise in mapa_blocos_produtos:
         if produtos is None or len(produtos) == 0:
             return {"erro": "Nenhum dado de produtos disponível para esse período."}
-        texto = mapa_blocos_produtos[tipo_analise](produtos)
+        try:
+            texto = mapa_blocos_produtos[tipo_analise](produtos)
+        except Exception as e:
+            logger.warning(f"Erro no bloco '{tipo_analise}': {e}")
+            return {"periodo": descricao_periodo, "analise": tipo_analise,
+                    "erro_parcial": f"Não foi possível gerar a análise '{tipo_analise}' para este período."}
         return {"periodo": descricao_periodo, "analise": tipo_analise, "resultado_texto": texto}
 
     return {"erro": f"Tipo de análise '{tipo_analise}' não reconhecido."}
