@@ -40,42 +40,24 @@ async def handle_webhook(request: web.Request) -> web.Response:
             return web.Response(text="ok")
 
         if evento == "pagamento_confirmado":
-            agora          = datetime.now(BRASILIA)
-            trial_ja_usado = usuario.get("trial_usado", False)
-            trial_fim_db   = usuario.get("trial_fim")
+            agora = datetime.now(BRASILIA)
 
-            if trial_ja_usado and trial_fim_db:
-                # Trial já estava em andamento — preserva a data original, ativa acesso
-                trial_fim      = trial_fim_db
-                novo_status    = "trial"
-                # Se o trial já expirou, ativa como assinante
-                trial_fim_dt   = datetime.fromisoformat(trial_fim_db)
-                if agora > trial_fim_dt:
-                    novo_status = "ativo"
-            else:
-                # Primeiro pagamento — inicia trial de 7 dias
-                trial_fim   = (agora + timedelta(days=7)).isoformat()
-                novo_status = "trial"
-
+            # Qualquer pagamento confirmado significa que a pessoa já é assinante —
+            # nunca deixa o status como "trial" depois de um pagamento real.
+            novo_status    = "ativo"
             assinatura_fim = (agora + timedelta(days=31)).isoformat()
+
+            # Preserva trial_fim original só para referência histórica, se existir
+            trial_fim = usuario.get("trial_fim")
+
             await atualizar_usuario(
                 chat_id,
                 status=novo_status,
-                trial_fim=trial_fim,
                 assinatura_fim=assinatura_fim,
                 trial_usado=True
             )
 
-            if novo_status == "trial":
-                trial_fim_dt = datetime.fromisoformat(trial_fim)
-                dias_restantes = max(0, (trial_fim_dt - agora).days)
-                msg_trial = (
-                    f"Seu trial de {b(f'{dias_restantes} dias')} restantes está ativo.\n\n"
-                    if dias_restantes > 0
-                    else "Seu acesso está ativo.\n\n"
-                )
-            else:
-                msg_trial = "Seu acesso está ativo.\n\n"
+            msg_trial = "Seu acesso está ativo.\n\n"
             if _bot:
                 await _bot.send_message(
                     chat_id=chat_id,

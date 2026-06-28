@@ -103,12 +103,23 @@ async def usuario_tem_acesso(chat_id: int) -> tuple[bool, str]:
     agora  = datetime.now(BRASILIA)
     status = user["status"]
 
-    if status == "ativo":
-        fim = datetime.fromisoformat(user["assinatura_fim"])
-        if agora <= fim:
-            return True, "ativo"
-        await atualizar_usuario(chat_id, status="bloqueado")
-        return False, "expirado"
+    if status == "cancelado":
+        return False, "cancelado"
+
+    # Rede de segurança: se existe assinatura_fim válida no futuro,
+    # o acesso é liberado independente do valor exato de "status" —
+    # isso evita bloqueios indevidos por status desatualizado (ex: pagamento
+    # confirmado mas status ainda marcado como "trial" ou "bloqueado").
+    assinatura_fim_raw = user.get("assinatura_fim")
+    if assinatura_fim_raw:
+        try:
+            fim_assinatura = datetime.fromisoformat(assinatura_fim_raw)
+            if agora <= fim_assinatura:
+                if status != "ativo":
+                    await atualizar_usuario(chat_id, status="ativo")
+                return True, "ativo"
+        except Exception:
+            pass
 
     if status == "trial":
         fim = datetime.fromisoformat(user["trial_fim"])
@@ -117,11 +128,13 @@ async def usuario_tem_acesso(chat_id: int) -> tuple[bool, str]:
         await atualizar_usuario(chat_id, status="bloqueado")
         return False, "trial_expirado"
 
+    if status == "ativo":
+        # assinatura_fim já checada acima e estava vencida
+        await atualizar_usuario(chat_id, status="bloqueado")
+        return False, "expirado"
+
     if status == "bloqueado":
         return False, "bloqueado"
-
-    if status == "cancelado":
-        return False, "cancelado"
 
     return False, "pendente"
 
