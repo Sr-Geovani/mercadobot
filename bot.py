@@ -1579,6 +1579,54 @@ async def mensagem_livre(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
+    # ─── Fluxo de reativação — coleta dados faltantes (telefone/CEP/número) ──
+    if aguardando == "reativar_telefone":
+        telefone = "".join(filter(str.isdigit, texto))
+        if len(telefone) not in (10, 11):
+            await update.message.reply_text(
+                "⚠️ Telefone inválido. Digite com DDD, só números (ex: 11987654321):"
+            )
+            return
+        dados_usuario[chat_id]["reativar_telefone"] = telefone
+        dados_usuario[chat_id]["aguardando"] = "reativar_cep"
+        await update.message.reply_text(
+            f"✅ Telefone registrado.\n\n"
+            f"📍 Agora informe seu {b('CEP')} (só números):\n\n"
+            f"Exemplo: 89223005",
+            parse_mode="HTML"
+        )
+        return
+
+    if aguardando == "reativar_cep":
+        cep = "".join(filter(str.isdigit, texto))
+        if len(cep) != 8:
+            await update.message.reply_text(
+                "⚠️ CEP inválido. Digite só os 8 números (ex: 89223005):"
+            )
+            return
+        dados_usuario[chat_id]["reativar_cep"] = cep
+        dados_usuario[chat_id]["aguardando"] = "reativar_numero"
+        await update.message.reply_text(
+            f"✅ CEP registrado.\n\n"
+            f"🏠 Por último, o {b('número')} do seu endereço:",
+            parse_mode="HTML"
+        )
+        return
+
+    if aguardando == "reativar_numero":
+        numero = texto.strip()
+        from database import buscar_usuario, atualizar_usuario
+        telefone = dados_usuario[chat_id].pop("reativar_telefone", "")
+        cep      = dados_usuario[chat_id].pop("reativar_cep", "")
+        dados_usuario[chat_id].pop("aguardando", None)
+        dados_usuario[chat_id].pop("reativar_dados_pendentes", None)
+
+        await atualizar_usuario(chat_id, telefone=telefone, cep=cep, endereco_numero=numero)
+        usuario = await buscar_usuario(chat_id)
+        await update.message.reply_text("✅ Dados completos! Gerando link de reativação...")
+        await _continuar_reativacao(update.message, chat_id, usuario)
+        return
+
     # ─── Mensagem livre normal ────────────────────────────────
     ctx = resumo_dados(chat_id)
     await update.message.reply_text("⏳ Pensando...")
@@ -1756,6 +1804,60 @@ async def mensagem_livre_com_acesso(update: Update, context: ContextTypes.DEFAUL
         return
     await mensagem_livre(update, context)
 
+async def _continuar_reativacao(msg, chat_id: int, usuario: dict):
+    """Gera o link de reativação — chamado direto se os dados já estão completos,
+    ou após coletar telefone/CEP/número de cadastros antigos."""
+    from database import atualizar_usuario
+    from pagamento import gerar_link_pagamento, buscar_assinatura_ativa, buscar_link_assinatura
+
+    await msg.reply_text("⏳ Gerando link de reativação...")
+
+    try:
+        asaas_id             = usuario["asaas_id"]
+        trial_usado          = usuario.get("trial_usado", False)
+        dias_trial_restantes = calcular_dias_trial_restantes(usuario) if trial_usado else 0
+
+        assinatura_id = await buscar_assinatura_ativa(asaas_id)
+        if assinatura_id:
+            link = await buscar_link_assinatura(assinatura_id)
+            if not link:
+                assinatura_id = None
+
+        if not assinatura_id:
+            link, assinatura_id = await gerar_link_pagamento(
+                asaas_id, chat_id,
+                reativacao=trial_usado,
+                dias_trial_restantes=dias_trial_restantes
+            )
+            if assinatura_id:
+                await atualizar_usuario(chat_id, assinatura_asaas_id=assinatura_id, status="pendente")
+
+        if trial_usado and dias_trial_restantes > 0:
+            aviso_trial = f"\n\n{i(f'Você ainda tem {dias_trial_restantes} dia(s) de trial restantes.')}"
+        elif trial_usado and dias_trial_restantes <= 0:
+            aviso_trial = f"\n\n{i('Trial já utilizado — cobrança imediata de R$ 29,90.')}"
+        else:
+            aviso_trial = ""
+
+        if link:
+            kb_reativar = InlineKeyboardMarkup([
+                [InlineKeyboardButton("💳 Reativar assinatura", url=link)],
+                [InlineKeyboardButton("🔍 Verificar status",    callback_data="verificar_status")],
+            ])
+            await msg.reply_text(
+                f"🔄 {b('Reativar MercadoBot')}\n\n"
+                f"Clique abaixo para reativar sua assinatura de {b('R$ 29,90/mês')}."
+                f"{aviso_trial}",
+                parse_mode="HTML",
+                reply_markup=kb_reativar
+            )
+        else:
+            await msg.reply_text("❌ Erro ao gerar link. Tente /reativar ou /start.")
+    except Exception as e:
+        logger.error(f"Erro na reativação: {e}")
+        await msg.reply_text("❌ Erro ao processar. Tente /reativar.")
+
+
 async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query   = update.callback_query
     chat_id = query.message.chat_id
@@ -1837,60 +1939,39 @@ async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ─── Reativar assinatura ─────────────────────────────────
     if acao == "reativar":
         from database import buscar_usuario, atualizar_usuario
-        from pagamento import gerar_link_pagamento, buscar_assinatura_ativa, buscar_link_assinatura
         usuario = await buscar_usuario(chat_id)
 
         if not usuario or not usuario.get("asaas_id"):
             await msg.reply_text("Use /start para criar um novo cadastro.")
             return
 
-        await msg.reply_text("⏳ Gerando link de reativação...")
+        # Verifica se faltam dados obrigatórios para o Checkout do Asaas
+        # (telefone, CEP, número) — necessários desde a migração para Checkout
+        # com chargeTypes=RECURRENT. Cadastros antigos não têm esses campos.
+        faltando = []
+        if not usuario.get("telefone"):
+            faltando.append("telefone")
+        if not usuario.get("cep"):
+            faltando.append("cep")
+        if not usuario.get("endereco_numero"):
+            faltando.append("numero")
 
-        try:
-            asaas_id             = usuario["asaas_id"]
-            trial_usado          = usuario.get("trial_usado", False)
-            dias_trial_restantes = calcular_dias_trial_restantes(usuario) if trial_usado else 0
+        if faltando:
+            if chat_id not in dados_usuario:
+                dados_usuario[chat_id] = {}
+            dados_usuario[chat_id]["aguardando"] = "reativar_telefone"
+            dados_usuario[chat_id]["reativar_dados_pendentes"] = faltando
+            await msg.reply_text(
+                f"🔄 {b('Reativar MercadoBot')}\n\n"
+                f"Para gerar o link de pagamento, preciso confirmar alguns dados "
+                f"exigidos pela plataforma de pagamentos.\n\n"
+                f"📱 Informe seu {b('telefone com DDD')} (só números):\n\n"
+                f"Exemplo: 11987654321",
+                parse_mode="HTML"
+            )
+            return
 
-            assinatura_id = await buscar_assinatura_ativa(asaas_id)
-            if assinatura_id:
-                link = await buscar_link_assinatura(assinatura_id)
-                # Se não retornou link, a assinatura está cancelada/sem cobrança pendente
-                if not link:
-                    assinatura_id = None
-
-            if not assinatura_id:
-                link, assinatura_id = await gerar_link_pagamento(
-                    asaas_id, chat_id,
-                    reativacao=trial_usado,
-                    dias_trial_restantes=dias_trial_restantes
-                )
-                if assinatura_id:
-                    await atualizar_usuario(chat_id, assinatura_asaas_id=assinatura_id, status="pendente")
-
-            if trial_usado and dias_trial_restantes > 0:
-                aviso_trial = f"\n\n{i(f'Você ainda tem {dias_trial_restantes} dia(s) de trial restantes.')}"
-            elif trial_usado and dias_trial_restantes <= 0:
-                aviso_trial = f"\n\n{i('Trial já utilizado — cobrança imediata de R$ 29,90.')}"
-            else:
-                aviso_trial = ""
-
-            if link:
-                kb_reativar = InlineKeyboardMarkup([
-                    [InlineKeyboardButton("💳 Reativar assinatura", url=link)],
-                    [InlineKeyboardButton("🔍 Verificar status",    callback_data="verificar_status")],
-                ])
-                await msg.reply_text(
-                    f"🔄 {b('Reativar MercadoBot')}\n\n"
-                    f"Clique abaixo para reativar sua assinatura de {b('R$ 29,90/mês')}."
-                    f"{aviso_trial}",
-                    parse_mode="HTML",
-                    reply_markup=kb_reativar
-                )
-            else:
-                await msg.reply_text("❌ Erro ao gerar link. Tente /reativar ou /start.")
-        except Exception as e:
-            logger.error(f"Erro no callback reativar: {e}")
-            await msg.reply_text("❌ Erro ao processar. Tente /reativar.")
+        await _continuar_reativacao(msg, chat_id, usuario)
         return
 
     # ─── Verificar status de pagamento ──────────────────────
