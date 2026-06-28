@@ -924,6 +924,79 @@ async def receber_arquivo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         await update.message.reply_text(f"❌ Erro: {str(e)}")
 
+async def receber_foto(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Recebe uma foto (ex: produto na gôndola) e usa a visão nativa do Claude
+    para identificar o que é e responder à legenda/pergunta do usuário, se
+    houver. Não depende de OCR nem de banco de produtos — o Claude já
+    reconhece marcas e produtos comuns diretamente da imagem.
+    """
+    chat_id = update.effective_chat.id
+    await update.message.reply_text("📸 Analisando a imagem...")
+
+    try:
+        foto = update.message.photo[-1]  # maior resolução disponível
+        file = await foto.get_file()
+        bio  = BytesIO()
+        await file.download_to_memory(bio)
+        bio.seek(0)
+        import base64
+        imagem_base64 = base64.b64encode(bio.read()).decode("utf-8")
+
+        legenda = update.message.caption or ""
+
+        from agente import identificar_produto_imagem
+        resposta = await identificar_produto_imagem(imagem_base64, "image/jpeg", legenda)
+        await enviar(update.message, resposta)
+        await abrir_menu(update.message, chat_id)
+    except Exception as e:
+        logger.error(f"Erro ao processar foto de chat_id={chat_id}: {e}")
+        await update.message.reply_text("⚠️ Não consegui analisar essa imagem agora. Tente de novo.")
+
+
+async def receber_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Recebe uma mensagem de voz (ou arquivo de áudio), transcreve via Whisper
+    (a API da Anthropic não expõe endpoint de áudio), e processa o texto
+    resultante exatamente pelo mesmo caminho do agente conversacional usado
+    para texto digitado — incluindo tool-use para buscar dados reais.
+    """
+    chat_id = update.effective_chat.id
+    await update.message.reply_text("🎤 Ouvindo seu áudio...")
+
+    try:
+        voz  = update.message.voice or update.message.audio
+        file = await voz.get_file()
+
+        import tempfile
+        with tempfile.NamedTemporaryFile(suffix=".ogg", delete=False) as tmp:
+            await file.download_to_drive(tmp.name)
+            caminho_temp = tmp.name
+
+        from agente import transcrever_audio, processar_mensagem_agente
+        texto = await transcrever_audio(caminho_temp)
+
+        try:
+            os.remove(caminho_temp)
+        except Exception:
+            pass
+
+        if not texto:
+            await update.message.reply_text(
+                "⚠️ Não consegui transcrever esse áudio agora. "
+                "Pode escrever sua pergunta em texto? 🙏"
+            )
+            return
+
+        await update.message.reply_text(f"💬 {i('Você disse:')} \"{texto}\"\n\n⏳ Pensando...")
+        resposta = await processar_mensagem_agente(chat_id, texto)
+        await enviar(update.message, resposta)
+        await abrir_menu(update.message, chat_id)
+    except Exception as e:
+        logger.error(f"Erro ao processar áudio de chat_id={chat_id}: {e}")
+        await update.message.reply_text("⚠️ Não consegui processar esse áudio agora. Tente de novo.")
+
+
 # ─── FLUXO BRIEFING ──────────────────────────────────────────
 async def buscar_usuario_db(chat_id: int) -> dict:
     from database import buscar_usuario
@@ -1821,6 +1894,18 @@ async def receber_arquivo_com_acesso(update: Update, context: ContextTypes.DEFAU
         return
     await receber_arquivo(update, context)
 
+async def receber_foto_com_acesso(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Verifica acesso antes de processar foto."""
+    if not await verificar_acesso(update, context):
+        return
+    await receber_foto(update, context)
+
+async def receber_audio_com_acesso(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Verifica acesso antes de processar áudio."""
+    if not await verificar_acesso(update, context):
+        return
+    await receber_audio(update, context)
+
 async def mensagem_livre_com_acesso(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Verifica acesso antes de processar mensagem livre."""
     if not await verificar_acesso(update, context):
@@ -2519,6 +2604,8 @@ def main():
     app.add_handler(CommandHandler("configuracoes", cmd_configuracoes_handler))
     app.add_handler(CommandHandler("cancelar",      cmd_cancelar_handler))
     app.add_handler(MessageHandler(filters.Document.ALL,            receber_arquivo_com_acesso))
+    app.add_handler(MessageHandler(filters.PHOTO,                   receber_foto_com_acesso))
+    app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO,    receber_audio_com_acesso))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, mensagem_livre_com_acesso))
     app.add_handler(CallbackQueryHandler(callback_botoes))
 

@@ -64,6 +64,58 @@ TOOLS = [
             "required": ["data_ini", "data_fim", "descricao_periodo"],
         },
     },
+    {
+        "name": "analisar_operacao",
+        "description": (
+            "Executa uma análise específica e detalhada sobre a operação do mercadinho "
+            "em um período. Use esta ferramenta quando o usuário pedir algo mais "
+            "específico do que faturamento simples, como: score de saúde da operação, "
+            "comparativo entre filiais/unidades, categorias de produtos mais vendidas, "
+            "mix de formas de pagamento (pix/cartão/dinheiro), top produtos mais "
+            "vendidos, produtos com baixo giro (que precisam de atenção no estoque), "
+            "horários de pico de movimento, projeção de faturamento do mês, produto "
+            "destaque do mês, evolução semanal de vendas, ou lista de reposição de "
+            "produtos para comprar."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "tipo_analise": {
+                    "type": "string",
+                    "enum": [
+                        "score", "comparativo", "categorias", "pagamentos",
+                        "top_produtos", "giro_produtos", "pico_horario",
+                        "projecao_mes", "produto_destaque_mes", "evolucao_semanal",
+                        "reposicao",
+                    ],
+                    "description": (
+                        "Tipo de análise: 'score' (saúde geral 0-100), 'comparativo' "
+                        "(performance entre filiais), 'categorias' (vendas por categoria "
+                        "de produto), 'pagamentos' (mix pix/cartão/dinheiro), "
+                        "'top_produtos' (mais vendidos), 'giro_produtos' (produtos "
+                        "parados/baixo giro), 'pico_horario' (horários de mais movimento), "
+                        "'projecao_mes' (projeção de faturamento do mês), "
+                        "'produto_destaque_mes' (produto que mais se destacou), "
+                        "'evolucao_semanal' (tendência de vendas por semana), "
+                        "'reposicao' (lista de produtos para comprar/repor)."
+                    ),
+                },
+                "data_ini": {
+                    "type": "string",
+                    "description": "Data inicial do período no formato DD/MM/AAAA.",
+                },
+                "data_fim": {
+                    "type": "string",
+                    "description": "Data final do período no formato DD/MM/AAAA.",
+                },
+                "descricao_periodo": {
+                    "type": "string",
+                    "description": "Descrição curta e amigável do período em português, ex: 'hoje', 'este mês'.",
+                },
+            },
+            "required": ["tipo_analise", "data_ini", "data_fim", "descricao_periodo"],
+        },
+    },
 ]
 
 
@@ -91,18 +143,22 @@ def _resolver_periodo_relativo(texto_periodo: str) -> tuple[str, str] | None:
     return None
 
 
-async def executar_tool_buscar_faturamento(chat_id: int, data_ini: str, data_fim: str,
-                                            descricao_periodo: str) -> dict:
+async def garantir_dados_periodo(chat_id: int, data_ini: str, data_fim: str,
+                                  descricao_periodo: str) -> dict:
     """
-    Executa de fato a busca de faturamento — reaproveita o MESMO caminho que
-    o botão 'Briefing'/'Atualizar' já usa: scraper real do PDV Legal +
-    normalização de dados. Não há lógica duplicada nem dado simulado.
+    Busca vendas E produtos do PDV Legal para o período, reaproveitando o
+    mesmo caminho real usado pelos botões existentes. Salva em dados_usuario
+    para sincronizar com o menu, e retorna os DataFrames + metadados.
+
+    Centraliza a busca para evitar baixar os dados duas vezes quando o agente
+    precisa encadear múltiplas ferramentas (ex: faturamento + score) sobre o
+    mesmo período.
     """
     import asyncio
     import pandas as pd
     from scraper import baixar_relatorios_periodo
     from database import buscar_usuario
-    from bot import normalizar_vendas, dados_usuario
+    from bot import normalizar_vendas, normalizar_produtos, dados_usuario
 
     usuario = await buscar_usuario(chat_id)
     if not usuario or not usuario.get("pdv_email"):
@@ -111,15 +167,53 @@ async def executar_tool_buscar_faturamento(chat_id: int, data_ini: str, data_fim
     pdv_email = usuario.get("pdv_email")
     pdv_senha = usuario.get("pdv_senha")
 
+    # Reaproveita dados já carregados se o período pedido for exatamente o
+    # mesmo já carregado em dados_usuario — evita scrape duplicado.
+    d_atual = dados_usuario.get(chat_id, {})
+    if d_atual.get("data_ini") == data_ini and d_atual.get("data_fim") == data_fim \
+       and d_atual.get("vendas") is not None:
+        return {
+            "vendas": d_atual["vendas"],
+            "produtos": d_atual.get("produtos"),
+            "total_cancel": d_atual.get("total_cancel", {}),
+        }
+
     try:
         loop = asyncio.get_event_loop()
         path_vendas, path_produtos, total_cancel = await loop.run_in_executor(
             None, baixar_relatorios_periodo, data_ini, data_fim, pdv_email, pdv_senha
         )
-        vendas = normalizar_vendas(pd.read_excel(path_vendas))
+        vendas   = normalizar_vendas(pd.read_excel(path_vendas))
+        produtos = normalizar_produtos(pd.read_excel(path_produtos))
     except Exception as e:
-        logger.error(f"Agente: erro ao buscar faturamento para {chat_id}: {e}")
+        logger.error(f"Agente: erro ao buscar dados para {chat_id}: {e}")
         return {"erro": f"Não consegui buscar os dados no PDV Legal agora: {e}"}
+
+    if chat_id not in dados_usuario:
+        dados_usuario[chat_id] = {}
+    dados_usuario[chat_id]["vendas"]        = vendas
+    dados_usuario[chat_id]["produtos"]      = produtos
+    dados_usuario[chat_id]["periodo_label"] = descricao_periodo
+    dados_usuario[chat_id]["total_cancel"]  = total_cancel
+    dados_usuario[chat_id]["data_ini"]      = data_ini
+    dados_usuario[chat_id]["data_fim"]      = data_fim
+
+    return {"vendas": vendas, "produtos": produtos, "total_cancel": total_cancel}
+
+
+async def executar_tool_buscar_faturamento(chat_id: int, data_ini: str, data_fim: str,
+                                            descricao_periodo: str) -> dict:
+    """
+    Executa de fato a busca de faturamento — reaproveita o MESMO caminho que
+    o botão 'Briefing'/'Atualizar' já usa: scraper real do PDV Legal +
+    normalização de dados. Não há lógica duplicada nem dado simulado.
+    """
+    dados = await garantir_dados_periodo(chat_id, data_ini, data_fim, descricao_periodo)
+    if "erro" in dados:
+        return dados
+
+    vendas       = dados["vendas"]
+    total_cancel = dados.get("total_cancel", {})
 
     if len(vendas) == 0:
         return {
@@ -141,16 +235,6 @@ async def executar_tool_buscar_faturamento(chat_id: int, data_ini: str, data_fim
     if "nomeFilial" in vendas.columns:
         por_filial = vendas.groupby("nomeFilial")["valor"].sum().round(2).to_dict()
 
-    # Mantém dados_usuario sincronizado — assim os botões existentes (menu)
-    # continuam funcionando com o período que o agente acabou de buscar.
-    if chat_id not in dados_usuario:
-        dados_usuario[chat_id] = {}
-    dados_usuario[chat_id]["vendas"]        = vendas
-    dados_usuario[chat_id]["periodo_label"] = descricao_periodo
-    dados_usuario[chat_id]["total_cancel"]  = total_cancel
-    dados_usuario[chat_id]["data_ini"]      = data_ini
-    dados_usuario[chat_id]["data_fim"]      = data_fim
-
     return {
         "periodo": descricao_periodo,
         "data_ini": data_ini,
@@ -163,9 +247,68 @@ async def executar_tool_buscar_faturamento(chat_id: int, data_ini: str, data_fim
     }
 
 
+async def executar_tool_analise(chat_id: int, tipo_analise: str, data_ini: str,
+                                 data_fim: str, descricao_periodo: str) -> dict:
+    """
+    Executa uma das análises já existentes no bot (score, comparativo,
+    categorias, pagamentos, top produtos, giro, pico de horário, projeção,
+    produto destaque do mês), reaproveitando as funções bloco_* originais
+    sem duplicar nenhuma lógica de cálculo.
+    """
+    from bot import (
+        bloco_score, bloco_comparativo, bloco_categorias, bloco_pagamentos,
+        bloco_top_produtos, bloco_giro_produtos, bloco_pico, bloco_projecao_mes,
+        bloco_produto_mes, bloco_semanal, bloco_reposicao,
+    )
+
+    dados = await garantir_dados_periodo(chat_id, data_ini, data_fim, descricao_periodo)
+    if "erro" in dados:
+        return dados
+
+    vendas   = dados["vendas"]
+    produtos = dados.get("produtos")
+
+    if vendas is None or len(vendas) == 0:
+        return {"erro": "Nenhum dado de vendas disponível para esse período."}
+
+    mapa_blocos_vendas = {
+        "score": bloco_score,
+        "comparativo": bloco_comparativo,
+        "pagamentos": bloco_pagamentos,
+        "pico_horario": bloco_pico,
+        "projecao_mes": bloco_projecao_mes,
+        "evolucao_semanal": bloco_semanal,
+    }
+    mapa_blocos_produtos = {
+        "categorias": bloco_categorias,
+        "top_produtos": bloco_top_produtos,
+        "giro_produtos": bloco_giro_produtos,
+        "produto_destaque_mes": bloco_produto_mes,
+    }
+
+    if tipo_analise == "reposicao":
+        if produtos is None or len(produtos) == 0:
+            return {"erro": "Nenhum dado de produtos disponível para esse período."}
+        blocos = bloco_reposicao(produtos, modo="exato")
+        return {"periodo": descricao_periodo, "analise": tipo_analise, "resultado_texto": "\n\n".join(blocos)}
+
+    if tipo_analise in mapa_blocos_vendas:
+        texto = mapa_blocos_vendas[tipo_analise](vendas)
+        return {"periodo": descricao_periodo, "analise": tipo_analise, "resultado_texto": texto}
+
+    if tipo_analise in mapa_blocos_produtos:
+        if produtos is None or len(produtos) == 0:
+            return {"erro": "Nenhum dado de produtos disponível para esse período."}
+        texto = mapa_blocos_produtos[tipo_analise](produtos)
+        return {"periodo": descricao_periodo, "analise": tipo_analise, "resultado_texto": texto}
+
+    return {"erro": f"Tipo de análise '{tipo_analise}' não reconhecido."}
+
+
 # Mapa de nome de tool -> função Python que efetivamente a executa
 EXECUTORES = {
     "buscar_faturamento": executar_tool_buscar_faturamento,
+    "analisar_operacao": executar_tool_analise,
 }
 
 
@@ -188,6 +331,92 @@ SYSTEM_PROMPT = (
     "negrito (**texto**) e emojis com moderação. Evite respostas longas — "
     "operadores de mercadinho leem isso rápido, no celular, entre uma tarefa e outra."
 )
+
+
+async def identificar_produto_imagem(imagem_base64: str, media_type: str,
+                                      pergunta_usuario: str = "") -> str:
+    """
+    Usa a visão nativa do Claude (suportada de fato pela API, ao contrário de
+    áudio) para identificar um produto a partir de uma foto, e responder à
+    pergunta do usuário sobre ele (ex: "isso vende bem?", "tenho estoque
+    disso?"). Roda como uma chamada simples (sem tool-use), pois aqui a
+    entrada principal é a imagem, não uma pergunta que precise de dados do
+    PDV Legal — ainda. Se o usuário quiser dados reais sobre o produto
+    identificado, deve perguntar em seguida em texto, e cai no fluxo normal
+    do agente com tool-use.
+    """
+    client = anthropic.AsyncAnthropic(api_key=ANTHROPIC_KEY)
+
+    texto_pedido = pergunta_usuario.strip() or (
+        "Identifique este produto (nome, marca, categoria). Depois, dê uma dica "
+        "rápida e prática para um operador de mercadinho autônomo sobre esse "
+        "produto — por exemplo, se costuma ter giro alto, onde costuma ficar "
+        "bem posicionado, ou produtos complementares para vender junto."
+    )
+
+    try:
+        resp = await client.messages.create(
+            model=MODEL,
+            max_tokens=500,
+            system=SYSTEM_PROMPT,
+            messages=[{
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": media_type,
+                            "data": imagem_base64,
+                        },
+                    },
+                    {"type": "text", "text": texto_pedido},
+                ],
+            }],
+        )
+        texto = "".join(block.text for block in resp.content if block.type == "text")
+        return texto.strip() or "Não consegui identificar o produto nessa imagem."
+    except Exception as e:
+        logger.error(f"Erro ao identificar produto por imagem: {e}")
+        return "⚠️ Não consegui analisar a imagem agora. Tente de novo em alguns instantes."
+
+
+async def transcrever_audio(caminho_arquivo: str) -> str | None:
+    """
+    Transcreve áudio para texto usando a API Whisper da OpenAI.
+
+    Importante: a API da Anthropic (Claude) NÃO possui endpoint de áudio
+    documentado para desenvolvedores — o voice mode do Claude é exclusivo
+    do produto consumidor (app/web), não está disponível via API. Por isso
+    usamos Whisper para a transcrição e só então mandamos o texto resultante
+    para o Claude, como uma mensagem de texto normal.
+
+    Retorna None se a chave da OpenAI não estiver configurada ou se a
+    transcrição falhar — o chamador deve tratar esse caso com uma mensagem
+    clara ao usuário, nunca falhar em silêncio.
+    """
+    openai_key = os.environ.get("OPENAI_KEY") or os.environ.get("OPENAI_API_KEY")
+    if not openai_key:
+        logger.warning("Transcrição de áudio solicitada mas OPENAI_KEY não está configurada.")
+        return None
+
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=60) as client:
+            with open(caminho_arquivo, "rb") as f:
+                resp = await client.post(
+                    "https://api.openai.com/v1/audio/transcriptions",
+                    headers={"Authorization": f"Bearer {openai_key}"},
+                    files={"file": (os.path.basename(caminho_arquivo), f, "audio/ogg")},
+                    data={"model": "whisper-1", "language": "pt"},
+                )
+            if resp.status_code != 200:
+                logger.error(f"Erro na transcrição Whisper: {resp.status_code} {resp.text}")
+                return None
+            return resp.json().get("text", "").strip() or None
+    except Exception as e:
+        logger.error(f"Erro ao transcrever áudio: {e}")
+        return None
 
 
 async def processar_mensagem_agente(chat_id: int, texto_usuario: str,
