@@ -1902,7 +1902,7 @@ async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if acao == "confirmar_cancelamento":
         from database import buscar_usuario, atualizar_usuario
         from pagamento import cancelar_assinatura, cancelar_cobrancas_futuras
-        from datetime import datetime
+        from datetime import datetime, timedelta
         from zoneinfo import ZoneInfo
 
         usuario = await buscar_usuario(chat_id)
@@ -1920,8 +1920,22 @@ async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if assinatura_id:
                 # Cancela a assinatura (para cobranças recorrentes)
                 await cancelar_assinatura(assinatura_id)
-                # Cancela cobranças futuras pendentes
-                await cancelar_cobrancas_futuras(usuario.get("asaas_id", ""))
+
+                # Calcula quantos dias do ciclo atual (de 30) já foram usados,
+                # a partir de quando a assinatura_fim foi definida (assinatura_fim
+                # é sempre definida como agora+31 dias no momento da ativação/renovação)
+                dias_usados = None
+                assinatura_fim_raw = usuario.get("assinatura_fim")
+                if assinatura_fim_raw:
+                    try:
+                        fim_dt = datetime.fromisoformat(assinatura_fim_raw)
+                        inicio_ciclo = fim_dt - timedelta(days=31)
+                        dias_usados = max(0, (agora - inicio_ciclo).days)
+                    except Exception:
+                        dias_usados = None
+
+                # Cancela cobranças futuras pendentes e estorna proporcionalmente o ciclo atual
+                await cancelar_cobrancas_futuras(usuario.get("asaas_id", ""), dias_uso_ciclo_atual=dias_usados)
 
         await atualizar_usuario(chat_id, status="cancelado")
 
@@ -1941,7 +1955,9 @@ async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await msg.reply_text(
                 f"✅ {b('Assinatura cancelada.')}\n\n"
                 f"Seu acesso foi encerrado e não haverá novas cobranças.\n"
-                f"Cobranças com vencimento futuro foram canceladas.",
+                f"Cobranças futuras foram canceladas e, se aplicável, "
+                f"você recebeu o estorno proporcional aos dias não utilizados "
+                f"do seu ciclo atual.",
                 parse_mode="HTML",
                 reply_markup=kb_reativar
             )

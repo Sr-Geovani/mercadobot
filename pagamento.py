@@ -349,9 +349,16 @@ async def buscar_link_assinatura(assinatura_id: str) -> str:
         return ""
 
 
-async def cancelar_cobrancas_futuras(asaas_cliente_id: str) -> int:
+async def cancelar_cobrancas_futuras(asaas_cliente_id: str, dias_uso_ciclo_atual: int = None) -> int:
     """
-    Cancela cobranças pendentes e estorna confirmadas com vencimento futuro.
+    Cancela cobranças pendentes (futuras, ainda não pagas) e estorna
+    PROPORCIONALMENTE a cobrança do ciclo atual já em andamento, se houver uma
+    CONFIRMED/RECEIVED recente.
+
+    dias_uso_ciclo_atual: quantos dias do ciclo de 30 dias já foram usados.
+    Se não informado, tenta calcular a partir da data de pagamento da cobrança
+    encontrada. O estorno é proporcional aos dias NÃO utilizados, garantindo
+    que cobramos pelo período em que o serviço foi efetivamente prestado.
     """
     if not asaas_cliente_id:
         return 0
@@ -359,12 +366,14 @@ async def cancelar_cobrancas_futuras(asaas_cliente_id: str) -> int:
     from datetime import datetime, timedelta
     from zoneinfo import ZoneInfo
     brasilia = ZoneInfo("America/Sao_Paulo")
-    amanha   = (datetime.now(brasilia) + timedelta(days=1)).strftime("%Y-%m-%d")
+    hoje     = datetime.now(brasilia)
+    amanha   = (hoje + timedelta(days=1)).strftime("%Y-%m-%d")
 
     canceladas = 0
     async with httpx.AsyncClient() as client:
 
-        # PENDING — cancela com DELETE
+        # 1. Cobranças PENDING com vencimento futuro — cancelamento total via DELETE.
+        #    Essas ainda não foram pagas, então não há nada a estornar.
         resp = await client.get(
             f"{ASAAS_URL}/payments",
             params={"customer": asaas_cliente_id, "status": "PENDING", "dueDateStart": amanha},
@@ -376,35 +385,75 @@ async def cancelar_cobrancas_futuras(asaas_cliente_id: str) -> int:
                 r = await client.delete(f"{ASAAS_URL}/payments/{pid}", headers=_headers())
                 if r.status_code in (200, 204):
                     canceladas += 1
-                    logger.info(f"Cobrança PENDING cancelada: {pid}")
+                    logger.info(f"Cobrança PENDING futura cancelada: {pid}")
 
-        # CONFIRMED com vencimento futuro — estorna com refund
-        resp = await client.get(
-            f"{ASAAS_URL}/payments",
-            params={"customer": asaas_cliente_id, "status": "CONFIRMED", "dueDateStart": amanha},
-            headers=_headers()
-        )
-        for pagamento in resp.json().get("data", []):
-            pid   = pagamento.get("id")
-            valor = pagamento.get("value", 0)
-            if pid:
-                # Tenta DELETE primeiro (funciona se ainda não processado)
-                r = await client.delete(f"{ASAAS_URL}/payments/{pid}", headers=_headers())
-                if r.status_code in (200, 204):
-                    canceladas += 1
-                    logger.info(f"Cobrança CONFIRMED cancelada via DELETE: {pid}")
-                else:
-                    # Fallback: solicita reembolso total
-                    r2 = await client.post(
-                        f"{ASAAS_URL}/payments/{pid}/refund",
-                        json={"value": valor, "description": "Cancelamento dentro do trial"},
-                        headers=_headers()
-                    )
-                    if r2.status_code in (200, 201):
-                        canceladas += 1
-                        logger.info(f"Cobrança CONFIRMED estornada via refund: {pid}")
-                    else:
-                        logger.warning(f"Falha ao cancelar/estornar {pid}: {r2.status_code} {r2.text}")
+        # 2. Cobrança do CICLO ATUAL — pode estar CONFIRMED ou RECEIVED, com
+        #    vencimento já passado ou próximo (não no futuro, pois é a do mês
+        #    vigente). Buscamos as últimas cobranças pagas, sem filtro de data,
+        #    e identificamos a mais recente como sendo o ciclo em andamento.
+        for status in ("CONFIRMED", "RECEIVED"):
+            resp = await client.get(
+                f"{ASAAS_URL}/payments",
+                params={"customer": asaas_cliente_id, "status": status, "limit": 1, "order": "desc", "sort": "dueDate"},
+                headers=_headers()
+            )
+            pagamentos = resp.json().get("data", [])
+            if not pagamentos:
+                continue
+
+            pagamento = pagamentos[0]
+            pid          = pagamento.get("id")
+            valor_total  = float(pagamento.get("value", 0))
+            data_pgto    = pagamento.get("paymentDate") or pagamento.get("clientPaymentDate") or pagamento.get("dueDate")
+
+            if not pid or valor_total <= 0:
+                continue
+
+            # Calcula dias de uso desde o pagamento até hoje, dentro do ciclo de 30 dias
+            dias_usados = dias_uso_ciclo_atual
+            if dias_usados is None and data_pgto:
+                try:
+                    data_pgto_dt = datetime.strptime(data_pgto[:10], "%Y-%m-%d").replace(tzinfo=brasilia)
+                    dias_usados  = max(0, (hoje - data_pgto_dt).days)
+                except Exception:
+                    dias_usados = 0
+            dias_usados = dias_usados or 0
+            dias_usados = min(dias_usados, 30)  # não ultrapassa o ciclo
+
+            dias_restantes  = 30 - dias_usados
+            valor_proporcional_restante = round(valor_total * (dias_restantes / 30), 2)
+
+            if valor_proporcional_restante <= 0:
+                logger.info(
+                    f"Cancelamento: ciclo já totalmente consumido ({dias_usados} dias) — "
+                    f"sem estorno devido para {pid}."
+                )
+                continue
+
+            # Estorna apenas a fração correspondente aos dias não utilizados
+            r2 = await client.post(
+                f"{ASAAS_URL}/payments/{pid}/refund",
+                json={
+                    "value": valor_proporcional_restante,
+                    "description": (
+                        f"Cancelamento — estorno proporcional: "
+                        f"{dias_usados} dia(s) usado(s) de 30, "
+                        f"{dias_restantes} dia(s) não utilizado(s)."
+                    ),
+                },
+                headers=_headers()
+            )
+            if r2.status_code in (200, 201):
+                canceladas += 1
+                logger.info(
+                    f"Cobrança {pid} estornada PROPORCIONALMENTE: "
+                    f"R${valor_proporcional_restante:.2f} de R${valor_total:.2f} "
+                    f"({dias_usados}d usados / {dias_restantes}d restantes)"
+                )
+            else:
+                logger.warning(f"Falha ao estornar proporcionalmente {pid}: {r2.status_code} {r2.text}")
+
+            break  # só processa a cobrança mais recente do ciclo atual
 
     return canceladas
 
