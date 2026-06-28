@@ -315,23 +315,64 @@ async def exportar_cancelamentos(page, data_ini: str, data_fim: str) -> dict:
                 await new_page.wait_for_timeout(1200)
             return False
 
-        async def _ler_card_cancelado() -> float:
-            """Lê o card oficial 'vendas com cancelamentos' (valor exato, não trunca)."""
-            txt = await new_page.evaluate("""
+        async def _ler_card_cancelado(diagnostico=False) -> float:
+            """
+            Lê o card 'vendas com cancelamentos' da tela. Tenta várias
+            estratégias de seletor porque a estrutura HTML pode variar.
+            Se diagnostico=True, loga a estrutura real dos cards encontrados.
+            """
+            dados_card = await new_page.evaluate("""
                 (function() {
-                    var cards = document.querySelectorAll('.info-box-number');
-                    for (var c of cards) {
+                    var resultado = {valor: null, diag_boxes: [], diag_cancel: []};
+
+                    // Captura TODOS os info-box-number com o label do seu box
+                    var nums = document.querySelectorAll('.info-box-number');
+                    for (var i = 0; i < nums.length; i++) {
+                        var c = nums[i];
                         var box = c.closest('.info-box');
-                        var label = box ? box.querySelector('.info-box-text') : null;
-                        if (!label) continue;
-                        var t = label.textContent.toLowerCase();
-                        if (t.includes('cancelament') || (t.includes('cancelad') && !t.includes('estorn'))) {
-                            return c.textContent.trim();
+                        var label = '';
+                        if (box) {
+                            var lblEl = box.querySelector('.info-box-text');
+                            if (lblEl) label = lblEl.textContent.trim();
+                        }
+                        resultado.diag_boxes.push({valor: c.textContent.trim(), label: label});
+                        var lbl = label.toLowerCase();
+                        if (lbl.includes('cancelament') || (lbl.includes('cancelad') && !lbl.includes('estorn'))) {
+                            resultado.valor = c.textContent.trim();
                         }
                     }
-                    return null;
+                    if (resultado.valor) return resultado;
+
+                    // Fallback: varre a página por qualquer elemento que mencione
+                    // "cancelament" e captura o número (R$ x.xxx,xx) mais próximo,
+                    // registrando o contexto para diagnóstico.
+                    var todos = document.querySelectorAll('div, span, h3, h4, p, td, b, strong');
+                    for (var j = 0; j < todos.length; j++) {
+                        var el = todos[j];
+                        var txt = (el.textContent || '');
+                        var low = txt.toLowerCase();
+                        if (low.includes('cancelament') && txt.length < 80) {
+                            var container = el.closest('div') || el.parentElement;
+                            var ctxt = container ? container.textContent : txt;
+                            var m = ctxt.match(/[\\d.]+,\\d{2}/);
+                            resultado.diag_cancel.push({
+                                contexto: txt.trim().substring(0, 60),
+                                numero_proximo: m ? m[0] : null
+                            });
+                            if (m && !resultado.valor) resultado.valor = m[0];
+                        }
+                    }
+                    resultado.url = window.location.href;
+                    return resultado;
                 })()
             """)
+
+            if diagnostico:
+                logger.info(f"Cancelamentos — DIAG url: {dados_card.get('url')}")
+                logger.info(f"Cancelamentos — DIAG info-boxes: {dados_card.get('diag_boxes')}")
+                logger.info(f"Cancelamentos — DIAG contexto 'cancelament': {dados_card.get('diag_cancel')}")
+
+            txt = dados_card.get("valor")
             if not txt:
                 return 0.0
             try:
@@ -393,10 +434,14 @@ async def exportar_cancelamentos(page, data_ini: str, data_fim: str) -> dict:
                     await _clicar_filtrar()
                     await new_page.wait_for_timeout(1500)
 
-                    # Lê o card com retry (espera recalcular)
+                    # Lê o card com retry (espera recalcular). Na primeira
+                    # filial, ativa diagnóstico para revelar a estrutura dos cards.
                     valor_fil = 0.0
-                    for _ in range(3):
-                        valor_fil = await _ler_card_cancelado()
+                    primeira = (fil is filiais[0])
+                    for tentativa_card in range(3):
+                        valor_fil = await _ler_card_cancelado(
+                            diagnostico=(primeira and tentativa_card == 0)
+                        )
                         if valor_fil > 0:
                             break
                         await new_page.wait_for_timeout(1000)
