@@ -361,75 +361,61 @@ async def exportar_cancelamentos(page, data_ini: str, data_fim: str) -> dict:
             return {"_total": 0.0}
 
         resultado = {}
-
-        # ── Lê o card oficial com TODAS as filiais selecionadas ────────────
-        # O card "vendas com cancelamentos" traz o TOTAL EXATO do período,
-        # calculado pelo próprio PDV Legal — não trunca em 100 linhas como a
-        # tabela. Esse é o número que bate com o dashboard do PDV Legal.
-        # Selecionar todas e ler o card é mais confiável que iterar filial por
-        # filial (o filtro de uma única filial às vezes não recalcula o card).
-        await new_page.evaluate("""
-            (function() {
-                var opts = Array.from(document.querySelectorAll('#ContentPlaceHolder1_ddlfilial option'))
-                               .map(function(o) { return o.value; })
-                               .filter(function(v) { return v !== ''; });
-                var $sel = $('#ContentPlaceHolder1_ddlfilial');
-                $sel.val(opts);
-                $sel.selectpicker('refresh');
-                $sel.trigger('change');
-            })();
-        """)
-        await new_page.wait_for_timeout(400)
-        await new_page.evaluate(_aplica_periodo_js())
-        await new_page.wait_for_timeout(400)
-        await new_page.evaluate("GetDadosProdutos();")
-        await new_page.wait_for_timeout(1800)
-
-        # Lê o card total, com retry caso ainda não tenha recalculado
         total_geral = 0.0
-        for tentativa in range(4):
-            total_geral = await _ler_card_cancelado()
-            if total_geral > 0:
-                break
-            logger.info(f"Cancelamentos — card ainda zerado (tentativa {tentativa+1}/4), aguardando...")
-            await new_page.evaluate("GetDadosProdutos();")
+
+        # Função que clica no botão Filtrar real (id=btnFiltro, onclick=GetDadosProdutos).
+        # Clicar no botão é o que REALMENTE recalcula o card — chamar GetDadosProdutos()
+        # direto via JS nem sempre atualiza o card "vendas com cancelamentos".
+        async def _clicar_filtrar():
+            try:
+                await new_page.click("#btnFiltro", timeout=5000)
+            except Exception:
+                # Fallback: chama a função diretamente se o botão não for clicável
+                await new_page.evaluate("if (typeof GetDadosProdutos === 'function') GetDadosProdutos();")
+
+        # ── Itera filial por filial, lendo o card EXATO de cada uma ─────────
+        # Seleciona UMA filial, reaplica período, CLICA EM FILTRAR (recalcula o
+        # card) e lê o card oficial daquela filial — valor exato, sem truncar.
+        if filiais:
+            for fil in filiais:
+                try:
+                    await new_page.evaluate(f"""
+                        (function() {{
+                            var $sel = $('#ContentPlaceHolder1_ddlfilial');
+                            $sel.val(['{fil["value"]}']);
+                            $sel.selectpicker('refresh');
+                            $sel.trigger('change');
+                        }})();
+                    """)
+                    await new_page.wait_for_timeout(300)
+                    await new_page.evaluate(_aplica_periodo_js())
+                    await new_page.wait_for_timeout(300)
+                    await _clicar_filtrar()
+                    await new_page.wait_for_timeout(1500)
+
+                    # Lê o card com retry (espera recalcular)
+                    valor_fil = 0.0
+                    for _ in range(3):
+                        valor_fil = await _ler_card_cancelado()
+                        if valor_fil > 0:
+                            break
+                        await new_page.wait_for_timeout(1000)
+
+                    nome_fil = fil["nome"]
+                    resultado[nome_fil] = round(valor_fil, 2)
+                    total_geral += valor_fil
+                    logger.info(f"Cancelamentos — {nome_fil}: R$ {valor_fil:.2f} (card exato)")
+                except Exception as e:
+                    logger.warning(f"Cancelamentos — erro ao ler filial {fil.get('nome')}: {e}")
+
+            resultado["_total"] = round(total_geral, 2)
+        else:
+            # Sem lista de filiais — lê o card com o que estiver selecionado
+            await _clicar_filtrar()
             await new_page.wait_for_timeout(1500)
-
-        logger.info(f"Cancelamentos — total (card oficial, todas filiais): R$ {total_geral:.2f}")
-
-        # ── Distribuição por filial: lê a tabela (mesmo truncada) só para
-        # descobrir a PROPORÇÃO entre filiais e ratear o total exato. O total
-        # vem do card (exato); a divisão por filial é proporcional à tabela. ──
-        prop = await new_page.evaluate("""
-            (function() {
-                var rows = document.querySelectorAll('#gdvPaged tbody tr');
-                var por_filial = {};
-                var soma = 0;
-                rows.forEach(function(row) {
-                    var cells = row.querySelectorAll('td');
-                    if (cells.length < 6) return;
-                    var filial = cells[2].textContent.trim();
-                    var valStr = cells[5].textContent.trim().replace(/[.]/g,'').replace(',','.');
-                    var val = parseFloat(valStr);
-                    if (isNaN(val) || val <= 0) return;
-                    por_filial[filial] = (por_filial[filial] || 0) + val;
-                    soma += val;
-                });
-                return {por_filial: por_filial, soma: soma};
-            })()
-        """)
-
-        soma_prop = prop.get("soma", 0) or 0
-        por_filial = prop.get("por_filial", {})
-        if total_geral > 0 and soma_prop > 0:
-            fator = total_geral / soma_prop
-            for fil_nome, val in por_filial.items():
-                resultado[fil_nome] = round(val * fator, 2)
-        elif total_geral > 0 and not por_filial:
-            # Tabela sem dados mas card tem total — reporta total sem quebra por filial
-            pass
-
-        resultado["_total"] = round(total_geral, 2)
+            valor = await _ler_card_cancelado()
+            resultado["_total"] = round(valor, 2)
+            logger.info(f"Cancelamentos — sem filtro de filial, card total: R$ {valor:.2f}")
 
         for k, v in resultado.items():
             if not k.startswith("_"):
