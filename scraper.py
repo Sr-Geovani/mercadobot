@@ -72,6 +72,17 @@ async def fazer_login(page, email: str, senha: str):
 
 
 async def exportar_vendas(page, data_ini: str, data_fim: str) -> Path:
+    """
+    ┌─────────────────────────────────────────────────────────────────────┐
+    │ LÓGICA-BASE DO SISTEMA — NÃO ALTERAR sem necessidade absoluta.       │
+    │ O faturamento foi validado contra o PDV Legal e BATE. O fluxo que    │
+    │ funciona: preencher os campos de data por DIGITAÇÃO direta           │
+    │ (txtdatapadrao1/2) com click triplo + type, confirmar os valores     │
+    │ lidos de volta, selecionar todas as lojas e gerar o relatório Excel. │
+    │ NÃO trocar por datepicker/daterangepicker aqui — esta tela tem       │
+    │ campos de data próprios e a digitação direta é o método estável.     │
+    └─────────────────────────────────────────────────────────────────────┘
+    """
     logger.info(f"Exportando Vendas: {data_ini} → {data_fim}")
     DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -262,7 +273,23 @@ async def exportar_produtos(page, data_ini: str, data_fim: str) -> Path:
 async def exportar_cancelamentos(page, data_ini: str, data_fim: str) -> dict:
     """
     Retorna dict com cancelamentos por filial + total.
-    Carrega todas as filiais de uma vez e lê a tabela do DOM — mais rápido e confiável.
+
+    ┌─────────────────────────────────────────────────────────────────────┐
+    │ LÓGICA-BASE DO SISTEMA — NÃO ALTERAR sem necessidade absoluta.       │
+    │ Esta abordagem foi validada contra o dashboard do PDV Legal e os     │
+    │ valores BATEM (total e por filial). O fluxo correto é:               │
+    │  1. Confirmar o período na tela (com retry) ANTES de ler nada.       │
+    │  2. Iterar filial por filial: selecionar UMA, reaplicar período,     │
+    │     CLICAR no botão #btnFiltro (é o clique que recalcula o card —    │
+    │     chamar GetDadosProdutos() via JS NÃO basta).                     │
+    │  3. Ler o valor do card "vendas com cancelamentos": como não há      │
+    │     .info-box-number, pega-se o MAIOR valor monetário no bloco       │
+    │     rotulado com "cancelamentos" (subindo no máx. 2 níveis no DOM    │
+    │     para não capturar o faturamento).                                │
+    │  4. Total = soma dos valores reais de cada filial.                   │
+    │ Qualquer mudança aqui deve ser testada filial a filial contra o PDV  │
+    │ Legal antes de subir.                                                │
+    └─────────────────────────────────────────────────────────────────────┘
     """
     logger.info(f"Buscando cancelamentos: {data_ini} -> {data_fim}")
     new_page = None

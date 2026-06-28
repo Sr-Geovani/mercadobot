@@ -220,9 +220,21 @@ def bloco_comparativo(vendas: pd.DataFrame) -> str:
 
 
 def bloco_produto_mes(produtos: pd.DataFrame) -> str:
-    """Produto com maior destaque — mais vendido e maior receita."""
-    top_qtd = produtos.sort_values("quantidade", ascending=False).head(1).iloc[0]
-    top_val = produtos.sort_values("valor", ascending=False).head(1).iloc[0]
+    """Produto com maior destaque — mais vendido e maior receita.
+
+    IMPORTANTE: o relatório vem POR LOJA (o mesmo produto aparece como uma
+    linha em cada filial). Para o ranking geral é obrigatório AGREGAR por
+    produto, somando quantidade e valor de todas as filiais — senão o "mais
+    vendido" reflete só a maior venda numa única loja, não o total real.
+    """
+    # Agrega por produto somando todas as filiais
+    agg = produtos.groupby("produto").agg(
+        quantidade=("quantidade", "sum"),
+        valor=("valor", "sum"),
+    ).reset_index()
+
+    top_qtd = agg.sort_values("quantidade", ascending=False).head(1).iloc[0]
+    top_val = agg.sort_values("valor", ascending=False).head(1).iloc[0]
 
     linhas = [f"🏆 {b('PRODUTO DESTAQUE DO PERÍODO')}\n"]
     linhas.append(f"📦 {b('Mais vendido em unidades:')}")
@@ -234,19 +246,31 @@ def bloco_produto_mes(produtos: pd.DataFrame) -> str:
         linhas.append(f"   {top_val['produto']} — {b(f'R$ {top_val.valor:,.2f}')}")
         linhas.append(f"   Unidades: {int(top_val.quantidade)}\n")
 
-    # Por filial
+    # Por filial (aqui sim, dentro de cada loja, sem agregar entre lojas)
     linhas.append(f"📍 {b('Top produto por unidade:')}")
     for filial in produtos["nomeloja"].unique():
         nome = filial.split()[-1].title()
-        top  = produtos[produtos["nomeloja"]==filial].sort_values("quantidade", ascending=False).iloc[0]
+        sub = produtos[produtos["nomeloja"]==filial]
+        if len(sub) == 0:
+            continue
+        top = sub.sort_values("quantidade", ascending=False).iloc[0]
         linhas.append(f"   {nome}: {top['produto']} ({int(top.quantidade)} un)")
 
     return "\n".join(linhas)
 
 
 def bloco_giro_produtos(produtos: pd.DataFrame) -> str:
-    """Classifica produtos por padrão de giro — âncora vs ocasional."""
-    v = produtos.copy()
+    """Classifica produtos por padrão de giro — âncora vs ocasional.
+
+    Agrega por produto (somando filiais) antes de classificar — senão o
+    mesmo produto vendido em várias lojas é tratado como itens separados e
+    o ranking de giro fica incoerente.
+    """
+    aggdict = {"quantidade": ("quantidade", "sum"), "valor": ("valor", "sum")}
+    if "numvendas" in produtos.columns:
+        aggdict["numvendas"] = ("numvendas", "sum")
+    v = produtos.groupby("produto").agg(**aggdict).reset_index()
+
     media_qtd = v["quantidade"].mean()
     media_num = v["numvendas"].mean() if "numvendas" in v.columns else None
 
