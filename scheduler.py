@@ -374,7 +374,7 @@ async def enviar_padroes_detectados_automatico():
     aproveitando o mesmo download de dados.
     """
     from database import listar_usuarios_ativos
-    from padroes import detectar_padroes_vendas, notificar_padroes_novos, registrar_produto_campeao_benchmark
+    from padroes import detectar_padroes_vendas, notificar_padroes_novos, registrar_produto_campeao_benchmark, consolidar_fatos_cliente
     from bot import normalizar_vendas, normalizar_produtos, kb_menu, b
 
     usuarios = await listar_usuarios_ativos()
@@ -406,9 +406,17 @@ async def enviar_padroes_detectados_automatico():
             # Registra benchmark (produtos campeões) — independente de haver
             # padrão notificável ou não, alimenta a base de comparação.
             try:
-                await registrar_produto_campeao_benchmark(chat_id, produtos, d30, hoje, top_n=3)
+                await registrar_produto_campeao_benchmark(chat_id, produtos, d30, hoje, top_n=20)
             except Exception as e:
                 logger.warning(f"Erro ao registrar benchmark para {chat_id}: {e}")
+
+            # Consolida fatos persistentes do cliente (dia da semana forte/fraco,
+            # ticket médio histórico, produto campeão) — memória parcial que
+            # alimenta cruzamentos inteligentes do agente.
+            try:
+                await consolidar_fatos_cliente(chat_id, vendas, produtos)
+            except Exception as e:
+                logger.warning(f"Erro ao consolidar fatos para {chat_id}: {e}")
 
             # Detecta padrões e filtra pelos ainda não notificados
             padroes = await detectar_padroes_vendas(chat_id, vendas, produtos)

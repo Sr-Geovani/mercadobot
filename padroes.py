@@ -144,14 +144,14 @@ async def notificar_padroes_novos(chat_id: int, padroes: list[dict], janela_dias
 
 
 async def registrar_produto_campeao_benchmark(chat_id: int, produtos, periodo_ini: str, periodo_fim: str,
-                                               top_n: int = 3):
+                                               top_n: int = 20):
     """
-    Registra os top N produtos campeões desse cliente no benchmark agregado
-    entre clientes. Só os campeões — nunca a base completa de produtos —
-    porque a maior parte do catálogo é nichada/regional e não serve para
-    comparação justa entre mercadinhos de bairros/cidades diferentes. Os
-    produtos mais vendidos (refrigerantes, salgadinhos, águas) tendem a ser
-    mais universais e comparáveis.
+    Registra os top N produtos mais vendidos desse cliente no benchmark
+    agregado. Antes registrávamos só o top 3 (campeões), mas para permitir
+    DESCOBERTA DE OPORTUNIDADE (sugerir a uma loja produtos que vendem bem em
+    outras mas que ela não tem), precisamos de uma amostra maior — top 20.
+    Ainda assim não é a base completa: itens de cauda muito longa e nichados
+    ficam de fora, mantendo a comparação focada no que tem volume relevante.
     """
     from database import registrar_benchmark_produto
 
@@ -174,3 +174,70 @@ async def registrar_produto_campeao_benchmark(chat_id: int, produtos, periodo_in
             )
         except Exception as e:
             logger.warning(f"Erro ao registrar benchmark para '{nome_produto}': {e}")
+
+
+async def consolidar_fatos_cliente(chat_id: int, vendas, produtos=None):
+    """
+    Deriva e salva os fatos consolidados do cliente a partir dos últimos 30
+    dias — memória persistente PARCIAL. Guarda só um punhado de fatos úteis
+    para cruzamento (não conversa, não dado bruto):
+      • faturamento médio por dia da semana (ex: sábado = forte)
+      • ticket médio histórico
+      • produto campeão consolidado
+
+    Chamado no mesmo job semanal que já baixa os dados, sem custo extra de
+    scraping. Faz upsert — sempre sobrescreve com o valor mais recente.
+    """
+    import pandas as pd
+    from database import salvar_fato_cliente
+
+    if vendas is None or len(vendas) == 0:
+        return
+
+    vendas = vendas.copy()
+    if "data_dt" not in vendas.columns:
+        for col_data in ["DataAbertura", "data", "Data", "HoraAbertura"]:
+            if col_data in vendas.columns:
+                vendas["data_dt"] = pd.to_datetime(vendas[col_data], errors="coerce", dayfirst=True)
+                break
+
+    # Ticket médio histórico
+    try:
+        ticket = float(vendas["valor"].mean())
+        await salvar_fato_cliente(chat_id, "metrica", "ticket_medio_historico", f"{ticket:.2f}")
+    except Exception as e:
+        logger.warning(f"Erro ao consolidar ticket médio para {chat_id}: {e}")
+
+    # Faturamento médio por dia da semana — classifica cada dia como forte/fraco/normal
+    if "data_dt" in vendas.columns and not vendas["data_dt"].isna().all():
+        try:
+            vendas["dia_semana"] = vendas["data_dt"].dt.day_name()
+            contagem = vendas.groupby("dia_semana")["data_dt"].apply(lambda s: s.dt.date.nunique())
+            fat_total = vendas.groupby("dia_semana")["valor"].sum()
+            fat_medio_dia = (fat_total / contagem).dropna()
+            if len(fat_medio_dia) >= 3:
+                media_geral = fat_medio_dia.mean()
+                traducao = {
+                    "Monday":"segunda","Tuesday":"terca","Wednesday":"quarta","Thursday":"quinta",
+                    "Friday":"sexta","Saturday":"sabado","Sunday":"domingo"
+                }
+                for dia_en, valor in fat_medio_dia.items():
+                    dia_pt = traducao.get(dia_en, dia_en.lower())
+                    if valor >= media_geral * 1.25:
+                        classe = "forte"
+                    elif valor <= media_geral * 0.75:
+                        classe = "fraco"
+                    else:
+                        classe = "normal"
+                    await salvar_fato_cliente(chat_id, "dia_semana", dia_pt, f"{classe}|{valor:.2f}")
+        except Exception as e:
+            logger.warning(f"Erro ao consolidar dias da semana para {chat_id}: {e}")
+
+    # Produto campeão consolidado
+    if produtos is not None and len(produtos) > 0 and "produto" in produtos.columns:
+        try:
+            campeao = produtos.groupby("produto")["quantidade"].sum().sort_values(ascending=False)
+            if len(campeao) > 0:
+                await salvar_fato_cliente(chat_id, "produto", "campeao", str(campeao.index[0]))
+        except Exception as e:
+            logger.warning(f"Erro ao consolidar produto campeão para {chat_id}: {e}")

@@ -96,6 +96,26 @@ async def inicializar_banco():
             "CREATE INDEX IF NOT EXISTS idx_padroes_chat_chave ON padroes_detectados (chat_id, chave_padrao)"
         )
 
+        # ─── Memória persistente PARCIAL — apenas fatos consolidados por
+        # cliente (não conversa). Guarda poucos fatos derivados e atualizados
+        # periodicamente (ex: "sábado é forte", "ticket médio histórico"),
+        # que permitem cruzamentos inteligentes do tipo "hoje está abaixo do
+        # seu padrão" sem o custo de reter histórico de conversa. ──
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS fatos_cliente (
+                id              SERIAL PRIMARY KEY,
+                chat_id         BIGINT NOT NULL,
+                tipo_fato       TEXT NOT NULL,
+                chave           TEXT NOT NULL,
+                valor           TEXT NOT NULL,
+                atualizado_em   TEXT NOT NULL,
+                UNIQUE (chat_id, tipo_fato, chave)
+            )
+        """)
+        await conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_fatos_chat ON fatos_cliente (chat_id)"
+        )
+
     logger.info("✅ Banco PostgreSQL inicializado.")
 
 
@@ -247,6 +267,79 @@ async def buscar_benchmark_produto(nome_produto: str, chat_id_excluir: int = Non
         }
 
 
+async def buscar_oportunidades_benchmark(chat_id: int, produtos_do_cliente: list[str]) -> dict:
+    """
+    DESCOBERTA DE OPORTUNIDADE: encontra produtos que vendem bem em OUTRAS
+    lojas mas que NÃO aparecem na lista de produtos do cliente atual.
+
+    A ideia central (sugerida pelo próprio operador): comparar o que vende
+    bem em outros lugares contra o catálogo da loja, e sugerir só o que falta
+    — porque os campeões em comum (ex: Coca-Cola) o cliente já sabe que
+    vendem. O valor está no que ele AINDA NÃO tem.
+
+    A comparação é feita pelo PRIMEIRO NOME normalizado do produto, para não
+    sugerir algo que o cliente já tem só porque o nome está escrito diferente
+    (ex: "REFRIG COLA 2L" vs "COCA COLA 2L" — primeiro nome distinto, mas
+    ainda assim o filtro por primeira palavra reduz falsos positivos óbvios).
+
+    produtos_do_cliente: lista de nomes de produtos que o cliente vende.
+    Retorna sugestões agregadas: produto + em quantas outras lojas vende +
+    volume médio.
+    """
+    import unicodedata
+
+    def primeiro_nome(s: str) -> str:
+        s = unicodedata.normalize("NFKD", str(s)).encode("ascii", "ignore").decode("ascii").lower()
+        toks = [t for t in s.split() if len(t) >= 3]
+        return toks[0] if toks else s.strip().lower()
+
+    # Conjunto de "primeiros nomes" que o cliente JÁ tem
+    nomes_cliente = set(primeiro_nome(p) for p in (produtos_do_cliente or []))
+
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch("""
+            SELECT chat_id, nome_produto, quantidade
+            FROM benchmark_produtos
+            WHERE chat_id != $1
+            ORDER BY registrado_em DESC
+            LIMIT 500
+        """, chat_id)
+
+    if not rows:
+        return {"outros_clientes": 0, "sugestoes": []}
+
+    outros_clientes = len(set(r["chat_id"] for r in rows))
+
+    # Agrupa produtos de outras lojas pelo primeiro nome, somando volume e
+    # contando em quantas lojas distintas aparece
+    agregado = {}
+    for r in rows:
+        pn = primeiro_nome(r["nome_produto"])
+        if pn in nomes_cliente:
+            continue  # cliente já tem algo com esse primeiro nome — pula
+        if pn not in agregado:
+            agregado[pn] = {"nome_exemplo": r["nome_produto"], "lojas": set(), "qtd_total": 0}
+        agregado[pn]["lojas"].add(r["chat_id"])
+        agregado[pn]["qtd_total"] += r["quantidade"]
+
+    # Ordena por nº de lojas que vendem (relevância) e depois por volume
+    sugestoes = sorted(
+        [
+            {
+                "produto": v["nome_exemplo"],
+                "lojas_que_vendem": len(v["lojas"]),
+                "volume_total_outras": v["qtd_total"],
+            }
+            for v in agregado.values()
+        ],
+        key=lambda x: (x["lojas_que_vendem"], x["volume_total_outras"]),
+        reverse=True
+    )
+
+    return {"outros_clientes": outros_clientes, "sugestoes": sugestoes[:10]}
+
+
 # ─── PADRÕES DETECTADOS (anti-spam) ────────────────────────────────────────
 
 async def ja_notificou_padrao(chat_id: int, chave_padrao: str, dias_validade: int = 7) -> bool:
@@ -277,3 +370,41 @@ async def registrar_padrao_notificado(chat_id: int, tipo_padrao: str, chave_padr
             INSERT INTO padroes_detectados (chat_id, tipo_padrao, chave_padrao, detectado_em, notificado)
             VALUES ($1, $2, $3, $4, TRUE)
         """, chat_id, tipo_padrao, chave_padrao, agora)
+
+
+# ─── MEMÓRIA PERSISTENTE PARCIAL — FATOS CONSOLIDADOS POR CLIENTE ───────────
+
+async def salvar_fato_cliente(chat_id: int, tipo_fato: str, chave: str, valor: str):
+    """
+    Salva ou atualiza um fato consolidado sobre o cliente (ex: tipo_fato=
+    'dia_semana', chave='sabado', valor='forte'; ou tipo_fato='metrica',
+    chave='ticket_medio_historico', valor='12.40'). Faz upsert — só mantém
+    o valor mais recente de cada fato, nunca acumula histórico de conversa.
+    """
+    agora = datetime.now(BRASILIA).isoformat()
+    pool  = await get_pool()
+    async with pool.acquire() as conn:
+        await conn.execute("""
+            INSERT INTO fatos_cliente (chat_id, tipo_fato, chave, valor, atualizado_em)
+            VALUES ($1, $2, $3, $4, $5)
+            ON CONFLICT (chat_id, tipo_fato, chave)
+            DO UPDATE SET valor = EXCLUDED.valor, atualizado_em = EXCLUDED.atualizado_em
+        """, chat_id, tipo_fato, chave, str(valor), agora)
+
+
+async def buscar_fatos_cliente(chat_id: int) -> dict:
+    """
+    Retorna todos os fatos consolidados conhecidos sobre o cliente, agrupados
+    por tipo. Usado pelo agente para contextualizar respostas ('hoje está
+    abaixo do seu sábado típico') sem precisar recalcular tudo toda vez.
+    """
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT tipo_fato, chave, valor, atualizado_em FROM fatos_cliente WHERE chat_id = $1",
+            chat_id
+        )
+        fatos = {}
+        for r in rows:
+            fatos.setdefault(r["tipo_fato"], {})[r["chave"]] = r["valor"]
+        return fatos

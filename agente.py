@@ -608,13 +608,17 @@ EXECUTORES = {
 }
 
 
-def _construir_system_prompt() -> str:
+def _construir_system_prompt(fatos_cliente: dict = None) -> str:
     """
     Monta o prompt do sistema com datas JÁ CALCULADAS para os períodos mais
     comuns, em vez de pedir para o Claude calcular sozinho. Isso elimina
     ambiguidade de interpretação (ex: "este mês" sendo interpretado de forma
     diferente em conversas diferentes) — a fonte da verdade do calendário é
     sempre o Python, nunca o modelo.
+
+    fatos_cliente: dict opcional de fatos consolidados sobre o cliente
+    (memória persistente parcial), injetados no prompt para permitir
+    cruzamentos do tipo "hoje está abaixo do seu sábado típico".
     """
     agora = datetime.now(BRASILIA)
     hoje        = agora.strftime("%d/%m/%Y")
@@ -626,7 +630,7 @@ def _construir_system_prompt() -> str:
     ultimo_mes_anterior     = ultimo_dia_mes_anterior.strftime("%d/%m/%Y")
     d30 = (agora - timedelta(days=30)).strftime("%d/%m/%Y")
 
-    return (
+    prompt = (
         "Você é o assistente do MercadoBot, um SaaS de inteligência para operadores de "
         "mercadinhos autônomos em condomínios no Brasil. Você conversa direto com o "
         "operador do mercadinho via Telegram.\n\n"
@@ -675,8 +679,45 @@ def _construir_system_prompt() -> str:
         "não tiver um produto claro para identificar.\n\n"
         "Responda em português do Brasil, direto ao ponto, sem rodeios. Pode usar "
         "negrito (**texto**) e emojis com moderação. Evite respostas longas — "
-        "operadores de mercadinho leem isso rápido, no celular, entre uma tarefa e outra."
+        "operadores de mercadinho leem isso rápido, no celular, entre uma tarefa e outra.\n\n"
+        "RECOMENDAÇÃO ACIONÁVEL: sempre que identificar um problema (cancelamento "
+        "alto, queda de vendas, produto parado), não pare na constatação — quando "
+        "tiver dados que permitam, aponte a CAUSA PROVÁVEL e uma AÇÃO concreta. Em "
+        "vez de só 'cancelamentos altos', prefira algo como 'cancelamentos "
+        "concentrados na filial X — vale verificar o totem de lá'. Use as "
+        "ferramentas de análise para cruzar filial, produto e período antes de "
+        "concluir. Se não houver dado suficiente para apontar a causa, seja honesto "
+        "sobre isso em vez de inventar uma."
     )
+
+    # Memória persistente parcial — injeta fatos consolidados do cliente, se houver,
+    # para permitir cruzamentos do tipo "hoje está abaixo do seu sábado típico".
+    if fatos_cliente:
+        linhas_fatos = []
+        dias = fatos_cliente.get("dia_semana", {})
+        if dias:
+            resumo_dias = []
+            for dia, val in dias.items():
+                classe = val.split("|")[0] if "|" in val else val
+                if classe in ("forte", "fraco"):
+                    resumo_dias.append(f"{dia} costuma ser {classe}")
+            if resumo_dias:
+                linhas_fatos.append("Padrão de dias da semana: " + "; ".join(resumo_dias) + ".")
+        metrica = fatos_cliente.get("metrica", {})
+        if metrica.get("ticket_medio_historico"):
+            linhas_fatos.append(f"Ticket médio histórico do cliente: R$ {metrica['ticket_medio_historico']}.")
+        produto = fatos_cliente.get("produto", {})
+        if produto.get("campeao"):
+            linhas_fatos.append(f"Produto campeão histórico: {produto['campeao']}.")
+
+        if linhas_fatos:
+            prompt += (
+                "\n\nO QUE VOCÊ JÁ SABE SOBRE ESTE CLIENTE (use para contextualizar, "
+                "ex: 'hoje está abaixo do seu sábado típico'):\n• " +
+                "\n• ".join(linhas_fatos)
+            )
+
+    return prompt
 
 
 SYSTEM_PROMPT = _construir_system_prompt()
@@ -818,6 +859,15 @@ async def processar_mensagem_agente(chat_id: int, texto_usuario: str = None,
         messages.append({"role": "user", "content": texto_usuario})
 
     try:
+        # Busca fatos consolidados do cliente (memória persistente parcial)
+        # para o agente poder fazer cruzamentos contextualizados.
+        try:
+            from database import buscar_fatos_cliente
+            fatos = await buscar_fatos_cliente(chat_id)
+        except Exception:
+            fatos = None
+        system_prompt = _construir_system_prompt(fatos_cliente=fatos)
+
         # Loop de tool-use: o Claude pode pedir para chamar uma ou mais
         # ferramentas antes de dar a resposta final. Repetimos até ele
         # parar de pedir ferramentas (stop_reason != "tool_use").
@@ -825,7 +875,7 @@ async def processar_mensagem_agente(chat_id: int, texto_usuario: str = None,
             resp = await client.messages.create(
                 model=MODEL,
                 max_tokens=1024,
-                system=_construir_system_prompt(),
+                system=system_prompt,
                 tools=TOOLS,
                 messages=messages,
             )
