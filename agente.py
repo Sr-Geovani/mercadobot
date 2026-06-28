@@ -704,6 +704,7 @@ def _construir_system_prompt(fatos_cliente: dict = None) -> str:
     ultimo_dia_mes_anterior = (agora.replace(day=1) - timedelta(days=1))
     primeiro_mes_anterior   = ultimo_dia_mes_anterior.replace(day=1).strftime("%d/%m/%Y")
     ultimo_mes_anterior     = ultimo_dia_mes_anterior.strftime("%d/%m/%Y")
+    d7  = (agora - timedelta(days=7)).strftime("%d/%m/%Y")
     d30 = (agora - timedelta(days=30)).strftime("%d/%m/%Y")
 
     prompt = (
@@ -730,7 +731,8 @@ def _construir_system_prompt(fatos_cliente: dict = None) -> str:
         f"(SEMPRE do dia 1 do mês atual até hoje — nunca um período menor)\n"
         f"  • 'mês passado' / 'mês anterior' = data_ini: {primeiro_mes_anterior}, "
         f"data_fim: {ultimo_mes_anterior} (o mês civil COMPLETO anterior, do dia 1 ao último dia)\n"
-        f"  • 'últimos 30 dias' = data_ini: {d30}, data_fim: {hoje}\n"
+        f"  • 'últimos 7 dias' = data_ini: {d7}, data_fim: {ontem} (termina ONTEM, igual ao PDV Legal — não inclui hoje)\n"
+        f"  • 'últimos 30 dias' = data_ini: {d30}, data_fim: {ontem} (termina ONTEM, igual ao PDV Legal)\n"
         f"  • Para 'produtos mais vendidos no mês', 'top produtos do mês', 'lista de "
         f"reposição do mês': use SEMPRE o período de 'este mês' acima (dia 1 até hoje), "
         f"nunca um período menor como 'hoje' ou 'últimos 7 dias' — o usuário quer o mês "

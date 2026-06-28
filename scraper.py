@@ -143,11 +143,14 @@ async def exportar_produtos(page, data_ini: str, data_fim: str) -> Path:
     mapa = {
         (hoje,  hoje):  "Hoje",
         (ontem, ontem): "Ontem",
-        (d7,    hoje):  "Ultimos 7 dias",
-        (d15,   hoje):  "Ultimos 15 dias",
-        (d30,   hoje):  "Ultimos 30 dias",
-        (d60,   hoje):  "Ultimos 60 dias",
-        (d90,   hoje):  "Ultimos 90 dias",
+        # "Últimos N dias" do PDV Legal terminam ONTEM (não incluem hoje).
+        # O bot agora manda o fim como ontem, então casamos com o range_key
+        # pré-definido (caminho mais confiável que o Intervalo customizado).
+        (d7,    ontem): "Ultimos 7 dias",
+        (d15,   ontem): "Ultimos 15 dias",
+        (d30,   ontem): "Ultimos 30 dias",
+        (d60,   ontem): "Ultimos 60 dias",
+        (d90,   ontem): "Ultimos 90 dias",
     }
     range_key = mapa.get((data_ini, data_fim))
 
@@ -161,63 +164,85 @@ async def exportar_produtos(page, data_ini: str, data_fim: str) -> Path:
         await page.click(f"li[data-range-key='{range_key}']")
         await page.wait_for_timeout(500)
     else:
-        # Período customizado via "Intervalo"
-        logger.info(f"Produtos — usando Intervalo: {data_ini} → {data_fim}")
-        await page.click("li[data-range-key='Intervalo']")
-        await page.wait_for_timeout(1000)
-
-        # Converte dd/mm/yyyy → mm/dd/yyyy para o datepicker americano
-        def br_to_us(d):
-            dd, mm, yyyy = d.split("/")
-            return f"{mm}/{dd}/{yyyy}"
-
-        ini_us = br_to_us(data_ini)
-        fim_us = br_to_us(data_fim)
-
-        # Preenche via JavaScript direto nos inputs do daterangepicker
-        await page.evaluate(f"""
-            var inputs = document.querySelectorAll('.daterangepicker input[type="text"]');
-            if (inputs.length >= 2) {{
-                inputs[0].value = '{ini_us}';
-                inputs[1].value = '{fim_us}';
-                inputs[0].dispatchEvent(new Event('change'));
-                inputs[1].dispatchEvent(new Event('change'));
-            }}
+        # Período customizado. Em vez de preencher os inputs de texto (frágil —
+        # o daterangepicker ignora e fica só na data final), usamos a API do
+        # próprio daterangepicker via moment.js + evento apply. É o MESMO
+        # mecanismo que funciona de forma confiável no exportar_cancelamentos.
+        logger.info(f"Produtos — usando Intervalo via API daterangepicker: {data_ini} → {data_fim}")
+        ini_d, ini_m, ini_y = data_ini.split("/")
+        fim_d, fim_m, fim_y = data_fim.split("/")
+        aplicado = await page.evaluate(f"""
+            (function() {{
+                if (typeof moment === 'undefined' || typeof $ === 'undefined') return 'sem_libs';
+                var ini = moment('{ini_y}-{ini_m}-{ini_d}', 'YYYY-MM-DD');
+                var fim = moment('{fim_y}-{fim_m}-{fim_d}', 'YYYY-MM-DD');
+                var el  = $('#reportrange');
+                var dr  = el.data('daterangepicker');
+                if (!dr) return 'sem_daterangepicker';
+                dr.setStartDate(ini);
+                dr.setEndDate(fim);
+                el.find('span').html(ini.format('DD/MM/YYYY') + ' - ' + fim.format('DD/MM/YYYY'));
+                el.trigger('apply.daterangepicker', dr);
+                return dr.startDate.format('DD/MM/YYYY') + ' - ' + dr.endDate.format('DD/MM/YYYY');
+            }})();
         """)
-        await page.wait_for_timeout(500)
-
-        # Clica no botão Apply
-        await page.evaluate("""
-            var btn = document.querySelector('.daterangepicker .applyBtn');
-            if (btn) btn.click();
-        """)
+        logger.info(f"Produtos — Intervalo aplicado via API: {aplicado}")
         await page.wait_for_timeout(800)
-        logger.info(f"Intervalo aplicado: {ini_us} → {fim_us}")
 
     # Clica em Filtrar
     await page.click("#btnFiltro")
     await page.wait_for_timeout(3000)
 
-    # Verificação de segurança: confirma que o período realmente aplicado na
-    # tela bate com o solicitado, antes de baixar o Excel. Sem isso, uma falha
-    # silenciosa no datepicker (especialmente no caminho de Intervalo
-    # customizado) geraria um relatório de período errado sem ninguém perceber
-    # — era uma causa provável de "reposição não respeitar o período".
-    try:
-        periodo_exibido = await page.evaluate(
-            "document.querySelector('#reportrange span') ? "
-            "document.querySelector('#reportrange span').textContent.trim() : ''"
-        )
-        esperado = f"{data_ini} - {data_fim}"
-        if periodo_exibido and periodo_exibido != esperado:
-            logger.warning(
-                f"Produtos — período exibido '{periodo_exibido}' difere do solicitado "
-                f"'{esperado}'. O relatório pode sair com o período errado."
+    # Verificação de segurança CRÍTICA: confirma que o período aplicado na tela
+    # bate com o solicitado ANTES de baixar. Se divergir, reaplica via API e
+    # tenta de novo (até 3x). Sem isso, o relatório de produtos sai com período
+    # errado (ex: só hoje em vez do mês inteiro) — foi o bug do "mês atual".
+    ini_d, ini_m, ini_y = data_ini.split("/")
+    fim_d, fim_m, fim_y = data_fim.split("/")
+    esperado = f"{data_ini} - {data_fim}"
+    periodo_ok = False
+    for tentativa in range(3):
+        try:
+            periodo_exibido = await page.evaluate(
+                "document.querySelector('#reportrange span') ? "
+                "document.querySelector('#reportrange span').textContent.trim() : ''"
             )
-        else:
+        except Exception:
+            periodo_exibido = ""
+
+        if periodo_exibido == esperado:
+            periodo_ok = True
             logger.info(f"Produtos — período confirmado na tela: {periodo_exibido}")
-    except Exception as e:
-        logger.warning(f"Produtos — não foi possível verificar período exibido: {e}")
+            break
+
+        logger.warning(
+            f"Produtos — período exibido '{periodo_exibido}' != esperado '{esperado}' "
+            f"(tentativa {tentativa+1}/3). Reaplicando via API..."
+        )
+        await page.evaluate(f"""
+            (function() {{
+                if (typeof moment === 'undefined' || typeof $ === 'undefined') return;
+                var ini = moment('{ini_y}-{ini_m}-{ini_d}', 'YYYY-MM-DD');
+                var fim = moment('{fim_y}-{fim_m}-{fim_d}', 'YYYY-MM-DD');
+                var el  = $('#reportrange');
+                var dr  = el.data('daterangepicker');
+                if (dr) {{
+                    dr.setStartDate(ini);
+                    dr.setEndDate(fim);
+                    el.find('span').html(ini.format('DD/MM/YYYY') + ' - ' + fim.format('DD/MM/YYYY'));
+                    el.trigger('apply.daterangepicker', dr);
+                }}
+            }})();
+        """)
+        await page.wait_for_timeout(500)
+        await page.click("#btnFiltro")
+        await page.wait_for_timeout(2500)
+
+    if not periodo_ok:
+        logger.error(
+            f"Produtos — NÃO foi possível aplicar o período {esperado} após 3 tentativas. "
+            f"O relatório pode sair incorreto."
+        )
 
     # Abre modal de download
     await page.click("#imgDownload")

@@ -2308,9 +2308,13 @@ async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
         periodos = {
             "atualizar_hoje":         (_hoje.strftime(_fmt),                          _hoje.strftime(_fmt),          "hoje"),
             "atualizar_ontem":        ((_hoje-_timedelta(days=1)).strftime(_fmt),     (_hoje-_timedelta(days=1)).strftime(_fmt), "ontem"),
-            "atualizar_7dias":        ((_hoje-_timedelta(days=7)).strftime(_fmt),     _hoje.strftime(_fmt),          "últimos 7 dias"),
-            "atualizar_15dias":       ((_hoje-_timedelta(days=15)).strftime(_fmt),    _hoje.strftime(_fmt),          "últimos 15 dias"),
-            "atualizar_30dias":       ((_hoje-_timedelta(days=30)).strftime(_fmt),    _hoje.strftime(_fmt),          "últimos 30 dias"),
+            # "Últimos N dias" segue a definição do PDV Legal: N dias completos
+            # terminando ONTEM (não inclui hoje, que é dia parcial). Ex: em 28/06,
+            # "últimos 7 dias" = 21/06 a 27/06. Isso mantém o bot idêntico ao PDV
+            # Legal para evitar divergência ao confrontar os dados.
+            "atualizar_7dias":        ((_hoje-_timedelta(days=7)).strftime(_fmt),     (_hoje-_timedelta(days=1)).strftime(_fmt),  "últimos 7 dias"),
+            "atualizar_15dias":       ((_hoje-_timedelta(days=15)).strftime(_fmt),    (_hoje-_timedelta(days=1)).strftime(_fmt),  "últimos 15 dias"),
+            "atualizar_30dias":       ((_hoje-_timedelta(days=30)).strftime(_fmt),    (_hoje-_timedelta(days=1)).strftime(_fmt),  "últimos 30 dias"),
             "atualizar_mes":          (_hoje.strftime("01/%m/%Y"),                    _hoje.strftime(_fmt),          f"mês de {nome_mes(_hoje.month)}"),
             "atualizar_mes_anterior": (_mes_ant_ini.strftime(_fmt),                   _mes_ant_fim.strftime(_fmt),   f"{nome_mes(_mes_ant_ini.month)} de {_mes_ant_ini.year}"),
         }
@@ -2351,9 +2355,10 @@ async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
             periodos = {
                 "rep_per_hoje":   (_hoje.strftime(_fmt),                         _hoje.strftime(_fmt),                         "hoje"),
                 "rep_per_ontem":  ((_hoje-_timedelta(days=1)).strftime(_fmt),    (_hoje-_timedelta(days=1)).strftime(_fmt),    "ontem"),
-                "rep_per_7dias":  ((_hoje-_timedelta(days=7)).strftime(_fmt),    _hoje.strftime(_fmt),                         "últimos 7 dias"),
-                "rep_per_15dias": ((_hoje-_timedelta(days=15)).strftime(_fmt),   _hoje.strftime(_fmt),                         "últimos 15 dias"),
-                "rep_per_30dias": ((_hoje-_timedelta(days=30)).strftime(_fmt),   _hoje.strftime(_fmt),                         "últimos 30 dias"),
+                # "Últimos N dias" terminam ONTEM, igual ao PDV Legal (ver nota no mapa de atualizar)
+                "rep_per_7dias":  ((_hoje-_timedelta(days=7)).strftime(_fmt),    (_hoje-_timedelta(days=1)).strftime(_fmt),    "últimos 7 dias"),
+                "rep_per_15dias": ((_hoje-_timedelta(days=15)).strftime(_fmt),   (_hoje-_timedelta(days=1)).strftime(_fmt),    "últimos 15 dias"),
+                "rep_per_30dias": ((_hoje-_timedelta(days=30)).strftime(_fmt),   (_hoje-_timedelta(days=1)).strftime(_fmt),    "últimos 30 dias"),
                 "rep_per_mes":    (_hoje.strftime("01/%m/%Y"),                   _hoje.strftime(_fmt),                         "mês atual"),
             }
 
