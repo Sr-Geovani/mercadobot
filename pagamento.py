@@ -176,7 +176,12 @@ async def gerar_link_pagamento(asaas_cliente_id: str, chat_id: int, reativacao: 
             headers=_headers()
         )
         data = resp.json()
-        logger.info(f"Checkout criado: {data}")
+        logger.info(
+            f"[TESTE-CHECKOUT] Checkout criado para chat_id={chat_id} | "
+            f"nextDueDate configurado={primeiro_vencimento} | "
+            f"valor da assinatura=R${PRECO_MENSAL} | "
+            f"resposta_completa={data}"
+        )
 
         checkout_id = data.get("id", "")
         link        = data.get("link", "") or data.get("url", "")

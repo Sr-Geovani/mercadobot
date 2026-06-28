@@ -39,7 +39,16 @@ async def handle_webhook(request: web.Request) -> web.Response:
     """Processa eventos do Asaas."""
     try:
         payload = await request.json()
-        logger.info(f"Webhook recebido: {payload.get('event')}")
+        evento_raw = payload.get("event")
+        dados_raw  = payload.get("payment") or payload.get("subscription") or payload.get("checkout") or {}
+        logger.info(
+            f"[TESTE-WEBHOOK] Evento={evento_raw} | "
+            f"value={dados_raw.get('value')} | "
+            f"status={dados_raw.get('status')} | "
+            f"customer={dados_raw.get('customer')} | "
+            f"externalReference={dados_raw.get('externalReference')} | "
+            f"id={dados_raw.get('id')}"
+        )
 
         resultado = processar_webhook(payload)
         chat_id   = resultado["chat_id"]
