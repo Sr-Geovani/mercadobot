@@ -281,8 +281,11 @@ async def receber_pdv_senha(update: Update, context: ContextTypes.DEFAULT_TYPE):
         assinatura_id = await buscar_assinatura_ativa(asaas_id)
 
         if not assinatura_id:
-            # Cria nova assinatura
-            link, assinatura_id = await gerar_link_pagamento(asaas_id, chat_id)
+            # Cria novo checkout — cartão validado, cobrança só no fim do trial
+            link, checkout_id = await gerar_link_pagamento(asaas_id, chat_id)
+            # O checkout ainda não tem subscription até o cliente pagar.
+            # assinatura_id fica vazio até o webhook confirmar e criarmos a referência real.
+            assinatura_id = ""
         else:
             # Já tem assinatura — só busca o link da próxima cobrança
             from pagamento import buscar_link_assinatura

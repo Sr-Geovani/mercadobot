@@ -114,27 +114,98 @@ async def criar_assinatura_com_trial(
         return assinatura
 
 
-async def gerar_link_pagamento(asaas_cliente_id: str, chat_id: int, reativacao: bool = False, dias_trial_restantes: int = 0) -> tuple:
+async def gerar_link_pagamento(asaas_cliente_id: str, chat_id: int, reativacao: bool = False,
+                                dias_trial_restantes: int = 0,
+                                nome_cliente: str = "", email_cliente: str = "",
+                                cpf_cliente: str = "") -> tuple:
     """
-    Cria assinatura mensal recorrente.
-    - Primeiro cadastro: trial de 7 dias, cobrança no dia 8
-    - Reativação com dias restantes: usa os dias restantes do trial original
-    - Reativação sem dias restantes: cobrança imediata
-    Retorna (link, assinatura_id).
+    Cria um Checkout do Asaas (chargeTypes=RECURRENT) que, ao validar o cartão,
+    cria a assinatura SEM cobrar a primeira parcela imediatamente — respeita o
+    nextDueDate informado. Isso evita o bug de cobrança no cadastro/trial.
+
+    Documentação: ao usar checkout com chargeTypes RECURRENT, o cartão é validado
+    mas a cobrança só ocorre no vencimento configurado em subscription.nextDueDate.
+
+    Retorna (link_checkout, checkout_id).
+    """
+    if reativacao and dias_trial_restantes <= 0:
+        # Trial esgotado — cobrança imediata (hoje)
+        primeiro_vencimento = datetime.now(BRASILIA).strftime("%Y-%m-%d %H:%M:%S")
+        descricao = "MercadoBot — Reativação de assinatura"
+    elif reativacao and dias_trial_restantes > 0:
+        primeiro_vencimento = (
+            datetime.now(BRASILIA) + timedelta(days=dias_trial_restantes + 1)
+        ).strftime("%Y-%m-%d %H:%M:%S")
+        descricao = f"MercadoBot — Reativação ({dias_trial_restantes}d de trial restantes)"
+    else:
+        primeiro_vencimento = (
+            datetime.now(BRASILIA) + timedelta(days=TRIAL_DIAS + 1)
+        ).strftime("%Y-%m-%d %H:%M:%S")
+        descricao = "MercadoBot — Inteligência para seu mercadinho autônomo"
+
+    payload = {
+        "billingTypes":   ["CREDIT_CARD"],
+        "chargeTypes":    ["RECURRENT"],
+        "minutesToExpire": 4320,  # 3 dias para o cliente preencher
+        "callback": {
+            "successUrl": "https://t.me/MercadoBotOficial",
+            "cancelUrl":  "https://t.me/MercadoBotOficial",
+            "expiredUrl": "https://t.me/MercadoBotOficial",
+        },
+        "items": [{
+            "name":        "MercadoBot",
+            "description": descricao,
+            "quantity":    1,
+            "value":       PRECO_MENSAL,
+        }],
+        "subscription": {
+            "cycle":             "MONTHLY",
+            "nextDueDate":       primeiro_vencimento,
+            "externalReference": str(chat_id),
+        },
+    }
+
+    # Se já temos o cliente cadastrado no Asaas, vincula — evita duplicar cadastro
+    if asaas_cliente_id:
+        payload["customer"] = asaas_cliente_id
+
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(
+            f"{ASAAS_URL}/checkouts",
+            json=payload,
+            headers=_headers()
+        )
+        data = resp.json()
+        logger.info(f"Checkout criado: {data}")
+
+        checkout_id = data.get("id", "")
+        link        = data.get("link", "") or data.get("url", "")
+
+        if not link:
+            logger.error(f"Erro ao criar checkout: {data}")
+            return "", ""
+
+        return link, checkout_id
+
+
+async def gerar_link_pagamento_legado(asaas_cliente_id: str, chat_id: int, reativacao: bool = False, dias_trial_restantes: int = 0) -> tuple:
+    """
+    MÉTODO ANTIGO — mantido apenas como referência/fallback.
+    PROBLEMA CONHECIDO: cria a subscription direto e usa o invoiceUrl da primeira
+    cobrança. Quando o cliente preenche o cartão nesse link, o Asaas cobra
+    IMEDIATAMENTE, ignorando o nextDueDate configurado — não respeita o trial.
+    Use gerar_link_pagamento() (Checkout) em vez deste.
     """
     async with httpx.AsyncClient() as client:
         if reativacao and dias_trial_restantes <= 0:
-            # Trial esgotado — cobrança imediata
             primeiro_vencimento = datetime.now(BRASILIA).strftime("%Y-%m-%d")
             descricao = "MercadoBot — Reativação de assinatura"
         elif reativacao and dias_trial_restantes > 0:
-            # Trial ainda tem saldo — usa os dias restantes
             primeiro_vencimento = (
                 datetime.now(BRASILIA) + timedelta(days=dias_trial_restantes + 1)
             ).strftime("%Y-%m-%d")
             descricao = f"MercadoBot — Reativação ({dias_trial_restantes}d de trial restantes)"
         else:
-            # Primeiro cadastro — trial completo de 7 dias
             primeiro_vencimento = (
                 datetime.now(BRASILIA) + timedelta(days=TRIAL_DIAS + 1)
             ).strftime("%Y-%m-%d")
@@ -162,7 +233,6 @@ async def gerar_link_pagamento(asaas_cliente_id: str, chat_id: int, reativacao: 
             logger.error(f"Erro ao criar assinatura: {data}")
             return "", ""
 
-        # Busca o link da primeira cobrança
         resp_pag = await client.get(
             f"{ASAAS_URL}/subscriptions/{assinatura_id}/payments",
             headers=_headers()
@@ -313,15 +383,22 @@ async def cancelar_assinatura(asaas_id: str) -> bool:
 def processar_webhook(payload: dict) -> dict:
     """
     Interpreta o evento do webhook do Asaas.
-    Retorna dict com {evento, chat_id, asaas_id}.
+    Retorna dict com {evento, chat_id, asaas_id, customer}.
+
+    chat_id pode vir vazio se o evento for de um payment cujo externalReference
+    não foi propagado da subscription (comum em fluxos via Checkout). Nesse caso,
+    o chamador deve resolver o chat_id buscando o usuário pelo campo "customer"
+    (asaas_id) salvo no banco.
     """
     evento = payload.get("event", "")
-    dados  = payload.get("payment") or payload.get("subscription") or {}
+    dados  = payload.get("payment") or payload.get("subscription") or payload.get("checkout") or {}
 
     chat_id  = dados.get("externalReference")
     asaas_id = dados.get("id") or dados.get("subscription")
+    customer = dados.get("customer")  # ID do cliente Asaas — usado como fallback
 
     mapa = {
+        "SUBSCRIPTION_CREATED":      "cartao_validado",
         "PAYMENT_CONFIRMED":         "pagamento_confirmado",
         "PAYMENT_RECEIVED":          "pagamento_confirmado",
         "PAYMENT_OVERDUE":           "pagamento_atrasado",
@@ -334,5 +411,6 @@ def processar_webhook(payload: dict) -> dict:
         "evento":   mapa.get(evento, evento),
         "chat_id":  int(chat_id) if chat_id else None,
         "asaas_id": asaas_id,
+        "customer": customer,
         "raw":      evento,
     }
