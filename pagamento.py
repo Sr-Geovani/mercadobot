@@ -146,7 +146,7 @@ async def gerar_link_pagamento(asaas_cliente_id: str, chat_id: int, reativacao: 
     payload = {
         "billingTypes":   ["CREDIT_CARD"],
         "chargeTypes":    ["RECURRENT"],
-        "minutesToExpire": 4320,  # 3 dias para o cliente preencher
+        "minutesToExpire": 60,  # 1h para preencher — valores altos (ex: dias em minutos) são rejeitados pela API
         "callback": {
             "successUrl": "https://t.me/MercadoBotOficial",
             "cancelUrl":  "https://t.me/MercadoBotOficial",
