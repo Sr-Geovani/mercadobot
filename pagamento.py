@@ -519,11 +519,21 @@ def processar_webhook(payload: dict) -> dict:
     dados  = payload.get("payment") or payload.get("subscription") or payload.get("checkout") or {}
 
     chat_id  = dados.get("externalReference")
+    # Em eventos de checkout, o externalReference que configuramos fica dentro
+    # do sub-objeto subscription, não no nível raiz do checkout.
+    if not chat_id and isinstance(dados.get("subscription"), dict):
+        chat_id = dados["subscription"].get("externalReference")
+
     asaas_id = dados.get("id") or dados.get("subscription")
+    if isinstance(asaas_id, dict):
+        asaas_id = asaas_id.get("id")
     customer = dados.get("customer")  # ID do cliente Asaas — usado como fallback
 
     mapa = {
         "SUBSCRIPTION_CREATED":      "cartao_validado",
+        "CHECKOUT_PAID":             "cartao_validado",
+        "CHECKOUT_CANCELED":         "checkout_cancelado",
+        "CHECKOUT_EXPIRED":          "checkout_expirado",
         "PAYMENT_CONFIRMED":         "pagamento_confirmado",
         "PAYMENT_RECEIVED":          "pagamento_confirmado",
         "PAYMENT_OVERDUE":           "pagamento_atrasado",

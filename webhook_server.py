@@ -41,12 +41,13 @@ async def handle_webhook(request: web.Request) -> web.Response:
         payload = await request.json()
         evento_raw = payload.get("event")
         dados_raw  = payload.get("payment") or payload.get("subscription") or payload.get("checkout") or {}
+        sub_raw    = dados_raw.get("subscription") if isinstance(dados_raw.get("subscription"), dict) else {}
         logger.info(
             f"[TESTE-WEBHOOK] Evento={evento_raw} | "
             f"value={dados_raw.get('value')} | "
             f"status={dados_raw.get('status')} | "
             f"customer={dados_raw.get('customer')} | "
-            f"externalReference={dados_raw.get('externalReference')} | "
+            f"externalReference={dados_raw.get('externalReference') or sub_raw.get('externalReference')} | "
             f"id={dados_raw.get('id')}"
         )
 
@@ -187,6 +188,35 @@ async def handle_webhook(request: web.Request) -> web.Response:
                     ),
                     parse_mode="HTML"
                 )
+
+        elif evento in ("checkout_expirado", "checkout_cancelado"):
+            # Cliente não terminou de preencher o cartão a tempo, ou cancelou
+            # no meio do checkout. Não altera status — só registra e oferece
+            # um caminho claro para tentar de novo, em vez de deixar o
+            # usuário sem nenhum sinal do que aconteceu.
+            logger.info(f"Checkout não concluído para chat_id={chat_id}: {evento}")
+            if _bot:
+                from bot import kb_menu
+                kb_retry = None
+                try:
+                    from telegram import InlineKeyboardMarkup, InlineKeyboardButton
+                    kb_retry = InlineKeyboardMarkup([
+                        [InlineKeyboardButton("🔄 Gerar novo link de pagamento", callback_data="reativar")],
+                    ])
+                except Exception:
+                    pass
+                try:
+                    await _bot.send_message(
+                        chat_id=chat_id,
+                        text=(
+                            "⏳ <b>O link de pagamento expirou ou foi cancelado.</b>\n\n"
+                            "Clique abaixo para gerar um novo:"
+                        ),
+                        parse_mode="HTML",
+                        reply_markup=kb_retry
+                    )
+                except Exception as e_envio:
+                    logger.error(f"FALHA AO NOTIFICAR chat_id={chat_id} sobre {evento}: {e_envio}")
 
         return web.Response(text="ok")
 
