@@ -348,12 +348,52 @@ async def exportar_cancelamentos(page, data_ini: str, data_fim: str) -> dict:
         except Exception:
             tabela_tem_dados = False
 
-        # A tabela pagina em blocos de 100 linhas (ContentPlaceHolder1_lblTotalPorPagina).
-        # Para períodos curtos (1 dia) isso nunca importa, mas para "este mês" ou
-        # intervalos maiores pode haver mais de 100 cancelamentos — sem carregar
-        # todas as páginas, a soma fica truncada na primeira leva.
+        # Soma a tabela de forma ACUMULATIVA por página. Isso é robusto tanto
+        # se o botão "Mais" ANEXA linhas quanto se SUBSTITUI a página: somamos
+        # cada bloco de linhas conforme carrega, usando um identificador de
+        # linha para não contar a mesma linha duas vezes (dedup por conteúdo).
         if tabela_tem_dados:
-            max_paginas = 20  # rede de segurança contra loop infinito
+            max_paginas = 50  # ampliado: períodos longos podem ter muitas páginas
+            vistos = set()
+            por_filial_acc = {}
+            total_acc = 0.0
+
+            async def somar_pagina_atual():
+                nonlocal total_acc
+                linhas = await new_page.evaluate("""
+                    (function() {
+                        var rows = document.querySelectorAll('#gdvPaged tbody tr');
+                        var out = [];
+                        rows.forEach(function(row) {
+                            var cells = row.querySelectorAll('td');
+                            if (cells.length < 6) return;
+                            out.push({
+                                chave: row.textContent.trim(),
+                                filial: cells[2].textContent.trim(),
+                                valStr: cells[5].textContent.trim()
+                            });
+                        });
+                        return out;
+                    })()
+                """)
+                for ln in linhas:
+                    if ln["chave"] in vistos:
+                        continue
+                    vistos.add(ln["chave"])
+                    try:
+                        val = float(ln["valStr"].replace(".", "").replace(",", "."))
+                    except ValueError:
+                        continue
+                    if val <= 0:
+                        continue
+                    fil = ln["filial"]
+                    por_filial_acc[fil] = por_filial_acc.get(fil, 0.0) + val
+                    total_acc += val
+
+            # Soma a primeira página
+            await somar_pagina_atual()
+
+            # Pagina e soma cada bloco novo
             for pagina in range(max_paginas):
                 tem_botao_mais = await new_page.evaluate("""
                     (function() {
@@ -365,24 +405,20 @@ async def exportar_cancelamentos(page, data_ini: str, data_fim: str) -> dict:
                 """)
                 if not tem_botao_mais:
                     break
-
-                n_linhas_antes = await new_page.evaluate(
-                    "document.querySelectorAll('#gdvPaged tbody tr').length"
-                )
+                n_antes = len(vistos)
                 await new_page.evaluate("if (typeof GetRecords === 'function') GetRecords();")
-                try:
-                    await new_page.wait_for_function(
-                        f"document.querySelectorAll('#gdvPaged tbody tr').length > {n_linhas_antes}",
-                        timeout=8000
-                    )
-                except Exception:
-                    logger.info(f"Cancelamentos — paginação parou na página {pagina + 1} (sem novas linhas)")
+                await new_page.wait_for_timeout(1200)
+                await somar_pagina_atual()
+                if len(vistos) == n_antes:
+                    logger.info(f"Cancelamentos — paginação parou na página {pagina + 1} (sem linhas novas)")
                     break
             else:
-                logger.warning(f"Cancelamentos — atingiu limite de {max_paginas} páginas, pode haver mais dados")
+                logger.warning(f"Cancelamentos — atingiu limite de {max_paginas} páginas")
 
-            n_linhas_total = await new_page.evaluate("document.querySelectorAll('#gdvPaged tbody tr').length")
-            logger.info(f"Cancelamentos — total de linhas carregadas após paginação: {n_linhas_total}")
+            logger.info(f"Cancelamentos — {len(vistos)} linhas únicas somadas, total R$ {total_acc:.2f}")
+            dados = {"por_filial": por_filial_acc, "total": round(total_acc, 2)}
+        else:
+            dados = {"por_filial": {}, "total": 0.0}
 
         if not tabela_tem_dados:
             # Diagnóstico: confirma se é "sem cancelamentos" ou erro real
@@ -399,30 +435,6 @@ async def exportar_cancelamentos(page, data_ini: str, data_fim: str) -> dict:
                 })()
             """)
             logger.info(f"Cancelamentos — tabela vazia, diagnóstico: {diag}")
-
-        # Lê a tabela e soma por filial via JavaScript.
-        # NÃO filtramos por data aqui — o servidor já aplicou o período via
-        # daterangepicker + GetDadosProdutos. Filtrar de novo no JS, linha a
-        # linha, arriscava descartar linhas válidas por divergência de parsing
-        # de data (era uma das causas do "desvio para menos").
-        dados = await new_page.evaluate(f"""
-            (function() {{
-                var rows  = document.querySelectorAll('#gdvPaged tbody tr');
-                var por_filial = {{}};
-                var total = 0;
-                rows.forEach(function(row) {{
-                    var cells = row.querySelectorAll('td');
-                    if (cells.length < 6) return;
-                    var filial = cells[2].textContent.trim();
-                    var valStr = cells[5].textContent.trim().replace(/[.]/g,'').replace(',','.');
-                    var val = parseFloat(valStr);
-                    if (isNaN(val)) return;
-                    por_filial[filial] = (por_filial[filial] || 0) + val;
-                    total += val;
-                }});
-                return {{por_filial: por_filial, total: parseFloat(total.toFixed(2))}};
-            }})()
-        """)
 
         resultado = dados.get("por_filial", {})
         soma_tabela = dados.get("total", 0.0)

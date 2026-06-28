@@ -666,6 +666,8 @@ def bloco_reposicao(produtos: pd.DataFrame, modo: str) -> list:
 def normalizar_vendas(df: pd.DataFrame) -> pd.DataFrame:
     """Garante tipos corretos e remove linhas vazias do relatório de vendas."""
     df = df.copy()
+    n_bruto = len(df)
+    soma_bruta = pd.to_numeric(df["valor"], errors="coerce").sum() if "valor" in df.columns else 0
     # Remove linhas completamente vazias
     df = df.dropna(how="all")
     # Remove linhas sem idUnico (linhas de rodapé/cabeçalho extra)
@@ -683,24 +685,39 @@ def normalizar_vendas(df: pd.DataFrame) -> pd.DataFrame:
     for col in ["PossuiItemCancelado", "Estornado"]:
         if col in df.columns:
             df[col] = df[col].astype(str).str.upper().isin(["TRUE","1","SIM","YES"])
-    logger.info(f"Vendas normalizadas: {len(df)} linhas válidas")
+    soma_valida = df["valor"].sum() if "valor" in df.columns else 0
+    logger.info(
+        f"Vendas normalizadas: {len(df)} de {n_bruto} linhas brutas | "
+        f"soma bruta R$ {soma_bruta:.2f} -> soma válida R$ {soma_valida:.2f}"
+    )
     return df
 
 def normalizar_produtos(df: pd.DataFrame) -> pd.DataFrame:
     """Garante tipos corretos nas colunas do relatório de produtos."""
     df = df.copy()
+    n_bruto = len(df)
     df = df.dropna(how="all")
+
+    # Apenas limpa/normaliza o texto — NÃO descarta linhas por causa de
+    # 'grupo' ou 'nomeloja' vazios. Antes, um produto sem grupo cadastrado
+    # (comum) era removido inteiro, fazendo o faturamento/quantidade vir A
+    # MENOS em períodos longos (onde entram mais produtos variados, alguns
+    # sem grupo). Só o 'produto' em si é critério de validade.
     for col in ["produto", "nomeloja", "grupo"]:
         if col in df.columns:
             df[col] = df[col].astype(str).str.strip()
-            df = df[df[col] != "nan"]
-            df = df[df[col] != ""]
+            df[col] = df[col].replace({"nan": "", "None": ""})
+
     for col in ["quantidade", "valor"]:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
-    # Remove linhas sem produto ou sem loja válidos
+
+    # Remove apenas linhas sem produto válido (nome real)
     if "produto" in df.columns:
         df = df[df["produto"].str.len() > 1]
+        df = df[df["produto"].str.lower() != "nan"]
+
+    logger.info(f"Produtos normalizados: {len(df)} de {n_bruto} linhas brutas")
     return df
 
 def resumo_dados(chat_id: int) -> str:
@@ -860,8 +877,35 @@ async def abrir_menu(msg, chat_id: int = None):
     await msg.reply_text(texto, parse_mode="HTML", reply_markup=kb_menu(periodo_label))
 
 # ─── ENVIO HTML ──────────────────────────────────────────────
+def _md_para_html(texto: str) -> str:
+    """
+    Converte a formatação Markdown que o Claude usa (**negrito**, *itálico*)
+    para HTML, que é o parse_mode usado em todo o bot. Sem isso, as respostas
+    do agente (foto/áudio/texto livre) mostram os asteriscos literais em vez
+    de negrito, ficando visualmente diferentes das respostas dos botões.
+    """
+    import re
+    if not texto:
+        return texto
+    texto = texto.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    texto = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", texto)
+    texto = re.sub(r"(?<!\*)\*(?!\*)(.+?)(?<!\*)\*(?!\*)", r"<i>\1</i>", texto)
+    texto = re.sub(r"(?<!_)_(?!_)(.+?)(?<!_)_(?!_)", r"<i>\1</i>", texto)
+    texto = re.sub(r"`(.+?)`", r"<code>\1</code>", texto)
+    return texto
+
+
 async def enviar(msg, texto: str):
-    """Envia texto com parse_mode HTML, dividindo se necessário."""
+    """Envia texto com parse_mode HTML, dividindo se necessário.
+
+    Converte Markdown para HTML automaticamente quando detecta formatação
+    Markdown (asteriscos) sem tags HTML já presentes — isso padroniza as
+    respostas do agente de IA (que vêm em Markdown) com o visual do resto do
+    bot (que usa HTML), sem afetar mensagens que já vêm formatadas em HTML
+    pelos blocos de análise.
+    """
+    if texto and "**" in texto and "<b>" not in texto and "<i>" not in texto:
+        texto = _md_para_html(texto)
     LIMITE = 4000
     while len(texto) > LIMITE:
         corte = texto.rfind("\n", 0, LIMITE)

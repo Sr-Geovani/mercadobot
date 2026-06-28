@@ -194,6 +194,25 @@ TOOLS = [
             "required": ["nome_produto"],
         },
     },
+    {
+        "name": "descobrir_oportunidades_de_mix",
+        "description": (
+            "Descobre produtos que vendem bem em OUTROS mercadinhos autônomos mas "
+            "que este cliente AINDA NÃO vende — oportunidades de ampliar o mix de "
+            "produtos. Diferente de comparar um produto específico, esta ferramenta "
+            "cruza o catálogo do cliente com o de outras lojas e sugere só o que "
+            "falta (ignora os campeões em comum como Coca-Cola, que o cliente já "
+            "sabe que vendem). Use quando o usuário perguntar 'o que eu poderia "
+            "vender que não vendo?', 'que produtos faltam na minha loja?', 'o que "
+            "outras lojas vendem que eu não tenho?', ou pedir sugestões de novos "
+            "produtos. A ferramenta busca automaticamente o catálogo atual do "
+            "cliente (últimos 30 dias) para fazer a comparação."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+        },
+    },
 ]
 
 
@@ -598,6 +617,62 @@ async def executar_tool_comparar_benchmark(chat_id: int, nome_produto: str) -> d
     }
 
 
+async def executar_tool_descobrir_oportunidades(chat_id: int) -> dict:
+    """
+    Busca o catálogo atual do cliente (últimos 30 dias) e cruza com o
+    benchmark de outras lojas, retornando produtos que vendem bem em outros
+    mercadinhos mas que este cliente ainda não vende.
+    """
+    from database import buscar_oportunidades_benchmark
+    from datetime import datetime, timedelta
+
+    agora = datetime.now(BRASILIA)
+    d30   = (agora - timedelta(days=30)).strftime("%d/%m/%Y")
+    hoje  = agora.strftime("%d/%m/%Y")
+
+    dados = await garantir_dados_periodo(chat_id, d30, hoje, "últimos 30 dias")
+    if "erro" in dados:
+        return dados
+
+    produtos = dados.get("produtos")
+    if produtos is None or len(produtos) == 0 or "produto" not in produtos.columns:
+        return {"erro": "Não consegui ver seu catálogo de produtos para comparar."}
+
+    catalogo_cliente = produtos["produto"].astype(str).unique().tolist()
+    resultado = await buscar_oportunidades_benchmark(chat_id, catalogo_cliente)
+
+    if resultado.get("outros_clientes", 0) == 0:
+        return {
+            "tem_sugestoes": False,
+            "mensagem": (
+                "Ainda não há dados suficientes de outros mercadinhos para sugerir "
+                "oportunidades de mix — a base de comparação cresce conforme mais "
+                "operadores usam o MercadoBot."
+            ),
+        }
+
+    if not resultado.get("sugestoes"):
+        return {
+            "tem_sugestoes": False,
+            "outros_clientes": resultado["outros_clientes"],
+            "mensagem": (
+                "Boa notícia: seu mix já cobre os principais produtos que vendem bem "
+                "nos outros mercadinhos comparados. Não encontrei lacunas relevantes."
+            ),
+        }
+
+    return {
+        "tem_sugestoes": True,
+        "outros_clientes": resultado["outros_clientes"],
+        "sugestoes": resultado["sugestoes"],
+        "observacao": (
+            "Estes são produtos que vendem bem em outras lojas e que você ainda não "
+            "tem no catálogo. Considere a realidade do seu público antes de adotar — "
+            "nem todo produto de outra região funciona igual."
+        ),
+    }
+
+
 # Mapa de nome de tool -> função Python que efetivamente a executa
 EXECUTORES = {
     "buscar_faturamento": executar_tool_buscar_faturamento,
@@ -605,6 +680,7 @@ EXECUTORES = {
     "buscar_produto_especifico": executar_tool_buscar_produto,
     "detectar_padroes_operacao": executar_tool_detectar_padroes,
     "comparar_com_outros_mercadinhos": executar_tool_comparar_benchmark,
+    "descobrir_oportunidades_de_mix": executar_tool_descobrir_oportunidades,
 }
 
 
@@ -680,6 +756,18 @@ def _construir_system_prompt(fatos_cliente: dict = None) -> str:
         "Responda em português do Brasil, direto ao ponto, sem rodeios. Pode usar "
         "negrito (**texto**) e emojis com moderação. Evite respostas longas — "
         "operadores de mercadinho leem isso rápido, no celular, entre uma tarefa e outra.\n\n"
+        "PADRÃO VISUAL — mantenha consistência com o resto do app: comece valores "
+        "e métricas com um emoji temático (💰 faturamento, 🎟 ticket médio, 🛒 vendas/"
+        "transações, ❌ cancelamentos, 📦 produtos, 🏆 campeão, 🏪 filial, 📈 alta, "
+        "📉 queda). Use **negrito** nos números e nomes importantes. Para listar "
+        "itens, use uma linha por item começando com o emoji. Exemplo de formato "
+        "esperado para faturamento:\n"
+        "💰 Faturamento: **R$ 1.234,56**\n"
+        "🎟 Ticket médio: **R$ 12,40**\n"
+        "🛒 Vendas: **99**\n"
+        "❌ Cancelamentos: **R$ 50,00** (4%)\n"
+        "Mantenha esse mesmo estilo visual mesmo nas respostas a foto e áudio — "
+        "resumido e objetivo, mas com o mesmo layout e emojis dos relatórios.\n\n"
         "RECOMENDAÇÃO ACIONÁVEL: sempre que identificar um problema (cancelamento "
         "alto, queda de vendas, produto parado), não pare na constatação — quando "
         "tiver dados que permitam, aponte a CAUSA PROVÁVEL e uma AÇÃO concreta. Em "
