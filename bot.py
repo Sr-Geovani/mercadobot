@@ -1919,6 +1919,19 @@ async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await callback_admin(update, context)
         return
 
+    # ─── Gate de acesso — bloqueia ações sensíveis sem assinatura ativa ──
+    # Ações sempre liberadas: reativação, verificação de status, navegação
+    # básica de menu e o fluxo de atualizar credenciais (necessário até para
+    # quem está reativando a conta).
+    acoes_sempre_liberadas = {
+        "reativar", "verificar_status", "menu_principal",
+        "atualizar_credenciais", "confirmar_cancelamento",
+        "pico_ok", "pico_problema",
+    }
+    if acao not in acoes_sempre_liberadas and not acao.startswith("reativar_"):
+        if not await verificar_acesso(update, context):
+            return
+
     if acao == "pico_ok":
         await query.answer("✅ Ótimo! Boas vendas nessa noite! 🚀")
         return
@@ -2347,6 +2360,21 @@ async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ─── MIDDLEWARE DE CONTROLE DE ACESSO ────────────────────────
+def exige_acesso(func):
+    """
+    Decorator/wrapper: bloqueia a execução do comando se o usuário não tiver
+    assinatura ativa (trial ou ativo). Aplica a mesma verificação usada em
+    mensagens livres, garantindo consistência entre todos os pontos de entrada
+    do bot (boa prática: controle de acesso centralizado, não duplicado).
+    """
+    async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not await verificar_acesso(update, context):
+            return
+        await func(update, context)
+    wrapper.__name__ = getattr(func, "__name__", "comando_protegido")
+    return wrapper
+
+
 async def verificar_acesso(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
     """Verifica se o usuário tem acesso ativo."""
     from database import usuario_tem_acesso, buscar_usuario
@@ -2368,11 +2396,11 @@ async def verificar_acesso(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     usuario = await buscar_usuario(chat_id)
     if not usuario:
         # Novo usuário tentando usar o bot — manda pro /start
+        texto_novo = "👋 Use /start para se cadastrar no MercadoBot.\n\n7 dias grátis, depois R$ 29,90/mês."
         if update.message:
-            await update.message.reply_text(
-                "👋 Use /start para se cadastrar no MercadoBot.\n\n"
-                "7 dias grátis, depois R$ 29,90/mês."
-            )
+            await update.message.reply_text(texto_novo)
+        elif update.callback_query:
+            await update.callback_query.message.reply_text(texto_novo)
         return False
 
     # Usuário com status pendente — ainda no onboarding, não bloqueia com mensagem
@@ -2394,21 +2422,24 @@ async def verificar_acesso(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         ),
         "bloqueado": (
             f"🔒 {b('Acesso bloqueado.')}\n\n"
-            f"Entre em contato para reativar sua conta."
+            f"Regularize seu pagamento para reativar sua conta."
         ),
         "cancelado": (
-            f"😔 Sua assinatura foi cancelada.\n\n"
-            f"Use /start para reativar quando quiser."
+            f"😔 {b('Sua assinatura está cancelada.')}\n\n"
+            f"Reative para voltar a usar o MercadoBot."
         ),
     }
 
     texto_bloqueio = mensagens.get(motivo, "Use /start para acessar o MercadoBot.")
+    kb_bloqueio = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔄 Reativar assinatura", callback_data="reativar")],
+    ])
 
     if update.message:
-        await update.message.reply_text(texto_bloqueio, parse_mode="HTML")
+        await update.message.reply_text(texto_bloqueio, parse_mode="HTML", reply_markup=kb_bloqueio)
     elif update.callback_query:
         await update.callback_query.answer("Acesso bloqueado.")
-        await update.callback_query.message.reply_text(texto_bloqueio, parse_mode="HTML")
+        await update.callback_query.message.reply_text(texto_bloqueio, parse_mode="HTML", reply_markup=kb_bloqueio)
 
     return False
 
@@ -2437,21 +2468,25 @@ def main():
     app.add_handler(conversation_handler())
 
     # Demais handlers no mesmo grupo — só ativam quando conversation não está ativo
-    app.add_handler(CommandHandler("menu",       comando_menu))
-    app.add_handler(CommandHandler("briefing",   comando_briefing))
-    app.add_handler(CommandHandler("produtos",   comando_produtos))
-    app.add_handler(CommandHandler("categorias", comando_categorias))
-    app.add_handler(CommandHandler("pagamentos", comando_pagamentos))
-    app.add_handler(CommandHandler("semana",     comando_semana))
-    app.add_handler(CommandHandler("pico",       comando_pico))
-    app.add_handler(CommandHandler("alertas",    comando_alertas))
-    app.add_handler(CommandHandler("reposicao",   comando_reposicao))
-    app.add_handler(CommandHandler("atualizar",   comando_atualizar))
-    app.add_handler(CommandHandler("comparativo", comando_comparativo))
-    app.add_handler(CommandHandler("projecao",    comando_projecao))
-    app.add_handler(CommandHandler("score",       comando_score))
-    app.add_handler(CommandHandler("produto_mes", comando_produto_mes))
-    app.add_handler(CommandHandler("giro",        comando_giro))
+    app.add_handler(CommandHandler("menu",       exige_acesso(comando_menu)))
+    app.add_handler(CommandHandler("briefing",   exige_acesso(comando_briefing)))
+    app.add_handler(CommandHandler("produtos",   exige_acesso(comando_produtos)))
+    app.add_handler(CommandHandler("categorias", exige_acesso(comando_categorias)))
+    app.add_handler(CommandHandler("pagamentos", exige_acesso(comando_pagamentos)))
+    app.add_handler(CommandHandler("semana",     exige_acesso(comando_semana)))
+    app.add_handler(CommandHandler("pico",       exige_acesso(comando_pico)))
+    app.add_handler(CommandHandler("alertas",    exige_acesso(comando_alertas)))
+    app.add_handler(CommandHandler("reposicao",   exige_acesso(comando_reposicao)))
+    app.add_handler(CommandHandler("atualizar",   exige_acesso(comando_atualizar)))
+    app.add_handler(CommandHandler("comparativo", exige_acesso(comando_comparativo)))
+    app.add_handler(CommandHandler("projecao",    exige_acesso(comando_projecao)))
+    app.add_handler(CommandHandler("score",       exige_acesso(comando_score)))
+    app.add_handler(CommandHandler("produto_mes", exige_acesso(comando_produto_mes)))
+    app.add_handler(CommandHandler("giro",        exige_acesso(comando_giro)))
+    # Comandos sempre liberados, independente de status de assinatura:
+    # admin (tem seu próprio gate via is_admin), status, reativar, cancelar
+    # e configuracoes (precisa funcionar para o usuário corrigir credenciais
+    # mesmo sem acesso ativo, e para reativação).
     app.add_handler(CommandHandler("admin",         cmd_admin))
     app.add_handler(CommandHandler("status",        cmd_status_handler))
     app.add_handler(CommandHandler("reativar",      cmd_reativar_handler))

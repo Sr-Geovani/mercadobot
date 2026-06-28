@@ -89,26 +89,29 @@ async def handle_webhook(request: web.Request) -> web.Response:
             logger.info(f"Usuário {chat_id} — cartão validado, trial de 7 dias liberado até {trial_fim}.")
 
             if _bot:
-                await _bot.send_message(
-                    chat_id=chat_id,
-                    text=(
-                        f"✅ <b>Cartão validado! Seu trial de 7 dias começou agora.</b>\n\n"
-                        f"Você não será cobrado até o fim do trial. "
-                        f"Para começar, use /atualizar para buscar seus dados do PDV Legal.\n\n"
-                        f"<b>Comandos disponíveis:</b>\n"
-                        f"/briefing — resumo completo do período\n"
-                        f"/atualizar — buscar dados por período\n"
-                        f"/reposicao — lista de reposição inteligente\n"
-                        f"/score — score de saúde da operação\n"
-                        f"/projecao — projeção do mês\n"
-                        f"/comparativo — comparativo entre unidades\n"
-                        f"/alertas — alertas e pontos de atenção\n"
-                        f"/configuracoes — atualizar credenciais\n"
-                        f"/status — status da assinatura\n\n"
-                        f"Ou use o /menu para ver todas as opções com um toque. 👇"
-                    ),
-                    parse_mode="HTML"
-                )
+                try:
+                    await _bot.send_message(
+                        chat_id=chat_id,
+                        text=(
+                            f"✅ <b>Cartão validado! Seu trial de 7 dias começou agora.</b>\n\n"
+                            f"Você não será cobrado até o fim do trial. "
+                            f"Para começar, use /atualizar para buscar seus dados do PDV Legal.\n\n"
+                            f"<b>Comandos disponíveis:</b>\n"
+                            f"/briefing — resumo completo do período\n"
+                            f"/atualizar — buscar dados por período\n"
+                            f"/reposicao — lista de reposição inteligente\n"
+                            f"/score — score de saúde da operação\n"
+                            f"/projecao — projeção do mês\n"
+                            f"/comparativo — comparativo entre unidades\n"
+                            f"/alertas — alertas e pontos de atenção\n"
+                            f"/configuracoes — atualizar credenciais\n"
+                            f"/status — status da assinatura\n\n"
+                            f"Ou use o /menu para ver todas as opções com um toque. 👇"
+                        ),
+                        parse_mode="HTML"
+                    )
+                except Exception as e_envio:
+                    logger.error(f"FALHA AO NOTIFICAR chat_id={chat_id} sobre cartao_validado: {e_envio}")
 
         elif evento == "pagamento_confirmado":
             agora = datetime.now(BRASILIA)
@@ -136,18 +139,28 @@ async def handle_webhook(request: web.Request) -> web.Response:
             era_trial = usuario.get("status") == "trial"
 
             if _bot:
+                from bot import kb_menu
                 if era_trial:
                     texto = (
                         f"✅ <b>Pagamento confirmado! Seu plano mensal está ativo.</b>\n\n"
                         f"Seu trial terminou e sua assinatura de R$ 29,90/mês começou agora.\n\n"
-                        f"Use o menu para continuar de onde parou. 👇"
+                        f"Use o menu abaixo para continuar de onde parou 👇"
                     )
                 else:
                     texto = (
                         f"✅ <b>Pagamento da assinatura confirmado.</b>\n\n"
                         f"Seu acesso ao MercadoBot continua ativo por mais 30 dias."
                     )
-                await _bot.send_message(chat_id=chat_id, text=texto, parse_mode="HTML")
+                try:
+                    await _bot.send_message(
+                        chat_id=chat_id, text=texto, parse_mode="HTML",
+                        reply_markup=kb_menu()
+                    )
+                except Exception as e_envio:
+                    logger.error(
+                        f"FALHA AO NOTIFICAR chat_id={chat_id} sobre pagamento_confirmado: {e_envio}. "
+                        f"Usuário foi ativado no banco mas pode não ter recebido a mensagem."
+                    )
             logger.info(f"Usuário {chat_id} reativado — status={novo_status}, assinatura_fim={assinatura_fim}.")
 
         elif evento == "pagamento_atrasado":
