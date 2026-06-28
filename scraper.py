@@ -402,7 +402,6 @@ async def exportar_cancelamentos(page, data_ini: str, data_fim: str) -> dict:
             return {"_total": 0.0}
 
         resultado = {}
-        total_geral = 0.0
 
         # Função que clica no botão Filtrar real (id=btnFiltro, onclick=GetDadosProdutos).
         # Clicar no botão é o que REALMENTE recalcula o card — chamar GetDadosProdutos()
@@ -414,9 +413,40 @@ async def exportar_cancelamentos(page, data_ini: str, data_fim: str) -> dict:
                 # Fallback: chama a função diretamente se o botão não for clicável
                 await new_page.evaluate("if (typeof GetDadosProdutos === 'function') GetDadosProdutos();")
 
-        # ── Itera filial por filial, lendo o card EXATO de cada uma ─────────
-        # Seleciona UMA filial, reaplica período, CLICA EM FILTRAR (recalcula o
-        # card) e lê o card oficial daquela filial — valor exato, sem truncar.
+        # ── PASSO 1: lê o TOTAL com TODAS as filiais selecionadas ──────────
+        # O diagnóstico mostrou que NÃO existe '.info-box-number' nesta tela e
+        # que o número correto fica perto do texto "vendas com cancelamentos".
+        # Com todas as filiais, o PDV Legal calcula o total certo (bate com o
+        # dashboard). Esse é o TOTAL OFICIAL — exato.
+        await new_page.evaluate("""
+            (function() {
+                var opts = Array.from(document.querySelectorAll('#ContentPlaceHolder1_ddlfilial option'))
+                               .map(function(o){ return o.value; })
+                               .filter(function(v){ return v !== ''; });
+                var $sel = $('#ContentPlaceHolder1_ddlfilial');
+                $sel.val(opts);
+                $sel.selectpicker('refresh');
+                $sel.trigger('change');
+            })();
+        """)
+        await new_page.wait_for_timeout(300)
+        await new_page.evaluate(_aplica_periodo_js())
+        await new_page.wait_for_timeout(300)
+        await _clicar_filtrar()
+        await new_page.wait_for_timeout(1800)
+
+        total_oficial = 0.0
+        for tentativa in range(4):
+            total_oficial = await _ler_card_cancelado(diagnostico=(tentativa == 0))
+            if total_oficial > 0:
+                break
+            await new_page.wait_for_timeout(1200)
+        logger.info(f"Cancelamentos — TOTAL oficial (todas filiais): R$ {total_oficial:.2f}")
+
+        # ── PASSO 2: lê cada filial individualmente para obter a PROPORÇÃO ──
+        # As leituras por filial podem ser imperfeitas, mas servem para ratear
+        # o total oficial proporcionalmente entre as filiais.
+        prop_filial = {}
         if filiais:
             for fil in filiais:
                 try:
@@ -434,33 +464,39 @@ async def exportar_cancelamentos(page, data_ini: str, data_fim: str) -> dict:
                     await _clicar_filtrar()
                     await new_page.wait_for_timeout(1500)
 
-                    # Lê o card com retry (espera recalcular). Na primeira
-                    # filial, ativa diagnóstico para revelar a estrutura dos cards.
                     valor_fil = 0.0
-                    primeira = (fil is filiais[0])
-                    for tentativa_card in range(3):
-                        valor_fil = await _ler_card_cancelado(
-                            diagnostico=(primeira and tentativa_card == 0)
-                        )
+                    for _ in range(3):
+                        valor_fil = await _ler_card_cancelado()
                         if valor_fil > 0:
                             break
-                        await new_page.wait_for_timeout(1000)
-
-                    nome_fil = fil["nome"]
-                    resultado[nome_fil] = round(valor_fil, 2)
-                    total_geral += valor_fil
-                    logger.info(f"Cancelamentos — {nome_fil}: R$ {valor_fil:.2f} (card exato)")
+                        await new_page.wait_for_timeout(900)
+                    prop_filial[fil["nome"]] = valor_fil
+                    logger.info(f"Cancelamentos — {fil['nome']}: R$ {valor_fil:.2f} (leitura individual)")
                 except Exception as e:
                     logger.warning(f"Cancelamentos — erro ao ler filial {fil.get('nome')}: {e}")
 
-            resultado["_total"] = round(total_geral, 2)
+        # ── PASSO 3: monta o resultado. Total = oficial (exato). Filiais =
+        # rateadas proporcionalmente às leituras individuais. Se o total
+        # oficial não veio, cai na soma das leituras individuais. ──────────
+        soma_individual = sum(prop_filial.values())
+        if total_oficial > 0:
+            if soma_individual > 0:
+                fator = total_oficial / soma_individual
+                for nome_fil, val in prop_filial.items():
+                    resultado[nome_fil] = round(val * fator, 2)
+            resultado["_total"] = round(total_oficial, 2)
+            if abs(soma_individual - total_oficial) > 0.01:
+                logger.info(
+                    f"Cancelamentos — soma das filiais (R$ {soma_individual:.2f}) ajustada ao "
+                    f"total oficial (R$ {total_oficial:.2f})."
+                )
         else:
-            # Sem lista de filiais — lê o card com o que estiver selecionado
-            await _clicar_filtrar()
-            await new_page.wait_for_timeout(1500)
-            valor = await _ler_card_cancelado()
-            resultado["_total"] = round(valor, 2)
-            logger.info(f"Cancelamentos — sem filtro de filial, card total: R$ {valor:.2f}")
+            for nome_fil, val in prop_filial.items():
+                resultado[nome_fil] = round(val, 2)
+            resultado["_total"] = round(soma_individual, 2)
+            logger.warning(
+                f"Cancelamentos — total oficial não lido; usando soma das filiais R$ {soma_individual:.2f}"
+            )
 
         for k, v in resultado.items():
             if not k.startswith("_"):
