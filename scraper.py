@@ -343,24 +343,54 @@ async def exportar_cancelamentos(page, data_ini: str, data_fim: str) -> dict:
                     }
                     if (resultado.valor) return resultado;
 
-                    // Fallback: varre a página por qualquer elemento que mencione
-                    // "cancelament" e captura o número (R$ x.xxx,xx) mais próximo,
-                    // registrando o contexto para diagnóstico.
+                    // Fallback robusto: o card "vendas com cancelamentos" tem o
+                    // texto-label e o número-valor próximos na árvore DOM. Para
+                    // cada elemento que contém EXATAMENTE o label de cancelamento
+                    // (texto curto, não um container gigante), subimos só alguns
+                    // níveis e pegamos o maior valor monetário ali perto — que é
+                    // o número do card (não uma linha de tabela solta).
+                    function valoresEm(el) {
+                        var txt = el ? (el.textContent || '') : '';
+                        var matches = txt.match(/[\\d]{1,3}(?:[.][\\d]{3})*,[\\d]{2}/g) || [];
+                        return matches.map(function(s){
+                            return parseFloat(s.replace(/[.]/g,'').replace(',','.'));
+                        });
+                    }
+
+                    var melhores = [];
                     var todos = document.querySelectorAll('div, span, h3, h4, p, td, b, strong');
                     for (var j = 0; j < todos.length; j++) {
                         var el = todos[j];
                         var txt = (el.textContent || '');
                         var low = txt.toLowerCase();
-                        if (low.includes('cancelament') && txt.length < 80) {
-                            var container = el.closest('div') || el.parentElement;
-                            var ctxt = container ? container.textContent : txt;
-                            var m = ctxt.match(/[\\d.]+,\\d{2}/);
-                            resultado.diag_cancel.push({
-                                contexto: txt.trim().substring(0, 60),
-                                numero_proximo: m ? m[0] : null
-                            });
-                            if (m && !resultado.valor) resultado.valor = m[0];
+                        // Label do card: texto curto que fala de cancelamento mas
+                        // NÃO é "nenhuma venda..." e não é um container enorme.
+                        if (low.includes('cancelament') && txt.length < 40 && !low.includes('nenhuma')) {
+                            // Sobe até 2 níveis procurando valores monetários
+                            // (mais que isso arrisca pegar o faturamento geral)
+                            var node = el;
+                            for (var up = 0; up < 3 && node; up++) {
+                                var vals = valoresEm(node);
+                                if (vals.length > 0) {
+                                    var maxv = Math.max.apply(null, vals);
+                                    melhores.push(maxv);
+                                    resultado.diag_cancel.push({
+                                        contexto: txt.trim().substring(0, 40),
+                                        nivel: up,
+                                        valores: vals,
+                                        escolhido: maxv
+                                    });
+                                    break;
+                                }
+                                node = node.parentElement;
+                            }
                         }
+                    }
+                    if (melhores.length > 0) {
+                        // O card oficial é o maior valor encontrado entre os
+                        // blocos rotulados com "cancelamentos".
+                        var v = Math.max.apply(null, melhores);
+                        resultado.valor = v.toFixed(2).replace('.', ',');
                     }
                     resultado.url = window.location.href;
                     return resultado;
@@ -371,6 +401,34 @@ async def exportar_cancelamentos(page, data_ini: str, data_fim: str) -> dict:
                 logger.info(f"Cancelamentos — DIAG url: {dados_card.get('url')}")
                 logger.info(f"Cancelamentos — DIAG info-boxes: {dados_card.get('diag_boxes')}")
                 logger.info(f"Cancelamentos — DIAG contexto 'cancelament': {dados_card.get('diag_cancel')}")
+                # Diagnóstico extra: TODOS os valores monetários >= 100 da página,
+                # com o id/classe/tag do elemento — para localizar onde está o
+                # total real (ex: 2.357,23) que o seletor atual não acha.
+                mapa_valores = await new_page.evaluate("""
+                    (function() {
+                        var out = [];
+                        var todos = document.querySelectorAll('div, span, h3, h4, p, td, b, strong, a, li');
+                        for (var i = 0; i < todos.length; i++) {
+                            var el = todos[i];
+                            // só folhas (sem filhos com texto) para não duplicar
+                            if (el.children.length > 0) continue;
+                            var t = (el.textContent || '').trim();
+                            var m = t.match(/^R?\\$?\\s*([\\d]{1,3}(?:[.][\\d]{3})*,[\\d]{2})$/);
+                            if (!m) continue;
+                            var num = parseFloat(m[1].replace(/[.]/g,'').replace(',','.'));
+                            if (num < 100) continue;
+                            var pai = el.parentElement;
+                            out.push({
+                                valor: t,
+                                tag: el.tagName,
+                                id: el.id || (pai ? pai.id : '') || '',
+                                cls: (el.className || '').toString().substring(0,40)
+                            });
+                        }
+                        return out;
+                    })()
+                """)
+                logger.info(f"Cancelamentos — DIAG valores >= 100 na pagina: {mapa_valores}")
 
             txt = dados_card.get("valor")
             if not txt:
