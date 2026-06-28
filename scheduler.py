@@ -24,6 +24,78 @@ def b(t): return f"<b>{t}</b>"
 def i(t): return f"<i>{t}</i>"
 
 
+async def reconciliar_assinaturas():
+    """
+    Rede de segurança: corrige usuários travados por falha no webhook do Asaas.
+    Roda diariamente. Para cada usuário bloqueado ou com assinatura_fim vencida,
+    consulta o Asaas diretamente (fonte da verdade) e reativa se houver pagamento confirmado.
+    """
+    from database import get_pool, atualizar_usuario
+    from pagamento import verificar_pagamento_confirmado
+    from bot import kb_menu
+
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT * FROM usuarios WHERE status IN ('bloqueado', 'ativo', 'trial') AND asaas_id IS NOT NULL"
+        )
+
+    agora = datetime.now(BRASILIA)
+    corrigidos = 0
+    bot = Bot(token=TELEGRAM_TOKEN)
+
+    for usuario in rows:
+        usuario   = dict(usuario)
+        chat_id   = usuario["chat_id"]
+        asaas_id  = usuario.get("asaas_id")
+        status    = usuario["status"]
+
+        # Verifica se assinatura_fim já está vencida (ou usuário já bloqueado)
+        precisa_checar = (status == "bloqueado")
+        if status in ("ativo", "trial") and usuario.get("assinatura_fim"):
+            try:
+                fim = datetime.fromisoformat(usuario["assinatura_fim"])
+                if agora > fim:
+                    precisa_checar = True
+            except Exception:
+                pass
+
+        if not precisa_checar:
+            continue
+
+        try:
+            tem_pagamento = await verificar_pagamento_confirmado(asaas_id)
+            if tem_pagamento:
+                novo_fim = (agora + timedelta(days=31)).isoformat()
+                await atualizar_usuario(
+                    chat_id,
+                    status="ativo",
+                    assinatura_fim=novo_fim,
+                )
+                corrigidos += 1
+                logger.warning(
+                    f"Reconciliação: usuário {chat_id} estava '{status}' mas tem pagamento "
+                    f"confirmado no Asaas — reativado até {novo_fim}."
+                )
+                try:
+                    await bot.send_message(
+                        chat_id=chat_id,
+                        text=(
+                            "✅ <b>Seu acesso foi restaurado!</b>\n\n"
+                            "Identificamos seu pagamento confirmado e reativamos sua conta. "
+                            "Pedimos desculpas por qualquer inconveniente."
+                        ),
+                        parse_mode="HTML",
+                        reply_markup=kb_menu()
+                    )
+                except Exception:
+                    pass
+        except Exception as e:
+            logger.error(f"Reconciliação: erro ao verificar {chat_id}: {e}")
+
+    logger.info(f"Reconciliação de assinaturas concluída — {corrigidos} usuário(s) corrigido(s).")
+
+
 async def briefing_usuario(bot: Bot, usuario: dict):
     """Executa o briefing completo para um usuário específico."""
     chat_id   = usuario["chat_id"]
@@ -176,6 +248,16 @@ async def enviar_briefing_automatico():
 def iniciar_scheduler():
     """Inicia o agendador diário."""
     scheduler = AsyncIOScheduler(timezone="America/Sao_Paulo")
+
+    # Reconciliação de assinaturas às 6h — rede de segurança contra falha de webhook
+    scheduler.add_job(
+        reconciliar_assinaturas,
+        trigger="cron",
+        hour=6,
+        minute=0,
+        id="reconciliar_assinaturas",
+        replace_existing=True,
+    )
 
     # Briefing diário às 7h
     scheduler.add_job(
