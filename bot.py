@@ -1981,8 +1981,8 @@ async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
             dados_usuario[chat_id]["reativar_dados_pendentes"] = faltando
             await msg.reply_text(
                 f"🔄 {b('Reativar MercadoBot')}\n\n"
-                f"Para gerar o link de pagamento, preciso confirmar alguns dados "
-                f"exigidos pela plataforma de pagamentos.\n\n"
+                f"Antes de continuar, vamos {b('atualizar seu cadastro')} — "
+                f"são só 3 perguntas rápidas.\n\n"
                 f"📱 Informe seu {b('telefone com DDD')} (só números):\n\n"
                 f"Exemplo: 11987654321",
                 parse_mode="HTML"
@@ -2357,6 +2357,14 @@ async def verificar_acesso(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     # Se está em conversa de onboarding, não bloqueia
     if context.user_data.get("em_onboarding"):
         return False
+
+    # Se está no meio da coleta de telefone/CEP/número para reativação,
+    # deixa passar — essa mensagem precisa chegar em mensagem_livre() para
+    # ser tratada pelo fluxo "aguardando == reativar_*", mesmo com a
+    # assinatura ainda cancelada/inativa (afinal é isso que está sendo resolvido).
+    aguardando_atual = dados_usuario.get(chat_id, {}).get("aguardando", "")
+    if isinstance(aguardando_atual, str) and aguardando_atual.startswith("reativar_"):
+        return True
 
     # Verifica se o usuário existe e está em alguma etapa do cadastro
     usuario = await buscar_usuario(chat_id)
