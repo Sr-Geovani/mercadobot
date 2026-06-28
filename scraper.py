@@ -458,26 +458,30 @@ async def exportar_cancelamentos(page, data_ini: str, data_fim: str) -> dict:
         resultado = dados.get("por_filial", {})
         soma_tabela = dados.get("total", 0.0)
 
-        # FONTE DA VERDADE DO TOTAL: a soma da TABELA, que está sincronizada
-        # com o período filtrado (GetDadosProdutos após apply.daterangepicker)
-        # e agora carrega todas as páginas (paginação corrigida) — então não
-        # trunca mais. O card "Total cancelado" da tela NÃO é confiável como
-        # fonte primária porque pode refletir o período padrão da tela (hoje),
-        # não o período que pedimos — foi o que causou "briefing de ontem
-        # trazendo cancelamento de hoje". Usamos o card apenas para VALIDAR.
-        resultado["_total"] = round(soma_tabela, 2)
-
-        # Validação: lê o card e, se divergir muito da tabela, apenas registra
-        # um aviso no log (não sobrescreve — a tabela é quem respeita o período).
+        # ESTRATÉGIA DEFINITIVA (período já confirmado acima com retry):
+        # O card "vendas com cancelamentos" do PDV Legal traz o TOTAL OFICIAL
+        # do período — completo, sem truncar (a tabela pagina em 100 linhas e
+        # nem sempre conseguimos clicar em "Mais" de forma confiável). Como o
+        # período JÁ foi validado antes (#reportrange == esperado), o card
+        # reflete o período correto — o bug antigo de "card trazia hoje" era
+        # justamente por não confirmar o período antes; isso está resolvido.
+        #
+        # Então: o CARD é a fonte da verdade do TOTAL. A tabela (mesmo truncada)
+        # serve só para descobrir a PROPORÇÃO entre as filiais, e rateamos o
+        # total oficial conforme essa proporção.
         total_card = None
         try:
             total_oficial = await new_page.evaluate("""
                 (function() {
                     var cards = document.querySelectorAll('.info-box-number');
+                    var candidato = null;
                     for (var c of cards) {
                         var box = c.closest('.info-box');
                         var label = box ? box.querySelector('.info-box-text') : null;
-                        if (label && label.textContent.toLowerCase().includes('cancelad')) {
+                        if (!label) continue;
+                        var txt = label.textContent.toLowerCase();
+                        // Card certo: "vendas com cancelamentos". Evita "estornada".
+                        if (txt.includes('cancelament') || (txt.includes('cancelad') && !txt.includes('estorn'))) {
                             return c.textContent.trim();
                         }
                     }
@@ -490,14 +494,33 @@ async def exportar_cancelamentos(page, data_ini: str, data_fim: str) -> dict:
         except Exception:
             total_card = None
 
-        if total_card is not None and soma_tabela > 0 and abs(soma_tabela - total_card) > 0.01:
+        if total_card is not None and total_card > 0:
+            # Rateia o total oficial entre as filiais conforme a proporção que
+            # a tabela mostra. Se a tabela e o card batem, fica igual; se a
+            # tabela está truncada, a proporção ainda é representativa.
+            if soma_tabela > 0:
+                fator = total_card / soma_tabela
+                for k in list(resultado.keys()):
+                    resultado[k] = round(resultado[k] * fator, 2)
+                if abs(soma_tabela - total_card) > 0.01:
+                    logger.info(
+                        f"Cancelamentos — tabela somou R$ {soma_tabela:.2f} (pode estar truncada "
+                        f"em 100 linhas); card oficial = R$ {total_card:.2f}. Usando o card como "
+                        f"total e rateando por filial pela proporção da tabela (fator {fator:.4f})."
+                    )
+            else:
+                # Tabela vazia mas card tem valor — usa o card direto, sem rateio
+                logger.info(f"Cancelamentos — tabela vazia; usando card oficial R$ {total_card:.2f}")
+            resultado["_total"] = round(total_card, 2)
+        else:
+            # Sem card legível — cai na soma da tabela (melhor que nada)
+            resultado["_total"] = round(soma_tabela, 2)
             logger.info(
-                f"Cancelamentos — soma da tabela (R$ {soma_tabela:.2f}, período {data_ini}-{data_fim}) "
-                f"difere do card da tela (R$ {total_card:.2f}). Usando a tabela, que respeita o "
-                f"período filtrado (o card pode estar no período padrão da tela)."
+                f"Cancelamentos — card não encontrado; usando soma da tabela R$ {soma_tabela:.2f} "
+                f"(atenção: pode estar truncada em 100 linhas)."
             )
 
-        # Fallback: se a tabela veio vazia/zerada, tenta LiteralFaturado
+        # Fallback final: se ainda zero, tenta LiteralFaturado
         if resultado["_total"] == 0:
             val_str = await new_page.evaluate(
                 "document.getElementById('ContentPlaceHolder1_LiteralFaturado') ? "
