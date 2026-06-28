@@ -1752,34 +1752,15 @@ async def verificar_status_callback(msg, chat_id: int):
     brasilia = ZoneInfo("America/Sao_Paulo")
     usuario  = await buscar_usuario(chat_id)
 
-    if not usuario or usuario["status"] == "pendente":
-        # Tenta recuperar o link de pagamento existente para manter no botão
-        link = None
-        try:
-            from pagamento import buscar_assinatura_ativa, buscar_link_assinatura
-            asaas_id = usuario.get("asaas_id") if usuario else None
-            if asaas_id:
-                assinatura_id = await buscar_assinatura_ativa(asaas_id)
-                if assinatura_id:
-                    link = await buscar_link_assinatura(assinatura_id)
-        except Exception:
-            pass
-
-        botoes = []
-        if link:
-            botoes.append([InlineKeyboardButton("💳 Cadastrar cartão e ativar", url=link)])
-        botoes.append([InlineKeyboardButton("🔍 Verificar novamente", callback_data="verificar_status")])
-
+    if not usuario:
         await msg.reply_text(
-            f"⏳ {b('Ainda aguardando confirmação.')}\n\n"
-            f"Se ainda não cadastrou o cartão, clique no botão abaixo.\n"
-            f"Se já cadastrou, aguarde alguns instantes e clique em Verificar novamente.",
-            parse_mode="HTML",
-            reply_markup=InlineKeyboardMarkup(botoes)
+            "👋 Use /start para se cadastrar no MercadoBot.",
+            parse_mode="HTML"
         )
         return
 
     status = usuario["status"]
+
     if status in ("trial", "ativo"):
         agora = datetime.now(brasilia)
         fim   = datetime.fromisoformat(usuario.get("trial_fim") or usuario.get("assinatura_fim", ""))
@@ -1791,6 +1772,23 @@ async def verificar_status_callback(msg, chat_id: int):
             parse_mode="HTML",
             reply_markup=kb_menu()
         )
+        return
+
+    # Qualquer outro status (pendente, cancelado, bloqueado, expirado) —
+    # ainda não pagou ou está reativando. Em vez de tentar recuperar um link
+    # antigo (que pode não existir mais no fluxo via Checkout), oferece
+    # gerar um link novo diretamente, evitando o usuário ficar travado
+    # clicando em "Verificar novamente" sem nunca ver o botão de pagamento.
+    kb = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔄 Gerar novo link de pagamento", callback_data="reativar")],
+    ])
+    await msg.reply_text(
+        f"⏳ {b('Ainda sem confirmação de pagamento.')}\n\n"
+        f"Se ainda não cadastrou o cartão, ou se o link expirou, "
+        f"clique abaixo para gerar um novo:",
+        parse_mode="HTML",
+        reply_markup=kb
+    )
 
 async def receber_arquivo_com_acesso(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Verifica acesso antes de processar arquivo."""

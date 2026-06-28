@@ -74,9 +74,12 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             await update.message.reply_text(
                 f"👋 {b(nome)}, você já tem um cadastro!\n\n"
-                f"⏳ Seu pagamento ainda não foi confirmado.\n"
-                f"Se já cadastrou o cartão, aguarde e tente /start novamente.",
-                parse_mode="HTML"
+                f"⏳ Ainda não identifiquei a confirmação do seu cartão.\n"
+                f"Se já preencheu, aguarde alguns instantes. Se não, ou se o link expirou, gere um novo:",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔄 Gerar novo link de pagamento", callback_data="reativar")],
+                ])
             )
             return ConversationHandler.END
 
