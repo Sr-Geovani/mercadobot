@@ -1816,19 +1816,25 @@ async def _continuar_reativacao(msg, chat_id: int, usuario: dict):
         asaas_id             = usuario["asaas_id"]
         trial_usado          = usuario.get("trial_usado", False)
         dias_trial_restantes = calcular_dias_trial_restantes(usuario) if trial_usado else 0
+        logger.info(f"Reativação chat_id={chat_id}: asaas_id={asaas_id}, trial_usado={trial_usado}, dias_restantes={dias_trial_restantes}")
 
         assinatura_id = await buscar_assinatura_ativa(asaas_id)
+        logger.info(f"Reativação chat_id={chat_id}: assinatura_ativa encontrada={assinatura_id}")
+        link = ""
         if assinatura_id:
             link = await buscar_link_assinatura(assinatura_id)
+            logger.info(f"Reativação chat_id={chat_id}: link da assinatura existente={bool(link)}")
             if not link:
                 assinatura_id = None
 
         if not assinatura_id:
+            logger.info(f"Reativação chat_id={chat_id}: gerando novo checkout...")
             link, assinatura_id = await gerar_link_pagamento(
                 asaas_id, chat_id,
                 reativacao=trial_usado,
                 dias_trial_restantes=dias_trial_restantes
             )
+            logger.info(f"Reativação chat_id={chat_id}: checkout gerado, link={bool(link)}, id={assinatura_id}")
             if assinatura_id:
                 await atualizar_usuario(chat_id, assinatura_asaas_id=assinatura_id, status="pendente")
 
@@ -1854,7 +1860,8 @@ async def _continuar_reativacao(msg, chat_id: int, usuario: dict):
         else:
             await msg.reply_text("❌ Erro ao gerar link. Tente /reativar ou /start.")
     except Exception as e:
-        logger.error(f"Erro na reativação: {e}")
+        import traceback
+        logger.error(f"Erro na reativação para chat_id={chat_id}: {e}\n{traceback.format_exc()}")
         await msg.reply_text("❌ Erro ao processar. Tente /reativar.")
 
 
