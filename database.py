@@ -298,12 +298,16 @@ async def buscar_oportunidades_benchmark(chat_id: int, produtos_do_cliente: list
 
     pool = await get_pool()
     async with pool.acquire() as conn:
+        # Pega só o registro de benchmark MAIS RECENTE de cada outra loja
+        # (DISTINCT ON por chat_id + nome de produto), evitando que uma loja
+        # com muitas semanas de histórico acumulado domine a amostra e
+        # enviese as sugestões. Assim cada loja contribui com seu top atual.
         rows = await conn.fetch("""
-            SELECT chat_id, nome_produto, quantidade
+            SELECT DISTINCT ON (chat_id, nome_produto)
+                   chat_id, nome_produto, quantidade, registrado_em
             FROM benchmark_produtos
             WHERE chat_id != $1
-            ORDER BY registrado_em DESC
-            LIMIT 500
+            ORDER BY chat_id, nome_produto, registrado_em DESC
         """, chat_id)
 
     if not rows:
