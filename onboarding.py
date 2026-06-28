@@ -210,6 +210,11 @@ async def receber_cpf(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def receber_telefone(update: Update, context: ContextTypes.DEFAULT_TYPE):
     telefone = "".join(filter(str.isdigit, update.message.text.strip()))
 
+    try:
+        await update.message.delete()
+    except Exception:
+        pass
+
     if len(telefone) not in (10, 11):
         await update.message.reply_text(
             "⚠️ Telefone inválido. Digite com DDD, só números (ex: 11987654321):"
@@ -230,6 +235,11 @@ async def receber_telefone(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def receber_cep(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cep = "".join(filter(str.isdigit, update.message.text.strip()))
 
+    try:
+        await update.message.delete()
+    except Exception:
+        pass
+
     if len(cep) != 8:
         await update.message.reply_text(
             "⚠️ CEP inválido. Digite só os 8 números (ex: 89223005):"
@@ -249,6 +259,11 @@ async def receber_cep(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def receber_numero_endereco(update: Update, context: ContextTypes.DEFAULT_TYPE):
     numero = update.message.text.strip()
     context.user_data["endereco_numero"] = numero
+
+    try:
+        await update.message.delete()
+    except Exception:
+        pass
 
     await update.message.reply_text(
         f"✅ Endereço registrado.\n\n"
@@ -359,6 +374,11 @@ async def receber_pdv_senha(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not assinatura_id:
             # Cria novo checkout — cartão validado, cobrança só no fim do trial
             link, checkout_id = await gerar_link_pagamento(asaas_id, chat_id)
+            if not link:
+                logger.error(
+                    f"Falha ao gerar checkout no cadastro de {chat_id}: "
+                    f"checkout_id={checkout_id!r}, asaas_id={asaas_id}"
+                )
             # O checkout ainda não tem subscription até o cliente pagar.
             # assinatura_id fica vazio até o webhook confirmar e criarmos a referência real.
             assinatura_id = ""
@@ -388,10 +408,15 @@ async def receber_pdv_senha(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=kb
             )
         else:
+            kb_retry = InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔄 Gerar link de pagamento", callback_data="reativar")],
+            ])
             await update.message.reply_text(
                 f"🎉 {b('Conta criada!')}\n\n"
-                f"Você receberá em breve o link para cadastrar seu cartão e ativar o trial.",
-                parse_mode="HTML"
+                f"Não consegui gerar o link de pagamento agora — pode ser instabilidade momentânea. "
+                f"Clique no botão abaixo para tentar novamente:",
+                parse_mode="HTML",
+                reply_markup=kb_retry
             )
 
     except Exception as e:
