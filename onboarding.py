@@ -379,6 +379,8 @@ async def receber_pdv_senha(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     f"Falha ao gerar checkout no cadastro de {chat_id}: "
                     f"checkout_id={checkout_id!r}, asaas_id={asaas_id}"
                 )
+            else:
+                await atualizar_usuario(chat_id, ultimo_checkout_id=checkout_id)
             # O checkout ainda não tem subscription até o cliente pagar.
             # assinatura_id fica vazio até o webhook confirmar e criarmos a referência real.
             assinatura_id = ""

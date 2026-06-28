@@ -180,6 +180,32 @@ async def criar_assinatura_com_trial(
         return assinatura
 
 
+async def cancelar_checkout(checkout_id: str) -> bool:
+    """
+    Cancela um checkout ainda ativo no Asaas. Usado antes de gerar um novo
+    link de pagamento, para evitar que existam múltiplos checkouts "vivos"
+    simultaneamente para o mesmo usuário — o que gera confusão quando os
+    antigos expiram depois e disparam notificações desnecessárias.
+    """
+    if not checkout_id:
+        return False
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                f"{ASAAS_URL}/checkouts/{checkout_id}/cancel",
+                headers=_headers()
+            )
+            if resp.status_code in (200, 201):
+                logger.info(f"Checkout {checkout_id} cancelado com sucesso.")
+                return True
+            # Pode já estar expirado/pago/inexistente — não é um erro grave
+            logger.info(f"Checkout {checkout_id} não pôde ser cancelado (status {resp.status_code}): {resp.text[:200]}")
+            return False
+    except Exception as e:
+        logger.warning(f"Erro ao tentar cancelar checkout {checkout_id}: {e}")
+        return False
+
+
 async def gerar_link_pagamento(asaas_cliente_id: str, chat_id: int, reativacao: bool = False,
                                 dias_trial_restantes: int = 0,
                                 nome_cliente: str = "", email_cliente: str = "",

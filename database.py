@@ -56,6 +56,7 @@ async def inicializar_banco():
             ("telefone",            "TEXT"),
             ("cep",                 "TEXT"),
             ("endereco_numero",     "TEXT"),
+            ("ultimo_checkout_id",  "TEXT"),
         ]:
             try:
                 await conn.execute(f"ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS {col} {tipo}")

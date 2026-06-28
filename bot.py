@@ -1950,6 +1950,14 @@ async def _continuar_reativacao(msg, chat_id: int, usuario: dict):
                 assinatura_id = None
 
         if not assinatura_id:
+            # Cancela qualquer checkout anterior ainda pendente desse usuário
+            # antes de criar um novo — evita ter vários links "vivos" ao
+            # mesmo tempo, que depois expiram e geram notificações confusas.
+            checkout_anterior = usuario.get("ultimo_checkout_id")
+            if checkout_anterior:
+                from pagamento import cancelar_checkout
+                await cancelar_checkout(checkout_anterior)
+
             logger.info(f"Reativação chat_id={chat_id}: gerando novo checkout...")
             link, assinatura_id = await gerar_link_pagamento(
                 asaas_id, chat_id,
@@ -1958,7 +1966,10 @@ async def _continuar_reativacao(msg, chat_id: int, usuario: dict):
             )
             logger.info(f"Reativação chat_id={chat_id}: checkout gerado, link={bool(link)}, id={assinatura_id}")
             if assinatura_id:
-                await atualizar_usuario(chat_id, assinatura_asaas_id=assinatura_id, status="pendente")
+                await atualizar_usuario(
+                    chat_id, assinatura_asaas_id=assinatura_id, status="pendente",
+                    ultimo_checkout_id=assinatura_id
+                )
 
         if trial_usado and dias_trial_restantes > 0:
             aviso_trial = f"\n\n{i(f'Você ainda tem {dias_trial_restantes} dia(s) de trial restantes.')}"
