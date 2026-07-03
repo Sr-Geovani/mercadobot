@@ -616,6 +616,59 @@ async def exportar_cancelamentos(page, data_ini: str, data_fim: str) -> dict:
                 logger.info(f"Cancelamentos — {k}: R$ {v:.2f}")
         logger.info(f"Cancelamentos — total: R$ {resultado['_total']:.2f}")
 
+        # ── DETALHE POR LINHA (produto + hora) ──────────────────────────────
+        # Seleciona todas as filiais e lê a tabela linha-a-linha para permitir
+        # análises de cancelamento por produto e por horário. Primeiro mapeia
+        # os cabeçalhos da tabela para descobrir quais colunas têm produto/hora,
+        # depois extrai as linhas. O DIAG abaixo mostra a estrutura real.
+        try:
+            await new_page.evaluate("""
+                (function() {
+                    var opts = Array.from(document.querySelectorAll('#ContentPlaceHolder1_ddlfilial option'))
+                                   .map(function(o){ return o.value; }).filter(function(v){ return v !== ''; });
+                    var $sel = $('#ContentPlaceHolder1_ddlfilial');
+                    $sel.val(opts); $sel.selectpicker('refresh'); $sel.trigger('change');
+                })();
+            """)
+            await new_page.wait_for_timeout(300)
+            await new_page.evaluate(_aplica_periodo_js())
+            await new_page.wait_for_timeout(300)
+            await _clicar_filtrar()
+            await new_page.wait_for_timeout(2000)
+
+            detalhe = await new_page.evaluate("""
+                (function() {
+                    // Acha a tabela de cancelamentos (a que tem mais linhas com
+                    // valores monetários) entre as candidatas.
+                    var tabelas = document.querySelectorAll('table');
+                    var melhor = null, maxLinhas = 0;
+                    for (var t = 0; t < tabelas.length; t++) {
+                        var trs = tabelas[t].querySelectorAll('tbody tr');
+                        if (trs.length > maxLinhas) { maxLinhas = trs.length; melhor = tabelas[t]; }
+                    }
+                    if (!melhor) return {headers: [], amostra: [], total_linhas: 0};
+
+                    var headers = [];
+                    var ths = melhor.querySelectorAll('thead th, thead td');
+                    for (var h = 0; h < ths.length; h++) headers.push((ths[h].textContent||'').trim());
+
+                    var linhas = melhor.querySelectorAll('tbody tr');
+                    var amostra = [];
+                    for (var i = 0; i < Math.min(linhas.length, 5); i++) {
+                        var tds = linhas[i].querySelectorAll('td');
+                        var cols = [];
+                        for (var j = 0; j < tds.length; j++) cols.push((tds[j].textContent||'').trim());
+                        amostra.push(cols);
+                    }
+                    return {headers: headers, amostra: amostra, total_linhas: linhas.length};
+                })()
+            """)
+            logger.info(f"Cancelamentos — DETALHE headers: {detalhe.get('headers')}")
+            logger.info(f"Cancelamentos — DETALHE total_linhas: {detalhe.get('total_linhas')}")
+            logger.info(f"Cancelamentos — DETALHE amostra (5 primeiras linhas): {detalhe.get('amostra')}")
+        except Exception as e:
+            logger.warning(f"Cancelamentos — não foi possível ler detalhe por linha: {e}")
+
         await new_page.close()
         return resultado
 
