@@ -213,6 +213,24 @@ TOOLS = [
             "properties": {},
         },
     },
+    {
+        "name": "investigar_queda",
+        "description": (
+            "Investiga uma queda de faturamento comparando o período contra o histórico. "
+            "Retorna análise em camadas: filial com maior impacto, horário com buraco "
+            "(zero vendas), produto top indisponível. Use quando o usuário perguntar "
+            "'por que caiu?', 'por que as vendas caíram?', 'o que aconteceu?', "
+            "'por que estou com números baixos?', ou 'investiga essa queda'. "
+            "A ferramenta busca automaticamente dados do período vs. histórico de 2 semanas."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "data_ini": {"type": "string", "description": "Data inicial (DD/MM/YYYY), opcional"},
+                "data_fim": {"type": "string", "description": "Data final (DD/MM/YYYY), opcional"},
+            },
+        },
+    },
 ]
 
 
@@ -583,6 +601,85 @@ async def executar_tool_detectar_padroes(chat_id: int) -> dict:
     return {"padroes_encontrados": len(padroes), "padroes": padroes}
 
 
+async def executar_tool_investigar_queda(chat_id: int, data_ini: str = None, data_fim: str = None) -> dict:
+    """
+    Investiga uma queda de faturamento comparando o período contra o mesmo
+    período do mês anterior, ou mesmo dia da semana nas últimas 2 semanas.
+    
+    Retorna análise em camadas:
+    1. Filial com maior impacto
+    2. Horário com buraco (zero vendas)
+    3. Produto top indisponível
+    
+    On-demand: operador pergunta "por que caiu?" e recebe investigação detalhada.
+    """
+    from datetime import datetime, timedelta
+    from bot import detectar_queda
+    
+    agora = datetime.now(BRASILIA)
+    
+    # Se não passou período, usa "hoje" vs. histórico
+    if not data_ini or not data_fim:
+        data_fim = agora.strftime("%d/%m/%Y")
+        data_ini = agora.strftime("%d/%m/%Y")  # Mesmo dia
+    
+    # Busca dados de hoje
+    dados_hoje = await garantir_dados_periodo(chat_id, data_ini, data_fim, "período para investigação")
+    if "erro" in dados_hoje:
+        return dados_hoje
+    
+    vendas_hoje = dados_hoje.get("vendas")
+    if vendas_hoje is None or len(vendas_hoje) == 0:
+        return {"erro": "Sem dados de vendas para o período solicitado."}
+    
+    # Busca histórico (últimas 2 semanas antes, mesmo dia da semana)
+    dias_atras = 14
+    data_hist_ini = (agora - timedelta(days=dias_atras)).strftime("%d/%m/%Y")
+    data_hist_fim = (agora - timedelta(days=1)).strftime("%d/%m/%Y")
+    
+    dados_hist = await garantir_dados_periodo(chat_id, data_hist_ini, data_hist_fim, "histórico para comparação")
+    if "erro" in dados_hist:
+        return {"erro": "Sem histórico suficiente para comparação (mínimo 7 dias)."}
+    
+    vendas_hist = dados_hist.get("vendas")
+    if vendas_hist is None or len(vendas_hist) == 0:
+        return {"erro": "Sem histórico para comparação."}
+    
+    # Detecta queda
+    resultado = detectar_queda(vendas_hoje, vendas_hist, threshold=35.0)
+    
+    if not resultado.get("tem_queda"):
+        return {
+            "tem_queda": False,
+            "desvio": resultado.get("desvio", 0),
+            "mensagem": "Seu faturamento está dentro do esperado — sem sinais de queda significativa.",
+        }
+    
+    # HÁ QUEDA — monta resposta investigativa
+    linhas = [f"📉 {b('INVESTIGAÇÃO DE QUEDA')}\n"]
+    linhas.append(f"Faturamento: R$ {resultado.get('faturamento_hoje', 0):,.2f}")
+    linhas.append(f"Esperado: R$ {resultado.get('faturamento_esperado', 0):,.2f}")
+    linhas.append(f"Desvio: {resultado.get('desvio_percentual', 0):.1f}%\n")
+    
+    causas = resultado.get("causas", [])
+    if causas:
+        linhas.append(f"{b('Possível causa(s):')}")
+        for causa in causas:
+            linhas.append(f"  • {causa}")
+    else:
+        linhas.append("Queda detectada — investigar as condições operacionais.")
+    
+    linhas.append(f"\n{i('Dica: Verifique totem, reposição de produtos, feriado ou fechamento da loja.')}")
+    
+    return {
+        "tem_queda": True,
+        "desvio_percentual": resultado.get("desvio_percentual"),
+        "faturamento_hoje": resultado.get("faturamento_hoje"),
+        "causas": causas,
+        "mensagem_completa": "\n".join(linhas),
+    }
+
+
 async def executar_tool_comparar_benchmark(chat_id: int, nome_produto: str) -> dict:
     """
     Compara um produto do usuário com o benchmark agregado de outros
@@ -632,9 +729,23 @@ async def executar_tool_descobrir_oportunidades(chat_id: int) -> dict:
     Busca o catálogo atual do cliente (últimos 30 dias) e cruza com o
     benchmark de outras lojas, retornando produtos que vendem bem em outros
     mercadinhos mas que este cliente ainda não vende.
+    
+    IMPORTANTE: normaliza nomes de produtos (Coca/Cocacola/COCA-COLA → coca)
+    para evitar falsos positivos. Retorna top 10 sugestões.
     """
+    import unicodedata
     from database import buscar_oportunidades_benchmark
     from datetime import datetime, timedelta
+
+    def normalizar_produto_nome(nome: str) -> str:
+        """Normaliza nome de produto: remove acentos, espaços, hífens, case-insensitive."""
+        if not isinstance(nome, str):
+            return ""
+        # Remove acentos
+        nfd = unicodedata.normalize("NFD", nome)
+        sem_acentos = "".join(c for c in nfd if unicodedata.category(c) != "Mn")
+        # Remove espaços, hífens, maiúsculas
+        return sem_acentos.replace(" ", "").replace("-", "").replace("_", "").lower()
 
     agora = datetime.now(BRASILIA)
     d30   = (agora - timedelta(days=30)).strftime("%d/%m/%Y")
@@ -648,16 +759,20 @@ async def executar_tool_descobrir_oportunidades(chat_id: int) -> dict:
     if produtos is None or len(produtos) == 0 or "produto" not in produtos.columns:
         return {"erro": "Não consegui ver seu catálogo de produtos para comparar."}
 
-    catalogo_cliente = produtos["produto"].astype(str).unique().tolist()
-    resultado = await buscar_oportunidades_benchmark(chat_id, catalogo_cliente)
+    # Normaliza catálogo do cliente (para dedup)
+    catalogo_cliente = set()
+    for p in produtos["produto"].astype(str).unique():
+        catalogo_cliente.add(normalizar_produto_nome(p))
+
+    resultado = await buscar_oportunidades_benchmark(chat_id, list(catalogo_cliente), top_n=10)
 
     if resultado.get("outros_clientes", 0) == 0:
         return {
             "tem_sugestoes": False,
             "mensagem": (
-                "Ainda não há dados suficientes de outros mercadinhos para sugerir "
-                "oportunidades de mix — a base de comparação cresce conforme mais "
-                "operadores usam o MercadoBot."
+                "Estamos evoluindo a base de inteligência de rede a cada novo operador — "
+                "conforme mais mercadinhos se conectam, as recomendações ficam mais precisas "
+                "e ricas. Volte em breve para ver oportunidades de mix."
             ),
         }
 
@@ -674,13 +789,14 @@ async def executar_tool_descobrir_oportunidades(chat_id: int) -> dict:
     return {
         "tem_sugestoes": True,
         "outros_clientes": resultado["outros_clientes"],
-        "sugestoes": resultado["sugestoes"],
+        "sugestoes": resultado["sugestoes"][:10],  # Top 10
         "observacao": (
             "Estes são produtos que vendem bem em outras lojas e que você ainda não "
             "tem no catálogo. Considere a realidade do seu público antes de adotar — "
             "nem todo produto de outra região funciona igual."
         ),
     }
+
 
 
 # Mapa de nome de tool -> função Python que efetivamente a executa
@@ -691,6 +807,7 @@ EXECUTORES = {
     "detectar_padroes_operacao": executar_tool_detectar_padroes,
     "comparar_com_outros_mercadinhos": executar_tool_comparar_benchmark,
     "descobrir_oportunidades_de_mix": executar_tool_descobrir_oportunidades,
+    "investigar_queda": executar_tool_investigar_queda,
 }
 
 

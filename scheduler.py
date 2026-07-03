@@ -96,6 +96,109 @@ async def reconciliar_assinaturas():
     logger.info(f"Reconciliação de assinaturas concluída — {corrigidos} usuário(s) corrigido(s).")
 
 
+async def enviar_fechamento_mes():
+    """
+    Dispara no dia 01 do mês às 7h.
+    Busca dados do mês ANTERIOR completo (01 a 28/29/30/31) e envia fechamento com:
+    - Sumário executivo (faturamento por filial)
+    - Evolução semana-a-semana
+    - Top 10 produtos (agregado)
+    - Cancelamentos
+    - Categorias
+    - Mix de pagamentos
+    - Score de saúde
+    - Recomendações + overdelivery
+    + 4 gráficos (evolução, top 10, categorias, filiais)
+    """
+    from database import listar_usuarios_ativos
+    usuarios = await listar_usuarios_ativos()
+    if not usuarios:
+        return
+
+    bot = Bot(token=TELEGRAM_TOKEN)
+    agora = datetime.now(BRASILIA)
+    
+    # Mês anterior (se hoje for 01/07, busca 01/06 a 30/06)
+    primeiro_dia_mes = agora.replace(day=1)
+    ultimo_dia_mes_anterior = primeiro_dia_mes - timedelta(days=1)
+    primeiro_dia_mes_anterior = ultimo_dia_mes_anterior.replace(day=1)
+    
+    data_ini = primeiro_dia_mes_anterior.strftime("%d/%m/%Y")
+    data_fim = ultimo_dia_mes_anterior.strftime("%d/%m/%Y")
+    mes_nome = ultimo_dia_mes_anterior.strftime("%B/%Y").replace("January", "Janeiro").replace("February", "Fevereiro").replace("March", "Março").replace("April", "Abril").replace("May", "Maio").replace("June", "Junho").replace("July", "Julho").replace("August", "Agosto").replace("September", "Setembro").replace("October", "Outubro").replace("November", "Novembro").replace("December", "Dezembro")
+    
+    logger.info(f"Fechamento de mês — {mes_nome} — {len(usuarios)} usuário(s)")
+
+    for usuario in usuarios:
+        chat_id = usuario["chat_id"]
+        pdv_email = usuario.get("pdv_email")
+        pdv_senha = usuario.get("pdv_senha")
+        if not pdv_email or not pdv_senha:
+            continue
+
+        try:
+            await bot.send_message(
+                chat_id=chat_id,
+                text=f"📊 Gerando fechamento de {mes_nome}...",
+                parse_mode="HTML"
+            )
+
+            from scraper import baixar_relatorios_periodo
+            from bot import normalizar_vendas, normalizar_produtos, bloco_fechamento_mes, g_semanal, g_top_produtos, g_categorias, g_filiais, kb_menu
+
+            loop = asyncio.get_event_loop()
+            path_vendas, path_produtos, total_cancel = await loop.run_in_executor(
+                None, baixar_relatorios_periodo, data_ini, data_fim, pdv_email, pdv_senha
+            )
+
+            vendas = normalizar_vendas(pd.read_excel(path_vendas))
+            produtos = normalizar_produtos(pd.read_excel(path_produtos))
+
+            if len(vendas) == 0:
+                await bot.send_message(
+                    chat_id=chat_id,
+                    text=f"📊 Fechamento de {mes_nome}\n\nSem dados disponíveis para este período.",
+                    parse_mode="HTML"
+                )
+                continue
+
+            # Bloco principal
+            texto_fechamento = bloco_fechamento_mes(vendas, produtos, total_cancel)
+            await bot.send_message(
+                chat_id=chat_id,
+                text=texto_fechamento,
+                parse_mode="HTML",
+                reply_markup=kb_menu(f"Mês anterior")
+            )
+            await asyncio.sleep(2)
+
+            # Gráficos (4 deles)
+            g1 = g_semanal(vendas)
+            if g1:
+                await bot.send_photo(chat_id=chat_id, photo=g1)
+                await asyncio.sleep(1)
+
+            g2 = g_top_produtos(produtos)
+            if g2:
+                await bot.send_photo(chat_id=chat_id, photo=g2)
+                await asyncio.sleep(1)
+
+            g3 = g_categorias(produtos)
+            if g3:
+                await bot.send_photo(chat_id=chat_id, photo=g3)
+                await asyncio.sleep(1)
+
+            g4 = g_filiais(vendas)
+            if g4:
+                await bot.send_photo(chat_id=chat_id, photo=g4)
+                await asyncio.sleep(1)
+
+            logger.info(f"Fechamento de mês enviado para {chat_id}")
+
+        except Exception as e:
+            logger.error(f"Erro ao enviar fechamento de mês para {chat_id}: {e}")
+
+
 async def briefing_usuario(bot: Bot, usuario: dict):
     """Executa o briefing completo para um usuário específico."""
     chat_id   = usuario["chat_id"]
@@ -259,9 +362,26 @@ def iniciar_scheduler():
         replace_existing=True,
     )
 
-    # Briefing diário às 7h
+    # Fechamento de mês — dia 01 às 7h (substitui o briefing diário neste dia)
+    # É acionado antes do briefing, então verifica se é dia 01 e, se sim, envia fechamento
     scheduler.add_job(
-        enviar_briefing_automatico,
+        lambda: asyncio.ensure_future(enviar_fechamento_mes()),
+        trigger="cron",
+        day=1,
+        hour=HORARIO_HORA,
+        minute=HORARIO_MINUTO,
+        id="fechamento_mes",
+        replace_existing=True,
+    )
+
+    # Briefing diário às 7h (não roda no dia 01, pois fechamento já rodou)
+    async def briefing_condicional():
+        agora = datetime.now(BRASILIA)
+        if agora.day != 1:  # Não roda no dia 01 (fechamento já rodou)
+            await enviar_briefing_automatico()
+
+    scheduler.add_job(
+        lambda: asyncio.ensure_future(briefing_condicional()),
         trigger="cron",
         hour=HORARIO_HORA,
         minute=HORARIO_MINUTO,
