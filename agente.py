@@ -627,6 +627,7 @@ async def executar_tool_ultima_venda(chat_id: int, data_ini: str = None, data_fi
     
     Se não passar período, usa hoje.
     """
+    import pandas as pd
     from datetime import datetime
     agora = datetime.now(BRASILIA)
     
