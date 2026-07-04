@@ -2536,7 +2536,7 @@ async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         # Usa função ÚNICA de reativação
-        await enviar_reativacao(msg, chat_id, is_callback=True)
+        await enviar_reativacao(msg, chat_id, is_callback=False)
         return
 
     # ─── Verificar status de pagamento ──────────────────────
