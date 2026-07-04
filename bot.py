@@ -2142,10 +2142,13 @@ async def cmd_reativar_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     
     # Verifica se ainda tem assinatura_fim válida (mesmo que cancelado)
     assinatura_fim_raw = usuario.get("assinatura_fim")
+    logger.info(f"[REATIVAR] chat_id={chat_id}, status={usuario['status']}, assinatura_fim_raw={assinatura_fim_raw}")
+    
     if assinatura_fim_raw:
         try:
             assinatura_fim = datetime.fromisoformat(assinatura_fim_raw)
             agora = datetime.now(ZoneInfo("America/Sao_Paulo"))
+            logger.info(f"[REATIVAR] assinatura_fim={assinatura_fim}, agora={agora}, válido={agora <= assinatura_fim}")
             
             if agora <= assinatura_fim:
                 # Ainda tem acesso! Não precisa pagar nada
@@ -2158,8 +2161,10 @@ async def cmd_reativar_handler(update: Update, context: ContextTypes.DEFAULT_TYP
                     reply_markup=kb_menu()
                 )
                 return
-        except:
-            pass
+        except Exception as e:
+            logger.error(f"[REATIVAR] Erro ao parsear assinatura_fim: {e}")
+    else:
+        logger.warning(f"[REATIVAR] assinatura_fim_raw está vazio ou None")
 
     # Assinatura expirou, precisa pagar
     await update.message.reply_text("⏳ Gerando link de reativação...")
