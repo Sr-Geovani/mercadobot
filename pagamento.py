@@ -522,21 +522,50 @@ async def cancelar_cobrancas_futuras(asaas_cliente_id: str, dias_uso_ciclo_atual
 
 
 async def cancelar_assinatura(asaas_id: str) -> bool:
-    """Cancela assinatura no Asaas E deleta payment."""
+    """
+    Cancela assinatura no Asaas E deleta payment.
+    
+    asaas_id pode ser:
+    - Subscription ID (sub_xxxxx)
+    - Customer ID (cus_xxxxx) - nesse caso busca a subscription
+    """
     try:
         async with httpx.AsyncClient() as client:
             logger.info(f"[CANCELAR] Iniciando cancelamento de {asaas_id}")
             
-            # 1. Busca payments de TODOS os status (não só PENDING)
+            # Se for customer ID, busca a subscription
+            subscription_id = asaas_id
+            if asaas_id.startswith("cus_"):
+                logger.info(f"[CANCELAR] {asaas_id} é customer ID, buscando subscription...")
+                resp = await client.get(
+                    f"{ASAAS_URL}/subscriptions",
+                    headers=_headers(),
+                    params={"customer": asaas_id}
+                )
+                
+                if resp.status_code == 200:
+                    data = resp.json()
+                    subscriptions = data.get("data", [])
+                    if subscriptions:
+                        subscription_id = subscriptions[0].get("id")
+                        logger.info(f"[CANCELAR] Subscription encontrada: {subscription_id}")
+                    else:
+                        logger.warning(f"[CANCELAR] Nenhuma subscription encontrada para {asaas_id}")
+                        return False
+                else:
+                    logger.error(f"[CANCELAR] Erro ao buscar subscription: {resp.status_code}")
+                    return False
+            
+            # 1. Busca payments de TODOS os status
             status_list = ["PENDING", "SCHEDULED", "AWAITING_CONFIRMATION"]
             
             for status in status_list:
-                logger.info(f"[CANCELAR] Buscando payments com status={status}")
+                logger.info(f"[CANCELAR] Buscando payments com status={status} da subscription {subscription_id}")
                 
                 resp_payments = await client.get(
                     f"{ASAAS_URL}/payments",
                     headers=_headers(),
-                    params={"subscription": asaas_id, "status": status}
+                    params={"subscription": subscription_id, "status": status}
                 )
                 
                 logger.info(f"[CANCELAR] Response status: {resp_payments.status_code}")
@@ -557,17 +586,17 @@ async def cancelar_assinatura(asaas_id: str) -> bool:
                             headers=_headers()
                         )
                         
-                        logger.info(f"[CANCELAR] Delete response: {delete_resp.status_code}")
+                        logger.info(f"[CANCELAR] Delete payment response: {delete_resp.status_code}")
                         
                         if delete_resp.status_code not in [200, 204]:
-                            logger.error(f"[CANCELAR] Erro ao deletar payment {payment_id}: {delete_resp.status_code} - {delete_resp.text}")
+                            logger.error(f"[CANCELAR] Erro ao deletar payment {payment_id}: {delete_resp.status_code}")
                         else:
-                            logger.info(f"[CANCELAR] Payment {payment_id} deletado com sucesso")
+                            logger.info(f"[CANCELAR] Payment {payment_id} deletado")
             
             # 2. Cancela a subscription
-            logger.info(f"[CANCELAR] Cancelando subscription {asaas_id}")
+            logger.info(f"[CANCELAR] Cancelando subscription {subscription_id}")
             resp_sub = await client.delete(
-                f"{ASAAS_URL}/subscriptions/{asaas_id}",
+                f"{ASAAS_URL}/subscriptions/{subscription_id}",
                 headers=_headers()
             )
             
@@ -575,14 +604,14 @@ async def cancelar_assinatura(asaas_id: str) -> bool:
             success = resp_sub.status_code in [200, 204]
             
             if success:
-                logger.info(f"[CANCELAR] ✅ Assinatura {asaas_id} cancelada com sucesso")
+                logger.info(f"[CANCELAR] ✅ Assinatura {subscription_id} cancelada com sucesso")
             else:
-                logger.error(f"[CANCELAR] ❌ Erro ao cancelar {asaas_id}: {resp_sub.status_code}")
+                logger.error(f"[CANCELAR] ❌ Erro ao cancelar {subscription_id}: {resp_sub.status_code}")
             
             return success
             
     except Exception as e:
-        logger.error(f"[CANCELAR] ❌ Exceção em cancelar_assinatura: {e}")
+        logger.error(f"[CANCELAR] ❌ Exceção: {e}")
         return False
 
 
