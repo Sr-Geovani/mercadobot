@@ -742,50 +742,94 @@ async def executar_tool_ultima_venda(chat_id: int, data_ini: str = None, data_fi
 
 async def executar_tool_ultimo_cancelamento(chat_id: int, data_ini: str = None, data_fim: str = None) -> dict:
     """
-    Retorna o valor total de cancelamentos do período (data + horário não estão diretamente disponíveis sem parsing da tabela HTML).
-    Para mais detalhes, use as ferramentas 'produtos_mais_cancelados' ou 'cancelamento_por_hora'.
+    Retorna o último cancelamento registrado com data, horário, valor e filial.
+    Extrai da tabela detalhada de cancelamentos que o scraper coleta.
     """
     import pandas as pd
     from datetime import datetime
+    from scraper import baixar_relatorios_periodo
     agora = datetime.now(BRASILIA)
     
     if not data_ini or not data_fim:
         data_fim = agora.strftime("%d/%m/%Y")
         data_ini = agora.strftime("%d/%m/%Y")
     
-    dados = await garantir_dados_periodo(chat_id, data_ini, data_fim, "para buscar cancelamentos")
-    if "erro" in dados:
-        return dados
+    usuario = await buscar_usuario(chat_id)
+    if not usuario:
+        return {"erro": "Usuário não encontrado."}
     
-    total_cancel = dados.get("total_cancelamento", 0)
+    pdv_email = usuario.get("pdv_email")
+    pdv_senha = usuario.get("pdv_senha")
+    if not pdv_email or not pdv_senha:
+        return {"erro": "Credenciais PDV não configuradas."}
     
-    if isinstance(total_cancel, dict):
-        valor_total = total_cancel.get("_total", 0)
-    else:
-        valor_total = float(total_cancel) if total_cancel else 0
-    
-    if valor_total == 0:
+    try:
+        loop = asyncio.get_event_loop()
+        path_vendas, path_produtos, total_cancel = await loop.run_in_executor(
+            None, baixar_relatorios_periodo, data_ini, data_fim, pdv_email, pdv_senha
+        )
+        
+        # total_cancel agora é um dicionário com "_detalhe" contendo a tabela
+        if not isinstance(total_cancel, dict):
+            total_cancel = {}
+        
+        detalhe = total_cancel.get("_detalhe", {})
+        amostra = detalhe.get("amostra", [])
+        headers = detalhe.get("headers", [])
+        
+        if len(amostra) == 0:
+            valor_total = total_cancel.get("_total", 0)
+            if valor_total == 0:
+                return {"tem_cancelamento": False, "mensagem": f"✅ Ótimo! Nenhum cancelamento em {data_ini}."}
+            else:
+                return {
+                    "tem_cancelamento": True,
+                    "valor_total": valor_total,
+                    "mensagem": f"⚠️ Cancelamentos registrados: R$ {valor_total:.2f}\n\nPara detalhes, consulte o PDV Legal."
+                }
+        
+        # Pega o último cancelamento (última linha da amostra)
+        ultimo = amostra[-1]
+        
+        # Mapeia as colunas pelos headers
+        resultado_dict = {}
+        for idx, header in enumerate(headers):
+            if idx < len(ultimo):
+                resultado_dict[header] = ultimo[idx]
+        
+        data_hora = resultado_dict.get("Data", "Não informado")
+        num_venda = resultado_dict.get("Nº Venda", "Não informado")
+        filial = resultado_dict.get("Filial", "Não informado")
+        valor_cancel = resultado_dict.get("Valor cancelamento", "0,00")
+        faturado = resultado_dict.get("Faturado", "0,00")
+        
+        # Converte valores de string (formato BR) para float
+        try:
+            valor_cancel_f = float(valor_cancel.replace(".", "").replace(",", "."))
+        except:
+            valor_cancel_f = 0.0
+        
+        linhas = [f"⚠️ {b('ÚLTIMO CANCELAMENTO')}\n"]
+        linhas.append(f"📅 <b>Data/Hora:</b> {data_hora}")
+        linhas.append(f"🔢 <b>Nº Venda:</b> {num_venda}")
+        linhas.append(f"🏪 <b>Filial:</b> {filial.title()}")
+        linhas.append(f"💰 <b>Valor cancelado:</b> R$ {valor_cancel_f:.2f}")
+        linhas.append(f"📊 <b>Faturado:</b> R$ {faturado}")
+        
+        logger.info(f"Último cancelamento — {data_hora} — {filial} — R$ {valor_cancel_f:.2f}")
+        
         return {
-            "tem_cancelamento": False,
-            "mensagem": f"✅ Ótimo! Nenhum cancelamento em {data_ini}.",
+            "tem_cancelamento": True,
+            "data_hora": data_hora,
+            "venda": num_venda,
+            "filial": filial,
+            "valor": valor_cancel_f,
+            "mensagem_completa": "\n".join(linhas),
         }
     
-    pct = (valor_total / (dados.get("faturamento_total", 1) + valor_total) * 100) if "faturamento_total" in dados else 0
-    
-    linhas = [f"⚠️ {b('CANCELAMENTOS')}\n"]
-    linhas.append(f"📅 <b>Data:</b> {data_ini}")
-    linhas.append(f"💰 <b>Valor total:</b> R$ {valor_total:.2f}")
-    if pct > 0:
-        linhas.append(f"📊 <b>% do faturamento:</b> {pct:.1f}%")
-    linhas.append(f"\n💡 <b>Para saber quais produtos foram cancelados:</b>")
-    linhas.append(f"Pergunte: <i>'Quais produtos mais cancelam?'</i> ou <i>'Em que hora mais cancela?'</i>")
-    
-    return {
-        "tem_cancelamento": True,
-        "valor_total": valor_total,
-        "data": data_ini,
-        "mensagem_completa": "\n".join(linhas),
-    }
+    except Exception as e:
+        logger.error(f"Erro ao buscar último cancelamento para {chat_id}: {e}")
+        return {"erro": f"Erro ao processar: {str(e)}"}
 
 
 async def executar_tool_produtos_mais_cancelados(chat_id: int, data_ini: str = None, data_fim: str = None, top: int = 5) -> dict:

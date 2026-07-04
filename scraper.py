@@ -666,8 +666,11 @@ async def exportar_cancelamentos(page, data_ini: str, data_fim: str) -> dict:
             logger.info(f"Cancelamentos — DETALHE headers: {detalhe.get('headers')}")
             logger.info(f"Cancelamentos — DETALHE total_linhas: {detalhe.get('total_linhas')}")
             logger.info(f"Cancelamentos — DETALHE amostra (5 primeiras linhas): {detalhe.get('amostra')}")
+            # Adiciona os detalhes ao resultado para uso posterior
+            resultado["_detalhe"] = detalhe
         except Exception as e:
             logger.warning(f"Cancelamentos — não foi possível ler detalhe por linha: {e}")
+            resultado["_detalhe"] = {"headers": [], "amostra": [], "total_linhas": 0}
 
         await new_page.close()
         return resultado
