@@ -90,6 +90,18 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     pass
             
             # Pendente SEM assinatura_fim = realmente precisa validar cartão
+            asaas_id = usuario.get("asaas_id")
+            
+            if not asaas_id:
+                # Sem asaas_id = novo cadastro, precisa fazer /start do zero
+                await update.message.reply_text(
+                    f"👋 {b(nome)}, você ainda não completou o cadastro!\n\n"
+                    f"Use /start para começar do zero.",
+                    parse_mode="HTML"
+                )
+                return ConversationHandler.END
+            
+            # Tem asaas_id mas não validou cartão ainda = gerar novo link
             await update.message.reply_text(
                 f"👋 {b(nome)}, você já tem um cadastro!\n\n"
                 f"⏳ Ainda não identifiquei a confirmação do seu cartão.\n"
