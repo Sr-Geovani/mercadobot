@@ -8,6 +8,7 @@ import os
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 from pathlib import Path
+from functools import partial
 
 import pandas as pd
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -513,9 +514,8 @@ def iniciar_scheduler():
     )
 
     # Fechamento de mês — dia 01 às 7h (substitui o briefing diário neste dia)
-    # É acionado antes do briefing, então verifica se é dia 01 e, se sim, envia fechamento
     scheduler.add_job(
-        lambda: asyncio.ensure_future(enviar_fechamento_mes()),
+        enviar_fechamento_mes,
         trigger="cron",
         day=1,
         hour=HORARIO_HORA,
@@ -526,7 +526,7 @@ def iniciar_scheduler():
 
     # Briefing diário às 7h (não roda no dia 01, pois fechamento já rodou)
     scheduler.add_job(
-        lambda: asyncio.ensure_future(briefing_condicional()),
+        briefing_condicional,
         trigger="cron",
         hour=HORARIO_HORA,
         minute=HORARIO_MINUTO,
@@ -568,7 +568,7 @@ def iniciar_scheduler():
 
     # Alertas 22h — todos os dias: só zero vendas
     scheduler.add_job(
-        lambda: asyncio.ensure_future(enviar_alertas_proativos(modo="basico")),
+        partial(enviar_alertas_proativos, modo="basico"),
         trigger="cron",
         day_of_week="mon,tue,wed",
         hour=22,
@@ -579,7 +579,7 @@ def iniciar_scheduler():
 
     # Alertas 22h — qui a dom: completo (cancelamentos + pico noturno + zero vendas)
     scheduler.add_job(
-        lambda: asyncio.ensure_future(enviar_alertas_proativos(modo="completo")),
+        partial(enviar_alertas_proativos, modo="completo"),
         trigger="cron",
         day_of_week="thu,fri,sat,sun",
         hour=22,
@@ -590,7 +590,7 @@ def iniciar_scheduler():
 
     # Onboarding progressivo — 12h todo dia (dias 2-7 de trial, dicas personalizadas)
     scheduler.add_job(
-        lambda: asyncio.ensure_future(enviar_onboarding_progressivo()),
+        enviar_onboarding_progressivo,
         trigger="cron",
         hour=12,
         minute=0,
