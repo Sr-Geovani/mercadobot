@@ -1122,6 +1122,81 @@ async def executar_tool_descobrir_oportunidades(chat_id: int) -> dict:
 
 
 
+async def executar_tool_investigar_queda(chat_id: int, data_ini: str = None, data_fim: str = None) -> dict:
+    """
+    Investiga uma queda de faturamento comparando o período contra o histórico. 
+    Retorna análise em camadas: filial com maior impacto, horário com buraco 
+    (zero vendas), produto top indisponível.
+    
+    On-demand: operador pergunta "por que caiu?" e recebe investigação detalhada.
+    """
+    from bot import detectar_queda
+    from datetime import datetime, timedelta
+    
+    agora = datetime.now(BRASILIA)
+    
+    # Se não passou período, usa "hoje" vs. histórico
+    if not data_ini or not data_fim:
+        data_fim = agora.strftime("%d/%m/%Y")
+        data_ini = agora.strftime("%d/%m/%Y")  # Mesmo dia
+    
+    # Busca dados de hoje
+    dados_hoje = await garantir_dados_periodo(chat_id, data_ini, data_fim, "período para investigação")
+    if "erro" in dados_hoje:
+        return dados_hoje
+    
+    vendas_hoje = dados_hoje.get("vendas")
+    if vendas_hoje is None or len(vendas_hoje) == 0:
+        return {"erro": "Sem dados de vendas para o período solicitado."}
+    
+    # Busca histórico (últimas 2 semanas antes, mesmo dia da semana)
+    dias_atras = 14
+    data_hist_ini = (agora - timedelta(days=dias_atras)).strftime("%d/%m/%Y")
+    data_hist_fim = (agora - timedelta(days=1)).strftime("%d/%m/%Y")
+    
+    dados_hist = await garantir_dados_periodo(chat_id, data_hist_ini, data_hist_fim, "histórico para comparação")
+    if "erro" in dados_hist:
+        return {"erro": "Sem histórico suficiente para comparação (mínimo 7 dias)."}
+    
+    vendas_hist = dados_hist.get("vendas")
+    if vendas_hist is None or len(vendas_hist) == 0:
+        return {"erro": "Sem histórico para comparação."}
+    
+    # Detecta queda
+    resultado = detectar_queda(vendas_hoje, vendas_hist, threshold=35.0)
+    
+    if not resultado.get("tem_queda"):
+        return {
+            "tem_queda": False,
+            "desvio": resultado.get("desvio", 0),
+            "mensagem": "Seu faturamento está dentro do esperado — sem sinais de queda significativa.",
+        }
+    
+    # HÁ QUEDA — monta resposta investigativa
+    linhas = [f"📉 {b('INVESTIGAÇÃO DE QUEDA')}\n"]
+    linhas.append(f"Faturamento: R$ {resultado.get('faturamento_hoje', 0):,.2f}")
+    linhas.append(f"Esperado: R$ {resultado.get('faturamento_esperado', 0):,.2f}")
+    linhas.append(f"Desvio: {resultado.get('desvio_percentual', 0):.1f}%\n")
+    
+    causas = resultado.get("causas", [])
+    if causas:
+        linhas.append(f"{b('Possível causa(s):')}")
+        for causa in causas:
+            linhas.append(f"  • {causa}")
+    else:
+        linhas.append("Queda detectada — investigar as condições operacionais.")
+    
+    linhas.append(f"\n{i('Dica: Verifique totem, reposição de produtos, feriado ou fechamento da loja.')}")
+    
+    return {
+        "tem_queda": True,
+        "desvio_percentual": resultado.get("desvio_percentual"),
+        "faturamento_hoje": resultado.get("faturamento_hoje"),
+        "causas": causas,
+        "mensagem_completa": "\n".join(linhas),
+    }
+
+
 # Mapa de nome de tool -> função Python que efetivamente a executa
 EXECUTORES = {
     "buscar_faturamento": executar_tool_buscar_faturamento,
