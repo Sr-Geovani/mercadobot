@@ -215,6 +215,7 @@ async def enviar_onboarding_progressivo():
                 )
             
             elif dia_do_trial == 7:
+                from bot import kb_menu
                 await bot.send_message(
                     chat_id=chat_id,
                     text=(
@@ -231,7 +232,7 @@ async def enviar_onboarding_progressivo():
                         f"Pronto para começar de verdade? Use o menu abaixo. 👇"
                     ),
                     parse_mode="HTML",
-                    reply_markup=kb_menu() if 'kb_menu' in dir() else None
+                    reply_markup=kb_menu()
                 )
             
             logger.info(f"Onboarding dia {dia_do_trial} enviado para {chat_id}")
