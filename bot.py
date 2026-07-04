@@ -2928,9 +2928,19 @@ async def verificar_acesso(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             await update.callback_query.message.reply_text(texto_novo)
         return False
 
-    # Usuário com status pendente — ainda no onboarding, não bloqueia com mensagem
+    # Usuário com status pendente — verifica se tem assinatura_fim válida
+    # (pode estar em trial ou pago, mesmo com status pendente temporariamente)
     if usuario["status"] == "pendente":
-        return False
+        assinatura_fim = usuario.get("assinatura_fim")
+        trial_fim = usuario.get("trial_fim")
+        
+        # Se tem assinatura_fim ou trial_fim válidos, deixa passar
+        if assinatura_fim or trial_fim:
+            # Continua para usuario_tem_acesso verificar as datas
+            pass
+        else:
+            # Sem nenhuma data válida = realmente pendente
+            return False
 
     tem_acesso, motivo = await usuario_tem_acesso(chat_id)
     if tem_acesso:
