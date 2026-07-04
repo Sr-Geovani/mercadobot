@@ -214,46 +214,43 @@ async def gerar_link_pagamento(asaas_cliente_id: str, chat_id: int, reativacao: 
                                 nome_cliente: str = "", email_cliente: str = "",
                                 cpf_cliente: str = "") -> tuple:
     """
-    Cria um Checkout do Asaas com chargeTypes RECURRING.
-    Mantém a subscription para controlar quando cobra.
+    Cria Checkout idêntico ao que funcionava - RECURRENT com subscription.
     """
     if reativacao and dias_trial_restantes <= 0:
-        primeiro_vencimento = datetime.now(BRASILIA).strftime("%Y-%m-%d %H:%M:%S")
+        primeiro_vencimento = datetime.now(BRASILIA).strftime("%Y-%m-%dT%H:%M:%SZ")
         descricao = "MercadoBot — Reativação de assinatura"
     elif reativacao and dias_trial_restantes > 0:
         primeiro_vencimento = (
             datetime.now(BRASILIA) + timedelta(days=dias_trial_restantes + 1)
-        ).strftime("%Y-%m-%d %H:%M:%S")
+        ).strftime("%Y-%m-%dT%H:%M:%SZ")
         descricao = f"MercadoBot — Reativação ({dias_trial_restantes}d de trial restantes)"
     else:
         primeiro_vencimento = (
             datetime.now(BRASILIA) + timedelta(days=TRIAL_DIAS + 1)
-        ).strftime("%Y-%m-%d %H:%M:%S")
+        ).strftime("%Y-%m-%dT%H:%M:%SZ")
         descricao = "MercadoBot — Inteligência para seu mercadinho autônomo"
 
     payload = {
-        "billingTypes":   ["CREDIT_CARD"],
-        "chargeTypes":    ["RECURRENT"],  # Correto: RECURRENT, não RECURRING
+        "billingTypes": ["CREDIT_CARD"],
+        "chargeTypes": ["RECURRENT"],
         "minutesToExpire": 60,
         "callback": {
             "successUrl": "https://t.me/MercadoBotOficial",
-            "cancelUrl":  "https://t.me/MercadoBotOficial",
+            "cancelUrl": "https://t.me/MercadoBotOficial",
             "expiredUrl": "https://t.me/MercadoBotOficial",
         },
         "items": [{
-            "name":        "MercadoBot",
+            "name": "MercadoBot",
             "description": descricao,
-            "quantity":    1,
-            "value":       PRECO_MENSAL,
+            "quantity": 1,
+            "value": PRECO_MENSAL,
         }],
         "subscription": {
-            "cycle":             "MONTHLY",
-            "nextDueDate":       primeiro_vencimento,
-            "externalReference": str(chat_id),
+            "cycle": "MONTHLY",
+            "nextDueDate": primeiro_vencimento,
         },
     }
 
-    # Se já temos o cliente cadastrado no Asaas, vincula
     if asaas_cliente_id:
         payload["customer"] = asaas_cliente_id
 
@@ -264,18 +261,13 @@ async def gerar_link_pagamento(asaas_cliente_id: str, chat_id: int, reativacao: 
             headers=_headers()
         )
         data = resp.json()
-        logger.info(
-            f"[CHECKOUT] Checkout criado para chat_id={chat_id} | "
-            f"nextDueDate={primeiro_vencimento} | "
-            f"valor=R${PRECO_MENSAL} | "
-            f"chargeTypes=RECURRING"
-        )
+        logger.info(f"[CHECKOUT] Criado: {data.get('id')}")
 
         checkout_id = data.get("id", "")
-        link        = data.get("link", "") or data.get("url", "")
+        link = data.get("link", "")
 
         if not link:
-            logger.error(f"Erro ao criar checkout: {data}")
+            logger.error(f"Erro: {data.get('errors')}")
             return "", ""
 
         return link, checkout_id
