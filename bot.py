@@ -2609,10 +2609,17 @@ async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if usuario:
             assinatura_id = usuario.get("assinatura_asaas_id")
+            
             if assinatura_id:
-                # Cancela a assinatura (para cobranças recorrentes)
-                # Sem estorno: usuário usa até assinatura_fim
-                await cancelar_assinatura(assinatura_id)
+                if dentro_do_trial:
+                    # Trial: cancela apenas a cobrança pendente (dia 8)
+                    from pagamento import cancelar_cobranca_pendente
+                    await cancelar_cobranca_pendente(assinatura_id)
+                    logger.info(f"Cancelamento durante trial: cobrança pendente cancelada")
+                else:
+                    # Ativo: cancela a assinatura recorrente
+                    await cancelar_assinatura(assinatura_id)
+                    logger.info(f"Cancelamento de ativo: assinatura cancelada")
 
         await atualizar_usuario(chat_id, status="cancelado_mas_ativo")
 

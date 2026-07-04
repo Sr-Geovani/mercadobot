@@ -531,6 +531,52 @@ async def cancelar_assinatura(asaas_id: str) -> bool:
         return resp.status_code == 200
 
 
+async def cancelar_cobranca_pendente(asaas_id: str) -> bool:
+    """
+    Cancela a cobrança PENDENTE agendada para o primeiro ciclo (dia 8 do trial).
+    Usada quando usuário cancela DURANTE o trial.
+    """
+    try:
+        async with httpx.AsyncClient() as client:
+            # Busca payments pendentes da assinatura
+            resp = await client.get(
+                f"{ASAAS_URL}/payments",
+                headers=_headers(),
+                params={"subscription": asaas_id, "status": "PENDING"}
+            )
+            
+            if resp.status_code != 200:
+                logger.warning(f"Erro ao buscar payments pendentes: {resp.status_code}")
+                return False
+            
+            data = resp.json()
+            pagamentos = data.get("data", [])
+            
+            if not pagamentos:
+                logger.info(f"Nenhum payment pendente encontrado para {asaas_id}")
+                return True
+            
+            # Deleta cada payment pendente
+            for payment in pagamentos:
+                payment_id = payment.get("id")
+                if payment_id:
+                    logger.info(f"Deletando payment pendente: {payment_id}")
+                    delete_resp = await client.delete(
+                        f"{ASAAS_URL}/payments/{payment_id}",
+                        headers=_headers()
+                    )
+                    if delete_resp.status_code != 200:
+                        logger.error(f"Erro ao deletar payment {payment_id}: {delete_resp.status_code}")
+                        return False
+            
+            logger.info(f"Cobranças pendentes canceladas para {asaas_id}")
+            return True
+            
+    except Exception as e:
+        logger.error(f"Erro em cancelar_cobranca_pendente: {e}")
+        return False
+
+
 def processar_webhook(payload: dict) -> dict:
     """
     Interpreta o evento do webhook do Asaas.
