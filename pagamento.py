@@ -217,17 +217,17 @@ async def gerar_link_pagamento(asaas_cliente_id: str, chat_id: int, reativacao: 
     Cria Checkout idêntico ao que funcionava - RECURRENT com subscription.
     """
     if reativacao and dias_trial_restantes <= 0:
-        primeiro_vencimento = datetime.now(BRASILIA).strftime("%Y-%m-%dT%H:%M:%SZ")
+        primeiro_vencimento = datetime.now(BRASILIA).strftime("%Y-%m-%d %H:%M:%S")
         descricao = "MercadoBot — Reativação de assinatura"
     elif reativacao and dias_trial_restantes > 0:
         primeiro_vencimento = (
             datetime.now(BRASILIA) + timedelta(days=dias_trial_restantes + 1)
-        ).strftime("%Y-%m-%dT%H:%M:%SZ")
+        ).strftime("%Y-%m-%d %H:%M:%S")
         descricao = f"MercadoBot — Reativação ({dias_trial_restantes}d de trial restantes)"
     else:
         primeiro_vencimento = (
             datetime.now(BRASILIA) + timedelta(days=TRIAL_DIAS + 1)
-        ).strftime("%Y-%m-%dT%H:%M:%SZ")
+        ).strftime("%Y-%m-%d %H:%M:%S")
         descricao = "MercadoBot — Inteligência para seu mercadinho autônomo"
 
     payload = {
@@ -248,6 +248,7 @@ async def gerar_link_pagamento(asaas_cliente_id: str, chat_id: int, reativacao: 
         "subscription": {
             "cycle": "MONTHLY",
             "nextDueDate": primeiro_vencimento,
+            "externalReference": str(chat_id),
         },
     }
 
