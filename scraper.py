@@ -646,21 +646,23 @@ async def exportar_cancelamentos(page, data_ini: str, data_fim: str) -> dict:
                         var trs = tabelas[t].querySelectorAll('tbody tr');
                         if (trs.length > maxLinhas) { maxLinhas = trs.length; melhor = tabelas[t]; }
                     }
-                    if (!melhor) return {headers: [], amostra: [], total_linhas: 0};
+                    if (!melhor) return {headers: [], linhas: [], total_linhas: 0};
 
                     var headers = [];
                     var ths = melhor.querySelectorAll('thead th, thead td');
                     for (var h = 0; h < ths.length; h++) headers.push((ths[h].textContent||'').trim());
 
+                    // **EXTRAI TODAS AS LINHAS** (não só amostra)
                     var linhas = melhor.querySelectorAll('tbody tr');
-                    var amostra = [];
-                    for (var i = 0; i < Math.min(linhas.length, 5); i++) {
+                    var todas_linhas = [];
+                    for (var i = 0; i < linhas.length; i++) {
                         var tds = linhas[i].querySelectorAll('td');
                         var cols = [];
                         for (var j = 0; j < tds.length; j++) cols.push((tds[j].textContent||'').trim());
-                        amostra.push(cols);
+                        todas_linhas.push(cols);
                     }
-                    return {headers: headers, amostra: amostra, total_linhas: linhas.length};
+                    
+                    return {headers: headers, linhas: todas_linhas, total_linhas: linhas.length};
                 })()
             """)
             logger.info(f"Cancelamentos — DETALHE headers: {detalhe.get('headers')}")

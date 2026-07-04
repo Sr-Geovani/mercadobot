@@ -1101,7 +1101,7 @@ async def executar_tool_cancelamentos(chat_id: int, data_ini: str = None, data_f
     
     # Tenta ler o arquivo de detalhes SEMPRE (independente do valor_total)
     detalhe_path = Path("/tmp/pdvlegal/cancelamentos_detalhe.json")
-    amostra = []
+    todas_linhas = []
     headers = []
     
     logger.info(f"[CANCELAMENTOS] Procurando arquivo: {detalhe_path}")
@@ -1110,16 +1110,17 @@ async def executar_tool_cancelamentos(chat_id: int, data_ini: str = None, data_f
         try:
             with open(detalhe_path, "r", encoding="utf-8") as f:
                 detalhe = json.load(f)
-                amostra = detalhe.get("amostra", [])
+                # Tenta 'linhas' primeiro (novo formato), depois 'amostra' (antigo)
+                todas_linhas = detalhe.get("linhas", detalhe.get("amostra", []))
                 headers = detalhe.get("headers", [])
-                logger.info(f"[CANCELAMENTOS] Arquivo lido: {len(amostra)} linhas, {len(headers)} headers")
+                logger.info(f"[CANCELAMENTOS] Arquivo lido: {len(todas_linhas)} linhas, {len(headers)} headers")
         except Exception as e:
             logger.error(f"[CANCELAMENTOS] Erro ao ler arquivo: {e}")
     else:
         logger.warning(f"[CANCELAMENTOS] Arquivo não encontrado em {detalhe_path}")
     
-    # Se valor_total é 0 E não tem amostra, sem cancelamento
-    if valor_total == 0 and not amostra:
+    # Se valor_total é 0 E não tem linhas, sem cancelamento
+    if valor_total == 0 and not todas_linhas:
         logger.info(f"[CANCELAMENTOS] Sem dados de cancelamento")
         return {
             "tem_cancelamento": False,
@@ -1131,9 +1132,9 @@ async def executar_tool_cancelamentos(chat_id: int, data_ini: str = None, data_f
     linhas.append(f"💰 <b>Valor total:</b> R$ {valor_total:.2f}")
     
     # Se tem detalhes, adiciona o último
-    if amostra and headers:
-        logger.info(f"[CANCELAMENTOS] Processando último cancelamento")
-        ultimo = amostra[-1]  # Última linha (último cancelamento)
+    if todas_linhas and headers:
+        logger.info(f"[CANCELAMENTOS] Processando último cancelamento de {len(todas_linhas)} registros")
+        ultimo = todas_linhas[-1]  # Última linha (último cancelamento)
         
         # Mapeia colunas
         resultado_dict = {}
@@ -1144,18 +1145,13 @@ async def executar_tool_cancelamentos(chat_id: int, data_ini: str = None, data_f
         data_hora = resultado_dict.get("Data", "Não informado")
         num_venda = resultado_dict.get("Nº Venda", "Não informado")
         filial = resultado_dict.get("Filial", "Não informado")
+        operador = resultado_dict.get("Operador", "")
+        tipo = resultado_dict.get("Tipo", "")
         valor_cancel = resultado_dict.get("Valor cancelamento", "0,00")
         
-        # Tenta encontrar produto em várias colunas
-        produto = None
-        for col in ["Descrição Itens", "Desc. Itens", "Produto", "produto", "Item"]:
-            if col in resultado_dict:
-                prod = resultado_dict[col]
-                if prod and str(prod).strip() and str(prod).lower() != "nan" and prod not in ["0,00", "0.00"]:
-                    produto = prod
-                    break
-        
-        produto = produto or "Produto não identificado"
+        # Tenta encontrar o item/produto cancelado
+        # A coluna "Desc. Itens" tem o ITEM cancelado (com valor)
+        item_cancelado = resultado_dict.get("Desc. Itens", "Item não informado")
         
         # Converte valor
         try:
@@ -1166,11 +1162,13 @@ async def executar_tool_cancelamentos(chat_id: int, data_ini: str = None, data_f
         linhas.append(f"\n📍 <b>ÚLTIMO CANCELAMENTO:</b>\n")
         linhas.append(f"📅 <b>Data/Hora:</b> {data_hora}")
         linhas.append(f"🔢 <b>Nº Venda:</b> {num_venda}")
-        linhas.append(f"📦 <b>Produto:</b> {produto}")
-        linhas.append(f"💰 <b>Valor:</b> R$ {valor_cancel_f:.2f}")
         linhas.append(f"🏪 <b>Filial:</b> {filial.title()}")
+        linhas.append(f"👤 <b>Operador:</b> {operador}")
+        linhas.append(f"📦 <b>Tipo:</b> {tipo}")
+        linhas.append(f"🛒 <b>Item Cancelado:</b> R$ {item_cancelado}")
+        linhas.append(f"💰 <b>Valor Cancelamento:</b> R$ {valor_cancel_f:.2f}")
         
-        logger.info(f"[CANCELAMENTOS] Último: {data_hora} | {produto} | R$ {valor_cancel_f:.2f}")
+        logger.info(f"[CANCELAMENTOS] Último: {data_hora} | {filial} | {tipo} | R$ {valor_cancel_f:.2f}")
         
         return {
             "tem_cancelamento": True,
@@ -1178,9 +1176,11 @@ async def executar_tool_cancelamentos(chat_id: int, data_ini: str = None, data_f
             "ultimo_cancelamento": {
                 "data_hora": data_hora,
                 "venda": num_venda,
-                "produto": produto,
-                "valor": valor_cancel_f,
                 "filial": filial,
+                "operador": operador,
+                "tipo": tipo,
+                "item": item_cancelado,
+                "valor": valor_cancel_f,
             },
             "mensagem_completa": "\n".join(linhas),
         }
