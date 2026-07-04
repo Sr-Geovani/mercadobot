@@ -35,7 +35,24 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if usuario:
         status = usuario["status"]
 
-        if status in ("trial", "ativo", "cancelado_mas_ativo"):
+        if status in ("trial", "ativo", "cancelado_mas_ativo", "expirado"):
+            # Verifica se realmente tem acesso válido
+            tem_acesso, motivo_acesso = await usuario_tem_acesso(chat_id)
+            
+            if not tem_acesso:
+                # ❌ BLOQUEIA IMEDIATAMENTE
+                kb = InlineKeyboardMarkup([[
+                    InlineKeyboardButton("🔄 Reativar assinatura", callback_data="reativar")
+                ]])
+                await update.message.reply_text(
+                    f"❌ Sua assinatura está inativa.\n\n"
+                    f"Para continuar usando o MercadoBot:",
+                    parse_mode="HTML",
+                    reply_markup=kb
+                )
+                return ConversationHandler.END
+            
+            # ✅ Tem acesso, mostra menu
             from bot import kb_menu
             kb = InlineKeyboardMarkup([
                 [InlineKeyboardButton("📊 Abrir menu", callback_data="menu_principal")],

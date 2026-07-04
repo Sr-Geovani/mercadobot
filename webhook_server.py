@@ -213,45 +213,12 @@ async def handle_webhook(request: web.Request) -> web.Response:
                 )
 
         elif evento in ("checkout_expirado", "checkout_cancelado"):
-            # Cliente não terminou de preencher o cartão a tempo, ou cancelou
-            # no meio do checkout. IMPORTANTE: só notifica se o usuário ainda
-            # não tiver acesso ativo por outro caminho (ex: pagou em outra
-            # tentativa, ou outro checkout/webhook já confirmou antes deste
-            # evento de expiração chegar). Sem essa checagem, usuários que já
-            # estão em trial/ativo recebem mensagens de "expirou, tente de
-            # novo" sobre um checkout antigo que já não importa mais —
-            # confuso e desnecessário.
-            usuario_atualizado = await buscar_usuario(chat_id)
-            status_atual = usuario_atualizado.get("status") if usuario_atualizado else None
-
-            if status_atual in ("trial", "ativo"):
-                logger.info(
-                    f"Checkout {evento} para chat_id={chat_id} ignorado — "
-                    f"usuário já está com status='{status_atual}' por outro caminho."
-                )
-            else:
-                logger.info(f"Checkout não concluído para chat_id={chat_id}: {evento}")
-                if _bot:
-                    try:
-                        from telegram import InlineKeyboardMarkup, InlineKeyboardButton
-                        kb_retry = InlineKeyboardMarkup([
-                            [InlineKeyboardButton("🔄 Gerar novo link de pagamento", callback_data="reativar")],
-                        ])
-                    except Exception:
-                        kb_retry = None
-                    try:
-                        await _bot.send_message(
-                            chat_id=chat_id,
-                            text=(
-                                "⏳ <b>O link de pagamento expirou ou foi cancelado.</b>\n\n"
-                                "Se você já cadastrou o cartão em outra tentativa, pode ignorar esta mensagem. "
-                                "Caso ainda não tenha pago, clique abaixo para gerar um novo link:"
-                            ),
-                            parse_mode="HTML",
-                            reply_markup=kb_retry
-                        )
-                    except Exception as e_envio:
-                        logger.error(f"FALHA AO NOTIFICAR chat_id={chat_id} sobre {evento}: {e_envio}")
+            # Cliente não terminou de preencher o cartão a tempo, ou cancelou.
+            # NÃO enviamos mais mensagem de "link expirou" porque:
+            # 1. Spam se o checkout expirar varias vezes
+            # 2. Confunde o usuário
+            # 3. Ele pode tentar /reativar se quiser um novo link
+            logger.info(f"Checkout {evento} para chat_id={chat_id}")
 
         return web.Response(text="ok")
 
