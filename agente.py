@@ -1134,7 +1134,30 @@ async def executar_tool_cancelamentos(chat_id: int, data_ini: str = None, data_f
     # Se tem detalhes, adiciona o último
     if todas_linhas and headers:
         logger.info(f"[CANCELAMENTOS] Processando último cancelamento de {len(todas_linhas)} registros")
-        ultimo = todas_linhas[-1]  # Última linha (último cancelamento)
+        
+        # **ORDENA POR DATA DECRESCENTE** para pegar o mais recente
+        # Encontra o índice da coluna "Data"
+        idx_data = None
+        for idx, h in enumerate(headers):
+            if h.lower() == "data":
+                idx_data = idx
+                break
+        
+        if idx_data is not None:
+            # Ordena por data decrescente (mais recente primeiro)
+            from datetime import datetime as dt
+            def parse_data_hora(linha):
+                try:
+                    if len(linha) > idx_data:
+                        return dt.strptime(linha[idx_data], "%d/%m/%Y %H:%M")
+                except:
+                    pass
+                return dt.min
+            
+            todas_linhas_sorted = sorted(todas_linhas, key=parse_data_hora, reverse=True)
+            ultimo = todas_linhas_sorted[0]  # Mais recente
+        else:
+            ultimo = todas_linhas[-1]  # Fallback: última da lista
         
         # Mapeia colunas
         resultado_dict = {}
@@ -1148,16 +1171,26 @@ async def executar_tool_cancelamentos(chat_id: int, data_ini: str = None, data_f
         operador = resultado_dict.get("Operador", "")
         tipo = resultado_dict.get("Tipo", "")
         valor_cancel = resultado_dict.get("Valor cancelamento", "0,00")
+        faturado = resultado_dict.get("Faturado", "0,00")
         
-        # Tenta encontrar o item/produto cancelado
-        # A coluna "Desc. Itens" tem o ITEM cancelado (com valor)
-        item_cancelado = resultado_dict.get("Desc. Itens", "Item não informado")
-        
-        # Converte valor
+        # Converte valores
         try:
             valor_cancel_f = float(valor_cancel.replace(".", "").replace(",", "."))
         except:
             valor_cancel_f = 0.0
+        
+        try:
+            faturado_f = float(faturado.replace(".", "").replace(",", "."))
+        except:
+            faturado_f = 0.0
+        
+        # **DETECTA** cancelamento parcial ou integral
+        if faturado_f > 0:
+            tipo_cancelamento = "PARCIAL (houve pagamento)"
+            icone_pagamento = "✅"
+        else:
+            tipo_cancelamento = "INTEGRAL (sem pagamento)"
+            icone_pagamento = "❌"
         
         linhas.append(f"\n📍 <b>ÚLTIMO CANCELAMENTO:</b>\n")
         linhas.append(f"📅 <b>Data/Hora:</b> {data_hora}")
@@ -1165,10 +1198,11 @@ async def executar_tool_cancelamentos(chat_id: int, data_ini: str = None, data_f
         linhas.append(f"🏪 <b>Filial:</b> {filial.title()}")
         linhas.append(f"👤 <b>Operador:</b> {operador}")
         linhas.append(f"📦 <b>Tipo:</b> {tipo}")
-        linhas.append(f"🛒 <b>Item Cancelado:</b> R$ {item_cancelado}")
-        linhas.append(f"💰 <b>Valor Cancelamento:</b> R$ {valor_cancel_f:.2f}")
+        linhas.append(f"⚠️ <b>Tipo de Cancelamento:</b> {tipo_cancelamento}")
+        linhas.append(f"{icone_pagamento} <b>Faturado:</b> R$ {faturado_f:.2f}")
+        linhas.append(f"❌ <b>Cancelado:</b> R$ {valor_cancel_f:.2f}")
         
-        logger.info(f"[CANCELAMENTOS] Último: {data_hora} | {filial} | {tipo} | R$ {valor_cancel_f:.2f}")
+        logger.info(f"[CANCELAMENTOS] Último: {data_hora} | {filial} | {tipo_cancelamento} | Faturado: R$ {faturado_f:.2f}")
         
         return {
             "tem_cancelamento": True,
@@ -1179,8 +1213,10 @@ async def executar_tool_cancelamentos(chat_id: int, data_ini: str = None, data_f
                 "filial": filial,
                 "operador": operador,
                 "tipo": tipo,
-                "item": item_cancelado,
-                "valor": valor_cancel_f,
+                "tipo_cancelamento": tipo_cancelamento,
+                "valor_cancelado": valor_cancel_f,
+                "valor_faturado": faturado_f,
+                "houve_pagamento": faturado_f > 0,
             },
             "mensagem_completa": "\n".join(linhas),
         }
