@@ -1173,6 +1173,20 @@ async def executar_tool_cancelamentos(chat_id: int, data_ini: str = None, data_f
         valor_cancel = resultado_dict.get("Valor cancelamento", "0,00")
         faturado = resultado_dict.get("Faturado", "0,00")
         
+        # **CONVERTE HORÁRIO PARA BRASÍLIA** (PDV retorna em UTC+0, precisa converter)
+        if data_hora != "Não informado":
+            try:
+                from datetime import datetime as dt, timezone
+                # Parse da hora vindo do PDV (assume UTC)
+                dt_utc = dt.strptime(data_hora, "%d/%m/%Y %H:%M").replace(tzinfo=timezone.utc)
+                # Converte para Brasília
+                dt_br = dt_utc.astimezone(BRASILIA)
+                # Formata de volta
+                data_hora = dt_br.strftime("%d/%m/%Y %H:%M")
+                logger.info(f"[CANCELAMENTOS] Data/hora convertida de UTC para BRT: {data_hora}")
+            except Exception as e:
+                logger.warning(f"[CANCELAMENTOS] Erro ao converter data: {e} - usando original: {data_hora}")
+        
         # Converte valores
         try:
             valor_cancel_f = float(valor_cancel.replace(".", "").replace(",", "."))
