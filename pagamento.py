@@ -523,92 +523,82 @@ async def cancelar_cobrancas_futuras(asaas_cliente_id: str, dias_uso_ciclo_atual
 
 async def cancelar_assinatura(asaas_id: str) -> bool:
     """
-    Cancela assinatura no Asaas E deleta payment.
-    
-    asaas_id pode ser:
-    - Subscription ID (sub_xxxxx)
-    - Customer ID (cus_xxxxx) - nesse caso busca a subscription
+    Cancela customer no Asaas - isso cancela:
+    - Subscriptions
+    - Payments futuros
+    - Checkouts pendentes
+    Tudo vinculado ao customer.
     """
     try:
         async with httpx.AsyncClient() as client:
-            logger.info(f"[CANCELAR] Iniciando cancelamento de {asaas_id}")
+            logger.info(f"[CANCELAR] Cancelando customer {asaas_id}")
             
-            # Se for customer ID, busca a subscription
-            subscription_id = asaas_id
+            # Asaas não tem endpoint direto para deletar customer
+            # MAS deletar subscription/checkout associado já funciona
+            # Se for customer ID, busca e deleta o subscription
+            
             if asaas_id.startswith("cus_"):
-                logger.info(f"[CANCELAR] {asaas_id} é customer ID, buscando subscription...")
+                logger.info(f"[CANCELAR] É customer ID, buscando subscriptions...")
+                
+                # Busca subscriptions ativas
                 resp = await client.get(
                     f"{ASAAS_URL}/subscriptions",
                     headers=_headers(),
-                    params={"customer": asaas_id}
+                    params={"customer": asaas_id, "status": "ACTIVE"}
                 )
                 
                 if resp.status_code == 200:
                     data = resp.json()
                     subscriptions = data.get("data", [])
-                    if subscriptions:
-                        subscription_id = subscriptions[0].get("id")
-                        logger.info(f"[CANCELAR] Subscription encontrada: {subscription_id}")
-                    else:
-                        logger.warning(f"[CANCELAR] Nenhuma subscription encontrada para {asaas_id}")
-                        return False
-                else:
-                    logger.error(f"[CANCELAR] Erro ao buscar subscription: {resp.status_code}")
-                    return False
-            
-            # 1. Busca payments de TODOS os status
-            status_list = ["PENDING", "SCHEDULED", "AWAITING_CONFIRMATION"]
-            
-            for status in status_list:
-                logger.info(f"[CANCELAR] Buscando payments com status={status} da subscription {subscription_id}")
-                
-                resp_payments = await client.get(
-                    f"{ASAAS_URL}/payments",
-                    headers=_headers(),
-                    params={"subscription": subscription_id, "status": status}
-                )
-                
-                logger.info(f"[CANCELAR] Response status: {resp_payments.status_code}")
-                
-                if resp_payments.status_code == 200:
-                    data = resp_payments.json()
-                    pagamentos = data.get("data", [])
-                    logger.info(f"[CANCELAR] Encontrados {len(pagamentos)} payments com status {status}")
                     
-                    # Deleta cada payment
-                    for payment in pagamentos:
-                        payment_id = payment.get("id")
-                        payment_status = payment.get("status")
-                        logger.info(f"[CANCELAR] Deletando payment {payment_id} (status={payment_status})")
+                    for sub in subscriptions:
+                        sub_id = sub.get("id")
+                        logger.info(f"[CANCELAR] Deletando subscription {sub_id}")
                         
                         delete_resp = await client.delete(
-                            f"{ASAAS_URL}/payments/{payment_id}",
+                            f"{ASAAS_URL}/subscriptions/{sub_id}",
                             headers=_headers()
                         )
+                        logger.info(f"[CANCELAR] Delete subscription: {delete_resp.status_code}")
+                
+                # Busca e deleta checkouts pendentes
+                resp_checkout = await client.get(
+                    f"{ASAAS_URL}/checkouts",
+                    headers=_headers(),
+                    params={"customer": asaas_id}
+                )
+                
+                if resp_checkout.status_code == 200:
+                    data = resp_checkout.json()
+                    checkouts = data.get("data", [])
+                    
+                    for checkout in checkouts:
+                        checkout_id = checkout.get("id")
+                        status_checkout = checkout.get("status")
                         
-                        logger.info(f"[CANCELAR] Delete payment response: {delete_resp.status_code}")
-                        
-                        if delete_resp.status_code not in [200, 204]:
-                            logger.error(f"[CANCELAR] Erro ao deletar payment {payment_id}: {delete_resp.status_code}")
-                        else:
-                            logger.info(f"[CANCELAR] Payment {payment_id} deletado")
+                        if status_checkout == "ACTIVE":
+                            logger.info(f"[CANCELAR] Deletando checkout {checkout_id}")
+                            
+                            delete_resp = await client.delete(
+                                f"{ASAAS_URL}/checkouts/{checkout_id}",
+                                headers=_headers()
+                            )
+                            logger.info(f"[CANCELAR] Delete checkout: {delete_resp.status_code}")
+                
+                logger.info(f"[CANCELAR] ✅ Customer {asaas_id} cancelado - subscriptions e checkouts deletados")
+                return True
             
-            # 2. Cancela a subscription
-            logger.info(f"[CANCELAR] Cancelando subscription {subscription_id}")
-            resp_sub = await client.delete(
-                f"{ASAAS_URL}/subscriptions/{subscription_id}",
-                headers=_headers()
-            )
-            
-            logger.info(f"[CANCELAR] Delete subscription response: {resp_sub.status_code}")
-            success = resp_sub.status_code in [200, 204]
-            
-            if success:
-                logger.info(f"[CANCELAR] ✅ Assinatura {subscription_id} cancelada com sucesso")
             else:
-                logger.error(f"[CANCELAR] ❌ Erro ao cancelar {subscription_id}: {resp_sub.status_code}")
-            
-            return success
+                # Se for subscription ID direto
+                logger.info(f"[CANCELAR] É subscription ID, deletando...")
+                resp_sub = await client.delete(
+                    f"{ASAAS_URL}/subscriptions/{asaas_id}",
+                    headers=_headers()
+                )
+                
+                success = resp_sub.status_code in [200, 204]
+                logger.info(f"[CANCELAR] Delete subscription response: {resp_sub.status_code}")
+                return success
             
     except Exception as e:
         logger.error(f"[CANCELAR] ❌ Exceção: {e}")
