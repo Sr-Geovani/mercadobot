@@ -155,96 +155,47 @@ async def atualizar_usuario(chat_id: int, **campos):
 
 async def usuario_tem_acesso(chat_id: int) -> tuple[bool, str]:
     """
-    Verifica se usuário tem acesso ao bot baseado em:
-    1. assinatura_fim (se existe e válida, libera acesso)
-    2. trial_fim (se existe e válido, libera acesso)
-    3. status (ativo/cancelado_mas_ativo = acesso, outros = bloqueado)
-    
-    PRIORIDADE: assinatura_fim > trial_fim > status
+    Verifica acesso SIMPLES:
+    - Se assinatura_fim existe e agora <= assinatura_fim: LIBERA
+    - Se trial_fim existe e agora <= trial_fim: LIBERA  
+    - Senão: BLOQUEIA
     """
     user = await buscar_usuario(chat_id)
     if not user:
         return False, "nao_cadastrado"
 
     agora = datetime.now(BRASILIA)
-    status = user["status"]
     
-    logger.info(f"[ACESSO] chat_id={chat_id}, status={status}, agora={agora}")
-
-    # ──────────────────────────────────────────────────────────────────────────
-    # PRIORIDADE 1: ASSINATURA_FIM (pago ou cancelado_mas_ativo)
-    # ──────────────────────────────────────────────────────────────────────────
+    # 1. Verifica assinatura_fim (prioridade)
     assinatura_fim_raw = user.get("assinatura_fim")
     if assinatura_fim_raw:
         try:
-            fim_assinatura = datetime.fromisoformat(assinatura_fim_raw)
-            logger.info(f"[ACESSO] assinatura_fim={fim_assinatura}, comparando com agora")
-            
-            if agora <= fim_assinatura:
-                # ✅ ACESSO LIBERADO: assinatura ainda válida
-                logger.info(f"[ACESSO] ✅ Assinatura válida até {fim_assinatura}")
-                
-                # Atualiza status se necessário
-                if status not in ("ativo", "cancelado_mas_ativo"):
-                    logger.info(f"[ACESSO] Atualizando status de '{status}' para 'cancelado_mas_ativo'")
-                    await atualizar_usuario(chat_id, status="cancelado_mas_ativo")
-                
+            fim = datetime.fromisoformat(assinatura_fim_raw)
+            if agora <= fim:
                 return True, "ativo"
             else:
-                # ❌ Assinatura expirou
-                logger.info(f"[ACESSO] ❌ Assinatura expirou em {fim_assinatura}")
+                # Expirou
                 await atualizar_usuario(chat_id, status="expirado")
                 return False, "expirado"
-        except ValueError as e:
-            logger.error(f"[ACESSO] Erro ao parsear assinatura_fim '{assinatura_fim_raw}': {e}")
-
-    # ──────────────────────────────────────────────────────────────────────────
-    # PRIORIDADE 2: TRIAL_FIM (trial gratuito de 7 dias)
-    # ──────────────────────────────────────────────────────────────────────────
+        except:
+            pass
+    
+    # 2. Verifica trial_fim (fallback)
     trial_fim_raw = user.get("trial_fim")
-    if trial_fim_raw and status == "trial":
+    if trial_fim_raw:
         try:
-            fim_trial = datetime.fromisoformat(trial_fim_raw)
-            logger.info(f"[ACESSO] trial_fim={fim_trial}, comparando com agora")
-            
-            if agora <= fim_trial:
-                # ✅ Trial ainda válido
-                logger.info(f"[ACESSO] ✅ Trial válido até {fim_trial}")
+            fim = datetime.fromisoformat(trial_fim_raw)
+            if agora <= fim:
                 return True, "trial"
             else:
-                # ❌ Trial expirou
-                logger.info(f"[ACESSO] ❌ Trial expirou em {fim_trial}")
+                # Trial expirou
                 await atualizar_usuario(chat_id, status="bloqueado")
                 return False, "trial_expirado"
-        except ValueError as e:
-            logger.error(f"[ACESSO] Erro ao parsear trial_fim '{trial_fim_raw}': {e}")
-
-    # ──────────────────────────────────────────────────────────────────────────
-    # PRIORIDADE 3: STATUS (fallback se não tem datas válidas)
-    # ──────────────────────────────────────────────────────────────────────────
-    logger.info(f"[ACESSO] Fallback para status={status}")
+        except:
+            pass
     
-    if status == "ativo":
-        # ✅ Status ativo, assume assinatura_fim foi checado acima
-        return True, "ativo"
-    
-    if status == "cancelado_mas_ativo":
-        # ✅ Cancelado mas assinatura_fim foi checado acima
-        return True, "ativo"
-    
-    if status in ("cancelado", "expirado", "bloqueado"):
-        # ❌ Bloqueado
-        logger.info(f"[ACESSO] ❌ Bloqueado: status={status}")
-        return False, status
-    
-    if status == "pendente":
-        # ❌ Ainda no onboarding
-        logger.info(f"[ACESSO] ❌ Pendente (ainda no onboarding)")
-        return False, "pendente"
-    
-    # Fallback seguro
-    logger.warning(f"[ACESSO] ⚠️ Status desconhecido: {status}")
-    return False, "desconhecido"
+    # 3. Sem datas válidas = bloqueado
+    return False, "bloqueado"
 
 
 async def listar_usuarios_ativos() -> list:
