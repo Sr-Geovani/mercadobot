@@ -84,30 +84,41 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return ConversationHandler.END
 
         if status in ("bloqueado", "cancelado", "cancelado_mas_ativo", "expirado"):
-            # Assinatura cancelada ou expirada
-            fim = usuario.get("assinatura_fim")
-            if status == "cancelado_mas_ativo" and fim:
-                # Cancelado mas ainda com acesso
+            # Assinatura cancelada ou expirada - verifica se ainda tem acesso válido
+            assinatura_fim_raw = usuario.get("assinatura_fim")
+            
+            if assinatura_fim_raw:
                 try:
                     from datetime import datetime
-                    fim_dt = datetime.fromisoformat(fim)
-                    data_str = fim_dt.strftime("%d/%m/%Y")
-                    mensagem = f"Sua assinatura foi cancelada mas você pode usar até {b(data_str)}."
+                    assinatura_fim = datetime.fromisoformat(assinatura_fim_raw)
+                    agora = datetime.now(ZoneInfo("America/Sao_Paulo"))
+                    
+                    if agora <= assinatura_fim:
+                        # Ainda tem acesso! Mostra menu
+                        from bot import kb_menu
+                        data_str = assinatura_fim.strftime("%d/%m/%Y")
+                        await update.message.reply_text(
+                            f"👋 {b(nome)}, bem-vindo de volta!\n\n"
+                            f"Sua assinatura foi cancelada mas você pode usar até {b(data_str)}.\n\n"
+                            f"O que deseja fazer?",
+                            parse_mode="HTML",
+                            reply_markup=kb_menu()
+                        )
+                        return
                 except:
-                    mensagem = "Sua assinatura foi cancelada mas você ainda tem acesso."
-            else:
-                mensagem = "Sua assinatura está inativa."
+                    pass
             
+            # Assinatura expirou - oferece reativar
             kb = InlineKeyboardMarkup([
                 [InlineKeyboardButton("🔄 Reativar assinatura", callback_data="reativar")],
             ])
             await update.message.reply_text(
                 f"👋 {b(nome)}, bem-vindo de volta!\n\n"
-                f"{mensagem} Para reativar:",
+                f"Sua assinatura está inativa. Para reativar:",
                 parse_mode="HTML",
                 reply_markup=kb
             )
-            return ConversationHandler.END
+            return
 
     # Usuário não está no banco — pede email para buscar no Asaas
     await update.message.reply_text(
