@@ -748,6 +748,7 @@ async def executar_tool_ultimo_cancelamento(chat_id: int, data_ini: str = None, 
     import pandas as pd
     from datetime import datetime
     from scraper import baixar_relatorios_periodo
+    from database import buscar_usuario
     agora = datetime.now(BRASILIA)
     
     if not data_ini or not data_fim:
