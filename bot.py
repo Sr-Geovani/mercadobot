@@ -2118,8 +2118,11 @@ def calcular_dias_trial_restantes(usuario: dict) -> int:
 
 async def cmd_reativar_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Comando /reativar — reabre fluxo de reativação."""
-    from database import buscar_usuario
+    from database import buscar_usuario, atualizar_usuario
     from pagamento import gerar_link_pagamento, buscar_assinatura_ativa
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    
     chat_id = update.effective_chat.id
     usuario = await buscar_usuario(chat_id)
 
@@ -2129,14 +2132,36 @@ async def cmd_reativar_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         )
         return
 
-    if usuario["status"] in ("trial", "ativo"):
+    if usuario["status"] in ("trial", "ativo", "cancelado_mas_ativo"):
         await update.message.reply_text(
             f"✅ Sua assinatura já está ativa!\n\nUse /menu para acessar o bot.",
             parse_mode="HTML",
             reply_markup=kb_menu()
         )
         return
+    
+    # Verifica se ainda tem assinatura_fim válida (mesmo que cancelado)
+    assinatura_fim_raw = usuario.get("assinatura_fim")
+    if assinatura_fim_raw:
+        try:
+            assinatura_fim = datetime.fromisoformat(assinatura_fim_raw)
+            agora = datetime.now(ZoneInfo("America/Sao_Paulo"))
+            
+            if agora <= assinatura_fim:
+                # Ainda tem acesso! Só muda status e pronto
+                await atualizar_usuario(chat_id, status="ativo")
+                await update.message.reply_text(
+                    f"✅ {b('Reativação confirmada!')}\n\n"
+                    f"Sua assinatura está ativa novamente.\n"
+                    f"Use /menu para acessar o bot.",
+                    parse_mode="HTML",
+                    reply_markup=kb_menu()
+                )
+                return
+        except:
+            pass
 
+    # Assinatura expirou, precisa pagar
     await update.message.reply_text("⏳ Gerando link de reativação...")
 
     try:

@@ -35,7 +35,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if usuario:
         status = usuario["status"]
 
-        if status in ("trial", "ativo"):
+        if status in ("trial", "ativo", "cancelado_mas_ativo"):
             from bot import kb_menu
             kb = InlineKeyboardMarkup([
                 [InlineKeyboardButton("📊 Abrir menu", callback_data="menu_principal")],
