@@ -277,7 +277,7 @@ async def buscar_benchmark_produto(nome_produto: str, chat_id_excluir: int = Non
         }
 
 
-async def buscar_oportunidades_benchmark(chat_id: int, produtos_do_cliente: list[str]) -> dict:
+async def buscar_oportunidades_benchmark(chat_id: int, produtos_do_cliente: list[str], top_n: int = 10) -> dict:
     """
     DESCOBERTA DE OPORTUNIDADE: encontra produtos que vendem bem em OUTRAS
     lojas mas que NÃO aparecem na lista de produtos do cliente atual.
@@ -351,7 +351,7 @@ async def buscar_oportunidades_benchmark(chat_id: int, produtos_do_cliente: list
         reverse=True
     )
 
-    return {"outros_clientes": outros_clientes, "sugestoes": sugestoes[:10]}
+    return {"outros_clientes": outros_clientes, "sugestoes": sugestoes[:top_n]}
 
 
 # ─── PADRÕES DETECTADOS (anti-spam) ────────────────────────────────────────
