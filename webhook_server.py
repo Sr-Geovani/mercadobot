@@ -75,16 +75,28 @@ async def handle_webhook(request: web.Request) -> web.Response:
             return web.Response(text="ok")
 
         if evento == "cartao_validado":
-            # SUBSCRIPTION_CREATED — o cartão foi validado no Checkout, sem cobrança.
+            # SUBSCRIPTION_CREATED ou CHECKOUT_PAID — validou cartão
             # A cobrança real só ocorrerá no nextDueDate (fim do trial).
-            # Aqui apenas liberamos o trial de 7 dias.
             agora     = datetime.now(BRASILIA)
             trial_fim = (agora + timedelta(days=7)).isoformat()
             asaas_subscription_id = resultado.get("asaas_id")
+            asaas_customer_id = resultado.get("customer")  # ID do cliente Asaas
 
             campos_update = dict(status="trial", trial_fim=trial_fim, trial_usado=True)
+            
+            # Se vem com subscription ID, salva
             if asaas_subscription_id and asaas_subscription_id.startswith("sub_"):
                 campos_update["assinatura_asaas_id"] = asaas_subscription_id
+            # Se vem com customer ID, também salva (importante para checkout)
+            elif asaas_customer_id and asaas_customer_id.startswith("cus_"):
+                campos_update["asaas_id"] = asaas_customer_id
+                logger.info(f"Salvando customer ID: {asaas_customer_id}")
+            
+            # Se vem subscription no objeto (em alguns webhooks), também salva
+            if isinstance(resultado.get("subscription"), dict):
+                sub_id = resultado["subscription"].get("id")
+                if sub_id and sub_id.startswith("sub_"):
+                    campos_update["assinatura_asaas_id"] = sub_id
 
             await atualizar_usuario(chat_id, **campos_update)
             logger.info(f"Usuário {chat_id} — cartão validado, trial de 7 dias liberado até {trial_fim}.")
