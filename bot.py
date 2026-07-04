@@ -2148,11 +2148,11 @@ async def cmd_reativar_handler(update: Update, context: ContextTypes.DEFAULT_TYP
             agora = datetime.now(ZoneInfo("America/Sao_Paulo"))
             
             if agora <= assinatura_fim:
-                # Ainda tem acesso! Só muda status e pronto
-                await atualizar_usuario(chat_id, status="ativo")
+                # Ainda tem acesso! Não precisa pagar nada
+                # Mantém status como está (cancelado_mas_ativo)
                 await update.message.reply_text(
-                    f"✅ {b('Reativação confirmada!')}\n\n"
-                    f"Sua assinatura está ativa novamente.\n"
+                    f"✅ {b('Sua assinatura ainda está ativa!')}\n\n"
+                    f"Você pode usar o MercadoBot até {assinatura_fim.strftime('%d/%m/%Y')}.\n"
                     f"Use /menu para acessar o bot.",
                     parse_mode="HTML",
                     reply_markup=kb_menu()
