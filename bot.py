@@ -2122,7 +2122,8 @@ async def enviar_reativacao(update_or_msg, chat_id: int, is_callback: bool = Fal
     FUNÇÃO ÚNICA para enviar mensagem de reativação.
     Evita duplicação de mensagens.
     
-    is_callback: True se vem de callback_query, False se de message
+    update_or_msg: pode ser Message (de /reativar) ou CallbackQuery.message (de callback)
+    is_callback: True se vem de callback_query, False se de /reativar
     """
     from database import buscar_usuario
     from pagamento import gerar_link_pagamento, buscar_assinatura_ativa
@@ -2130,7 +2131,7 @@ async def enviar_reativacao(update_or_msg, chat_id: int, is_callback: bool = Fal
     usuario = await buscar_usuario(chat_id)
     if not usuario:
         if is_callback:
-            await update_or_msg.answer("Erro ao processar. Use /start.")
+            await update_or_msg.message.reply_text("Erro ao processar. Use /start.")
         else:
             await update_or_msg.reply_text("Use /start para criar uma conta.")
         return
@@ -2140,7 +2141,7 @@ async def enviar_reativacao(update_or_msg, chat_id: int, is_callback: bool = Fal
         if not asaas_id:
             msg_text = "Use /start para reativar sua conta."
             if is_callback:
-                await update_or_msg.answer(msg_text)
+                await update_or_msg.message.reply_text(msg_text)
             else:
                 await update_or_msg.reply_text(msg_text)
             return
@@ -2182,10 +2183,13 @@ async def enviar_reativacao(update_or_msg, chat_id: int, is_callback: bool = Fal
     except Exception as e:
         logger.error(f"Erro em enviar_reativacao: {e}")
         msg_text = "❌ Erro ao processar reativação.\n\nUse /start para tentar novamente."
-        if is_callback:
-            await update_or_msg.answer(msg_text)
-        else:
-            await update_or_msg.reply_text(msg_text)
+        try:
+            if is_callback:
+                await update_or_msg.message.reply_text(msg_text)
+            else:
+                await update_or_msg.reply_text(msg_text)
+        except:
+            pass
 
 
 async def cmd_reativar_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
