@@ -31,6 +31,10 @@ ANTHROPIC_KEY = os.environ.get("ANTHROPIC_KEY")
 
 MODEL = "claude-sonnet-4-5"
 
+# Importa helpers de bot.py (b = bold, i = italic)
+def b(t): return f"<b>{t}</b>"
+def i(t): return f"<i>{t}</i>"
+
 # ─── DEFINIÇÃO DAS FERRAMENTAS (formato esperado pela API da Anthropic) ────
 # Cada tool tem um nome, descrição (que ajuda o Claude a decidir quando usá-la)
 # e um schema dos parâmetros que ela aceita.
