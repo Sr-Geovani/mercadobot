@@ -231,6 +231,22 @@ TOOLS = [
             },
         },
     },
+    {
+        "name": "buscar_ultima_venda",
+        "description": (
+            "Retorna informações da última venda registrada: horário exato, produto, valor e filial. "
+            "Use quando o usuário perguntar 'qual foi minha última venda?', 'a que horas foi minha última venda?', "
+            "'quando vendeu pela última vez?', ou 'qual foi a última transação?'. "
+            "Se não especificar período, busca hoje."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "data_ini": {"type": "string", "description": "Data inicial (DD/MM/YYYY), opcional"},
+                "data_fim": {"type": "string", "description": "Data final (DD/MM/YYYY), opcional"},
+            },
+        },
+    },
 ]
 
 
@@ -601,6 +617,61 @@ async def executar_tool_detectar_padroes(chat_id: int) -> dict:
     return {"padroes_encontrados": len(padroes), "padroes": padroes}
 
 
+async def executar_tool_ultima_venda(chat_id: int, data_ini: str = None, data_fim: str = None) -> dict:
+    """
+    Retorna informações da última venda registrada:
+    - Horário exato (HoraAbertura)
+    - Produto vendido
+    - Valor
+    - Filial
+    
+    Se não passar período, usa hoje.
+    """
+    from datetime import datetime
+    agora = datetime.now(BRASILIA)
+    
+    if not data_ini or not data_fim:
+        data_fim = agora.strftime("%d/%m/%Y")
+        data_ini = agora.strftime("%d/%m/%Y")  # Hoje
+    
+    dados = await garantir_dados_periodo(chat_id, data_ini, data_fim, "para buscar última venda")
+    if "erro" in dados:
+        return dados
+    
+    vendas = dados.get("vendas")
+    if vendas is None or len(vendas) == 0:
+        return {"erro": "Nenhuma venda registrada para este período."}
+    
+    # Ordena por horário (HoraAbertura) e pega a última
+    if "HoraAbertura" in vendas.columns:
+        vendas["HoraAbertura"] = pd.to_datetime(vendas["HoraAbertura"], errors="coerce")
+        vendas = vendas.sort_values("HoraAbertura")
+    
+    ultima = vendas.iloc[-1]  # Última linha
+    
+    horario = ultima.get("HoraAbertura", "Não informado")
+    if hasattr(horario, "strftime"):
+        horario = horario.strftime("%H:%M:%S")
+    
+    produto = ultima.get("produto", "Não informado")
+    valor = ultima.get("valor", 0)
+    filial = ultima.get("nomeFilial", "Não informado")
+    
+    linhas = [f"📍 <b>ÚLTIMA VENDA</b>\n"]
+    linhas.append(f"🕐 <b>Horário:</b> {horario}")
+    linhas.append(f"📦 <b>Produto:</b> {produto}")
+    linhas.append(f"💰 <b>Valor:</b> R$ {valor:.2f}")
+    linhas.append(f"🏪 <b>Filial:</b> {filial.title()}")
+    
+    return {
+        "horario": str(horario),
+        "produto": produto,
+        "valor": valor,
+        "filial": filial,
+        "mensagem_completa": "\n".join(linhas),
+    }
+
+
 async def executar_tool_investigar_queda(chat_id: int, data_ini: str = None, data_fim: str = None) -> dict:
     """
     Investiga uma queda de faturamento comparando o período contra o mesmo
@@ -808,6 +879,7 @@ EXECUTORES = {
     "comparar_com_outros_mercadinhos": executar_tool_comparar_benchmark,
     "descobrir_oportunidades_de_mix": executar_tool_descobrir_oportunidades,
     "investigar_queda": executar_tool_investigar_queda,
+    "buscar_ultima_venda": executar_tool_ultima_venda,
 }
 
 

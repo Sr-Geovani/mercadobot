@@ -96,6 +96,149 @@ async def reconciliar_assinaturas():
     logger.info(f"Reconciliação de assinaturas concluída — {corrigidos} usuário(s) corrigido(s).")
 
 
+async def enviar_onboarding_progressivo():
+    """
+    Envia dicas de onboarding distribuídas ao longo dos 7 dias de trial.
+    Cada dia recebe uma mensagem educativa sobre uma capacidade do bot.
+    
+    Dia 1: já enviado (boas-vindas)
+    Dia 2: Relatórios automáticos
+    Dia 3: Ferramentas de IA (parte 1)
+    Dia 4: Ferramentas de IA (parte 2)
+    Dia 5: Alertas automáticos
+    Dia 6: Investigação de queda
+    Dia 7: Recursos avançados (SEM aviso de conversão — evita cancelamento)
+    """
+    from database import listar_usuarios_em_trial
+    usuarios = await listar_usuarios_em_trial()
+    if not usuarios:
+        return
+
+    bot = Bot(token=TELEGRAM_TOKEN)
+    agora = datetime.now(BRASILIA)
+    
+    logger.info(f"Onboarding progressivo — {len(usuarios)} usuário(s) em trial")
+
+    for usuario in usuarios:
+        chat_id = usuario["chat_id"]
+        trial_fim = usuario.get("trial_fim")
+        
+        if not trial_fim:
+            continue
+        
+        trial_fim_dt = datetime.fromisoformat(trial_fim)
+        dias_restantes = (trial_fim_dt - agora).days
+        dia_do_trial = 7 - dias_restantes
+        
+        # Não envia se não é dia inteiro ou já passou
+        if dia_do_trial < 1 or dia_do_trial > 7:
+            continue
+        
+        try:
+            if dia_do_trial == 2:
+                await bot.send_message(
+                    chat_id=chat_id,
+                    text=(
+                        f"💡 <b>Dica do dia 2</b>\n\n"
+                        f"<b>Relatórios automáticos</b>\n\n"
+                        f"Você recebe todos os dias às 7h:\n"
+                        f"  • Faturamento do dia anterior\n"
+                        f"  • Top 5 produtos\n"
+                        f"  • Cancelamentos\n"
+                        f"  • Score de saúde\n\n"
+                        f"Sem spam — é só uma mensagem. Automático."
+                    ),
+                    parse_mode="HTML"
+                )
+            
+            elif dia_do_trial == 3:
+                await bot.send_message(
+                    chat_id=chat_id,
+                    text=(
+                        f"💡 <b>Dica do dia 3</b>\n\n"
+                        f"<b>Ferramentas de IA — Parte 1</b>\n\n"
+                        f"Você pode perguntar qualquer coisa:\n"
+                        f"  💬 <i>\"Quanto vendi de Coca?\"</i>\n"
+                        f"  💬 <i>\"Qual foi minha última venda?\"</i>\n"
+                        f"  💬 <i>\"Quais são meus top 10 produtos?\"</i>\n\n"
+                        f"Tenta aí no menu → Pergunte à IA"
+                    ),
+                    parse_mode="HTML"
+                )
+            
+            elif dia_do_trial == 4:
+                await bot.send_message(
+                    chat_id=chat_id,
+                    text=(
+                        f"💡 <b>Dica do dia 4</b>\n\n"
+                        f"<b>Ferramentas de IA — Parte 2</b>\n\n"
+                        f"Pergunte também:\n"
+                        f"  🔍 <i>\"O que eu deveria vender?\"</i> (descobrir novos produtos)\n"
+                        f"  🔍 <i>\"Qual meu padrão de vendas?\"</i> (detectar padrões)\n"
+                        f"  🔍 <i>\"Como me comparo?\"</i> (benchmark com outras lojas)\n\n"
+                        f"Menu → Pergunte à IA"
+                    ),
+                    parse_mode="HTML"
+                )
+            
+            elif dia_do_trial == 5:
+                await bot.send_message(
+                    chat_id=chat_id,
+                    text=(
+                        f"💡 <b>Dica do dia 5</b>\n\n"
+                        f"<b>Alertas automáticos</b>\n\n"
+                        f"Você recebe avisos em:\n"
+                        f"  🔔 13h — parcial do dia\n"
+                        f"  🔔 19h–20h — aviso de pico (qui–dom)\n"
+                        f"  🔔 22h — alerta noturno\n\n"
+                        f"Sem spam — só quando algo está errado."
+                    ),
+                    parse_mode="HTML"
+                )
+            
+            elif dia_do_trial == 6:
+                await bot.send_message(
+                    chat_id=chat_id,
+                    text=(
+                        f"💡 <b>Dica do dia 6</b>\n\n"
+                        f"<b>Investigação de queda</b>\n\n"
+                        f"Se suas vendas caem, o bot avisa automaticamente.\n\n"
+                        f"Ou você pergunta: <i>\"Por que caiu?\"</i>\n\n"
+                        f"A IA então analisa:\n"
+                        f"  • Qual filial foi mais impactada\n"
+                        f"  • Qual horário ficou sem vendas\n"
+                        f"  • Qual produto top faltou\n\n"
+                        f"Tudo em uma resposta."
+                    ),
+                    parse_mode="HTML"
+                )
+            
+            elif dia_do_trial == 7:
+                await bot.send_message(
+                    chat_id=chat_id,
+                    text=(
+                        f"⭐ <b>Dica do dia 7</b>\n\n"
+                        f"<b>Recursos avançados ativados</b>\n\n"
+                        f"Parabéns! Você conhece tudo que o MercadoBot oferece:\n\n"
+                        f"✅ 7 ferramentas de IA\n"
+                        f"✅ Relatórios automáticos\n"
+                        f"✅ Alertas inteligentes\n"
+                        f"✅ Investigação de quedas\n"
+                        f"✅ Benchmark de mercado\n"
+                        f"✅ Descoberta de mix\n"
+                        f"✅ Análise de padrões\n\n"
+                        f"Pronto para começar de verdade? Use o menu abaixo. 👇"
+                    ),
+                    parse_mode="HTML",
+                    reply_markup=kb_menu() if 'kb_menu' in dir() else None
+                )
+            
+            logger.info(f"Onboarding dia {dia_do_trial} enviado para {chat_id}")
+
+        except Exception as e:
+            logger.error(f"Erro ao enviar onboarding dia {dia_do_trial} para {chat_id}: {e}")
+
+
 async def enviar_fechamento_mes():
     """
     Dispara no dia 01 do mês às 7h.
@@ -348,6 +491,13 @@ async def enviar_briefing_automatico():
             logger.error(f"Erro no briefing do usuário {usuario['chat_id']}: {e}")
 
 
+async def briefing_condicional():
+    """Roda briefing todos os dias EXCETO dia 01 (quando roda fechamento de mês)."""
+    agora = datetime.now(BRASILIA)
+    if agora.day != 1:
+        await enviar_briefing_automatico()
+
+
 def iniciar_scheduler():
     """Inicia o agendador diário."""
     scheduler = AsyncIOScheduler(timezone="America/Sao_Paulo")
@@ -375,11 +525,6 @@ def iniciar_scheduler():
     )
 
     # Briefing diário às 7h (não roda no dia 01, pois fechamento já rodou)
-    async def briefing_condicional():
-        agora = datetime.now(BRASILIA)
-        if agora.day != 1:  # Não roda no dia 01 (fechamento já rodou)
-            await enviar_briefing_automatico()
-
     scheduler.add_job(
         lambda: asyncio.ensure_future(briefing_condicional()),
         trigger="cron",
@@ -440,6 +585,16 @@ def iniciar_scheduler():
         hour=22,
         minute=0,
         id="alertas_noite_completo",
+        replace_existing=True,
+    )
+
+    # Onboarding progressivo — 12h todo dia (dias 2-7 de trial, dicas personalizadas)
+    scheduler.add_job(
+        lambda: asyncio.ensure_future(enviar_onboarding_progressivo()),
+        trigger="cron",
+        hour=12,
+        minute=0,
+        id="onboarding_progressivo",
         replace_existing=True,
     )
 

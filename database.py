@@ -206,6 +206,16 @@ async def listar_usuarios_ativos() -> list:
         return [dict(r) for r in rows]
 
 
+async def listar_usuarios_em_trial() -> list:
+    """Lista todos os usuários que estão em trial (primeiros 7 dias)."""
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        rows = await conn.fetch(
+            "SELECT * FROM usuarios WHERE status = 'trial'"
+        )
+        return [dict(r) for r in rows]
+
+
 # ─── BENCHMARK ENTRE CLIENTES ──────────────────────────────────────────────
 
 async def registrar_benchmark_produto(chat_id: int, nome_produto: str, quantidade: int,
