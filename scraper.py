@@ -675,8 +675,18 @@ async def exportar_cancelamentos(page, data_ini: str, data_fim: str) -> dict:
                     valor = primeira_linha[idx] if idx < len(primeira_linha) else "N/A"
                     logger.info(f"  [{idx}] {header}: '{valor}'")
             
+            # **SALVA** a tabela detalhada em JSON para uso posterior
+            import json
+            from pathlib import Path
+            detalhe_path = Path("/tmp/pdvlegal/cancelamentos_detalhe.json")
+            detalhe_path.parent.mkdir(exist_ok=True, parents=True)
+            with open(detalhe_path, "w", encoding="utf-8") as f:
+                json.dump(detalhe, f, ensure_ascii=False, indent=2)
+            logger.info(f"Cancelamentos — DETALHE salvo em: {detalhe_path}")
+            
             # Adiciona os detalhes ao resultado para uso posterior
             resultado["_detalhe"] = detalhe
+            resultado["_detalhe_path"] = str(detalhe_path)
         except Exception as e:
             logger.warning(f"Cancelamentos — não foi possível ler detalhe por linha: {e}")
             resultado["_detalhe"] = {"headers": [], "amostra": [], "total_linhas": 0}

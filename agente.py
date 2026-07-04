@@ -248,45 +248,12 @@ TOOLS = [
         },
     },
     {
-        "name": "buscar_ultimo_cancelamento",
+        "name": "buscar_cancelamentos",
         "description": (
-            "Retorna informações do último cancelamento registrado: data/hora, produto cancelado, valor e filial. "
-            "Use quando o usuário perguntar 'qual foi meu último cancelamento?', 'quando foi o último cancelamento?', "
-            "'qual produto foi cancelado?', ou 'qual é o padrão de cancelamento?'. "
-            "Útil para investigar fraude, furto ou problemas com o totem."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "data_ini": {"type": "string", "description": "Data inicial (DD/MM/YYYY), opcional"},
-                "data_fim": {"type": "string", "description": "Data final (DD/MM/YYYY), opcional"},
-            },
-        },
-    },
-    {
-        "name": "produtos_mais_cancelados",
-        "description": (
-            "Retorna os top produtos com maior índice de cancelamento no período. "
-            "Use quando o usuário perguntar 'qual produto é mais cancelado?', 'quais produtos têm cancelamento alto?', "
-            "'detecta produtos suspeitos?', ou 'há algum produto sendo furtado?'. "
-            "Ajuda a identificar: erro de cadastro, produto com defeito, furto, ou cliente que desiste frequentemente."
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                "data_ini": {"type": "string", "description": "Data inicial (DD/MM/YYYY), opcional"},
-                "data_fim": {"type": "string", "description": "Data final (DD/MM/YYYY), opcional"},
-                "top": {"type": "integer", "description": "Número de produtos a retornar (padrão: 5)", "default": 5},
-            },
-        },
-    },
-    {
-        "name": "cancelamento_por_hora",
-        "description": (
-            "Retorna em qual(is) horário(s) ocorrem mais cancelamentos. "
-            "Use quando o usuário perguntar 'em que hora mais cancela?', 'qual horário tem mais cancelamento?', "
-            "'o totem trava em alguma hora?', ou 'há pico de cancelamento?'. "
-            "Ajuda a identificar problemas de infraestrutura, totem, ou padrão de uso."
+            "Retorna o total de cancelamentos do período (data, valor total). "
+            "Use quando o usuário perguntar 'quanto cancelei?', 'qual foi meu cancelamento?', "
+            "'tive cancelamento hoje?', ou 'qual é o total de cancelamentos?'. "
+            "Se não especificar período, busca hoje."
         ),
         "input_schema": {
             "type": "object",
@@ -1097,6 +1064,124 @@ async def executar_tool_descobrir_oportunidades(chat_id: int) -> dict:
 
 
 
+async def executar_tool_cancelamentos(chat_id: int, data_ini: str = None, data_fim: str = None) -> dict:
+    """
+    Retorna o total DE CANCELAMENTOS + ÚLTIMO CANCELAMENTO (com TODOS os detalhes: horário, produto, filial, valor).
+    Lê o arquivo que o scraper salva com a tabela detalhada.
+    """
+    import json
+    from pathlib import Path
+    from datetime import datetime
+    agora = datetime.now(BRASILIA)
+    
+    if not data_ini or not data_fim:
+        data_fim = agora.strftime("%d/%m/%Y")
+        data_ini = agora.strftime("%d/%m/%Y")
+    
+    dados = await garantir_dados_periodo(chat_id, data_ini, data_fim, "para buscar cancelamentos")
+    if "erro" in dados:
+        return dados
+    
+    total_cancel = dados.get("total_cancelamento", 0)
+    
+    if isinstance(total_cancel, dict):
+        valor_total = total_cancel.get("_total", 0)
+    else:
+        valor_total = float(total_cancel) if total_cancel else 0
+    
+    if valor_total == 0:
+        return {
+            "tem_cancelamento": False,
+            "mensagem": f"✅ Ótimo! Nenhum cancelamento em {data_ini}.",
+        }
+    
+    # Tenta ler o arquivo de detalhes que o scraper salvou
+    detalhe_path = Path("/tmp/pdvlegal/cancelamentos_detalhe.json")
+    amostra = []
+    headers = []
+    
+    if detalhe_path.exists():
+        try:
+            with open(detalhe_path, "r", encoding="utf-8") as f:
+                detalhe = json.load(f)
+                amostra = detalhe.get("amostra", [])
+                headers = detalhe.get("headers", [])
+                logger.info(f"Cancelamentos — Arquivo detalhe lido: {len(amostra)} linhas, {len(headers)} headers")
+        except Exception as e:
+            logger.warning(f"Cancelamentos — Erro ao ler arquivo detalhe: {e}")
+    
+    # Se não tem amostra, retorna apenas o total
+    if not amostra or not headers:
+        linhas = [f"⚠️ <b>CANCELAMENTOS</b>\n"]
+        linhas.append(f"📅 <b>Data:</b> {data_ini}")
+        linhas.append(f"💰 <b>Valor total:</b> R$ {valor_total:.2f}")
+        linhas.append(f"\n💡 Para detalhes por produto e horário, consulte o PDV Legal.")
+        
+        return {
+            "tem_cancelamento": True,
+            "valor_total": valor_total,
+            "data": data_ini,
+            "mensagem_completa": "\n".join(linhas),
+        }
+    
+    # **TEM DETALHES!** Mapeia o último cancelamento
+    ultimo = amostra[-1]  # Última linha da amostra (último cancelamento)
+    
+    # Mapeia colunas pelos headers
+    resultado_dict = {}
+    for idx, header in enumerate(headers):
+        if idx < len(ultimo):
+            resultado_dict[header] = ultimo[idx]
+    
+    # Extrai os campos principais
+    data_hora = resultado_dict.get("Data", "Não informado")
+    num_venda = resultado_dict.get("Nº Venda", "Não informado")
+    filial = resultado_dict.get("Filial", "Não informado")
+    valor_cancel = resultado_dict.get("Valor cancelamento", "0,00")
+    
+    # Tenta encontrar o produto em várias colunas possíveis
+    produto = None
+    for col in ["Descrição Itens", "Desc. Itens", "Produto", "produto", "Item", "item"]:
+        if col in resultado_dict:
+            prod = resultado_dict[col]
+            if prod and str(prod).strip() and str(prod).lower() != "nan" and prod not in ["0,00", "0.00"]:
+                produto = prod
+                break
+    
+    produto = produto or "Produto não identificado"
+    
+    # Converte valor
+    try:
+        valor_cancel_f = float(valor_cancel.replace(".", "").replace(",", "."))
+    except:
+        valor_cancel_f = 0.0
+    
+    # Monta resposta completa
+    linhas = [f"⚠️ <b>CANCELAMENTOS</b>\n"]
+    linhas.append(f"💰 <b>Valor total:</b> R$ {valor_total:.2f}\n")
+    linhas.append(f"📍 <b>ÚLTIMO CANCELAMENTO:</b>\n")
+    linhas.append(f"📅 <b>Data/Hora:</b> {data_hora}")
+    linhas.append(f"🔢 <b>Nº Venda:</b> {num_venda}")
+    linhas.append(f"📦 <b>Produto:</b> {produto}")
+    linhas.append(f"💰 <b>Valor:</b> R$ {valor_cancel_f:.2f}")
+    linhas.append(f"🏪 <b>Filial:</b> {filial.title()}")
+    
+    logger.info(f"Cancelamentos — Último: {data_hora} | {produto} | R$ {valor_cancel_f:.2f}")
+    
+    return {
+        "tem_cancelamento": True,
+        "valor_total": valor_total,
+        "ultimo_cancelamento": {
+            "data_hora": data_hora,
+            "venda": num_venda,
+            "produto": produto,
+            "valor": valor_cancel_f,
+            "filial": filial,
+        },
+        "mensagem_completa": "\n".join(linhas),
+    }
+
+
 async def executar_tool_investigar_queda(chat_id: int, data_ini: str = None, data_fim: str = None) -> dict:
     """
     Investiga uma queda de faturamento comparando o período contra o histórico. 
@@ -1182,9 +1267,7 @@ EXECUTORES = {
     "descobrir_oportunidades_de_mix": executar_tool_descobrir_oportunidades,
     "investigar_queda": executar_tool_investigar_queda,
     "buscar_ultima_venda": executar_tool_ultima_venda,
-    "buscar_ultimo_cancelamento": executar_tool_ultimo_cancelamento,
-    "produtos_mais_cancelados": executar_tool_produtos_mais_cancelados,
-    "cancelamento_por_hora": executar_tool_cancelamento_por_hora,
+    "buscar_cancelamentos": executar_tool_cancelamentos,
 }
 
 
