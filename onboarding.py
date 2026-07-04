@@ -483,6 +483,18 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"Valor: R$ 29,90/mês.",
             parse_mode="HTML"
         )
+    elif status == "cancelado_mas_ativo":
+        # Cancelado mas ainda tem acesso até assinatura_fim
+        fim = datetime.fromisoformat(usuario["assinatura_fim"])
+        dias = (fim - agora).days + 1
+        await update.message.reply_text(
+            f"⏸️ {b('Assinatura cancelada')}\n\n"
+            f"Você pode usar o MercadoBot até {b(fim.strftime('%d/%m/%Y'))}.\n"
+            f"Restam {b(f'{dias} dias')} de acesso.\n\n"
+            f"Não haverá novas cobranças.\n"
+            f"Use /reativar para voltar a usar após essa data.",
+            parse_mode="HTML"
+        )
     elif status in ("bloqueado", "cancelado", "expirado"):
         await update.message.reply_text(
             f"❌ {b('Assinatura inativa.')}\n\n"
@@ -561,7 +573,7 @@ async def cmd_cancelar_assinatura(update: Update, context: ContextTypes.DEFAULT_
     chat_id = update.effective_chat.id
     usuario = await buscar_usuario(chat_id)
 
-    if not usuario or usuario["status"] not in ("trial", "ativo", "cancelado_mas_ativo"):
+    if not usuario or usuario["status"] not in ("trial", "ativo"):
         await update.message.reply_text(
             "Você não tem uma assinatura ativa para cancelar."
         )
