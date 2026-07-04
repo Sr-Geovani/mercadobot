@@ -2545,15 +2545,24 @@ async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
             trial_fim = datetime.fromisoformat(usuario["trial_fim"])
             dentro_do_trial = agora <= trial_fim
 
+        # Calcula data de vencimento (quando acesso será bloqueado)
+        data_vencimento = None
+        if usuario:
+            assinatura_fim_raw = usuario.get("assinatura_fim")
+            if assinatura_fim_raw:
+                try:
+                    assinatura_fim_dt = datetime.fromisoformat(assinatura_fim_raw)
+                    data_vencimento = assinatura_fim_dt.strftime("%d/%m/%Y")
+                except:
+                    pass
+
         if usuario:
             assinatura_id = usuario.get("assinatura_asaas_id")
             if assinatura_id:
                 # Cancela a assinatura (para cobranças recorrentes)
                 await cancelar_assinatura(assinatura_id)
 
-                # Calcula quantos dias do ciclo atual (de 30) já foram usados,
-                # a partir de quando a assinatura_fim foi definida (assinatura_fim
-                # é sempre definida como agora+31 dias no momento da ativação/renovação)
+                # Calcula quantos dias do ciclo atual (de 30) já foram usados
                 dias_usados = None
                 assinatura_fim_raw = usuario.get("assinatura_fim")
                 if assinatura_fim_raw:
@@ -2564,33 +2573,46 @@ async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     except Exception:
                         dias_usados = None
 
-                # Cancela cobranças futuras pendentes e estorna proporcionalmente o ciclo atual
+                # Cancela cobranças futuras e estorna proporcionalmente
                 await cancelar_cobrancas_futuras(usuario.get("asaas_id", ""), dias_uso_ciclo_atual=dias_usados)
 
-        await atualizar_usuario(chat_id, status="cancelado")
+        await atualizar_usuario(chat_id, status="cancelado_mas_ativo")
 
         kb_reativar = InlineKeyboardMarkup([
             [InlineKeyboardButton("🔄 Reativar assinatura", callback_data="reativar")],
         ])
 
         if dentro_do_trial:
+            # Cancelamento durante trial: sem cobranças
             await msg.reply_text(
-                f"✅ {b('Assinatura cancelada com sucesso.')}\n\n"
-                f"Como o cancelamento ocorreu dentro do período de trial, "
-                f"{b('nenhum valor será cobrado')}.",
+                f"❌ {b('Cancelamento confirmado.')}\n\n"
+                f"Como o cancelamento ocorreu durante o período de trial, "
+                f"{b('nenhum valor será cobrado')}.\n\n"
+                f"Você pode reativar a qualquer momento.",
                 parse_mode="HTML",
                 reply_markup=kb_reativar
             )
         else:
-            await msg.reply_text(
-                f"✅ {b('Assinatura cancelada.')}\n\n"
-                f"Seu acesso foi encerrado e não haverá novas cobranças.\n"
-                f"Cobranças futuras foram canceladas e, se aplicável, "
-                f"você recebeu o estorno proporcional aos dias não utilizados "
-                f"do seu ciclo atual.",
-                parse_mode="HTML",
-                reply_markup=kb_reativar
-            )
+            # Cancelamento com acesso até data de vencimento
+            if data_vencimento:
+                await msg.reply_text(
+                    f"❌ {b('Cancelamento confirmado.')}\n\n"
+                    f"Você pode continuar usando o MercadoBot até {b(data_vencimento)}.\n\n"
+                    f"✅ Não haverá novas cobranças.\n"
+                    f"💰 Cobranças futuras foram canceladas e, se aplicável, "
+                    f"você recebeu o estorno proporcional aos dias não utilizados.\n\n"
+                    f"Pode reativar a qualquer momento.",
+                    parse_mode="HTML",
+                    reply_markup=kb_reativar
+                )
+            else:
+                await msg.reply_text(
+                    f"❌ {b('Cancelamento confirmado.')}\n\n"
+                    f"✅ Não haverá novas cobranças.\n"
+                    f"Pode reativar a qualquer momento.",
+                    parse_mode="HTML",
+                    reply_markup=kb_reativar
+                )
         return
 
     # ─── Atualizar menu ─────────────────────────────────────
