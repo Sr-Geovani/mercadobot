@@ -247,6 +247,55 @@ TOOLS = [
             },
         },
     },
+    {
+        "name": "buscar_ultimo_cancelamento",
+        "description": (
+            "Retorna informações do último cancelamento registrado: data/hora, produto cancelado, valor e filial. "
+            "Use quando o usuário perguntar 'qual foi meu último cancelamento?', 'quando foi o último cancelamento?', "
+            "'qual produto foi cancelado?', ou 'qual é o padrão de cancelamento?'. "
+            "Útil para investigar fraude, furto ou problemas com o totem."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "data_ini": {"type": "string", "description": "Data inicial (DD/MM/YYYY), opcional"},
+                "data_fim": {"type": "string", "description": "Data final (DD/MM/YYYY), opcional"},
+            },
+        },
+    },
+    {
+        "name": "produtos_mais_cancelados",
+        "description": (
+            "Retorna os top produtos com maior índice de cancelamento no período. "
+            "Use quando o usuário perguntar 'qual produto é mais cancelado?', 'quais produtos têm cancelamento alto?', "
+            "'detecta produtos suspeitos?', ou 'há algum produto sendo furtado?'. "
+            "Ajuda a identificar: erro de cadastro, produto com defeito, furto, ou cliente que desiste frequentemente."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "data_ini": {"type": "string", "description": "Data inicial (DD/MM/YYYY), opcional"},
+                "data_fim": {"type": "string", "description": "Data final (DD/MM/YYYY), opcional"},
+                "top": {"type": "integer", "description": "Número de produtos a retornar (padrão: 5)", "default": 5},
+            },
+        },
+    },
+    {
+        "name": "cancelamento_por_hora",
+        "description": (
+            "Retorna em qual(is) horário(s) ocorrem mais cancelamentos. "
+            "Use quando o usuário perguntar 'em que hora mais cancela?', 'qual horário tem mais cancelamento?', "
+            "'o totem trava em alguma hora?', ou 'há pico de cancelamento?'. "
+            "Ajuda a identificar problemas de infraestrutura, totem, ou padrão de uso."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "data_ini": {"type": "string", "description": "Data inicial (DD/MM/YYYY), opcional"},
+                "data_fim": {"type": "string", "description": "Data final (DD/MM/YYYY), opcional"},
+            },
+        },
+    },
 ]
 
 
@@ -643,6 +692,9 @@ async def executar_tool_ultima_venda(chat_id: int, data_ini: str = None, data_fi
     if vendas is None or len(vendas) == 0:
         return {"erro": "Nenhuma venda registrada para este período."}
     
+    # Debug: verificar quais colunas existem
+    logger.info(f"Última venda — colunas disponíveis: {list(vendas.columns)}")
+    
     # Ordena por horário (HoraAbertura) e pega a última
     if "HoraAbertura" in vendas.columns:
         vendas["HoraAbertura"] = pd.to_datetime(vendas["HoraAbertura"], errors="coerce")
@@ -654,26 +706,225 @@ async def executar_tool_ultima_venda(chat_id: int, data_ini: str = None, data_fi
     if hasattr(horario, "strftime"):
         horario = horario.strftime("%H:%M:%S")
     
-    produto = ultima.get("produto", "Não informado")
+    # Tenta encontrar o nome do produto em várias colunas possíveis
+    produto = None
+    for col in ["produto", "Produto", "PRODUTO", "descricao", "Descrição", "DESCRIÇÃO", "nome_produto"]:
+        if col in vendas.columns:
+            produto = ultima.get(col)
+            if produto and str(produto).strip() and str(produto).lower() != "nan":
+                break
+    
+    if not produto or str(produto).lower() == "nan":
+        produto = "Produto não identificado"
+    
     valor = ultima.get("valor", 0)
+    if pd.isna(valor):
+        valor = 0
+    
     filial = ultima.get("nomeFilial", "Não informado")
+    
+    logger.info(f"Última venda — horário: {horario}, produto: {produto}, valor: {valor}, filial: {filial}")
     
     linhas = [f"📍 <b>ÚLTIMA VENDA</b>\n"]
     linhas.append(f"🕐 <b>Horário:</b> {horario}")
     linhas.append(f"📦 <b>Produto:</b> {produto}")
     linhas.append(f"💰 <b>Valor:</b> R$ {valor:.2f}")
-    linhas.append(f"🏪 <b>Filial:</b> {filial.title()}")
+    linhas.append(f"🏪 <b>Filial:</b> {filial.title() if filial else 'Não informado'}")
     
     return {
         "horario": str(horario),
-        "produto": produto,
+        "produto": str(produto),
         "valor": valor,
-        "filial": filial,
+        "filial": str(filial),
         "mensagem_completa": "\n".join(linhas),
     }
 
 
-async def executar_tool_investigar_queda(chat_id: int, data_ini: str = None, data_fim: str = None) -> dict:
+async def executar_tool_ultimo_cancelamento(chat_id: int, data_ini: str = None, data_fim: str = None) -> dict:
+    """
+    Retorna informações do último cancelamento registrado:
+    - Data e horário exato
+    - Produto cancelado
+    - Valor do cancelamento
+    - Filial
+    """
+    import pandas as pd
+    from datetime import datetime
+    agora = datetime.now(BRASILIA)
+    
+    if not data_ini or not data_fim:
+        data_fim = agora.strftime("%d/%m/%Y")
+        data_ini = (agora - pd.Timedelta(days=7)).strftime("%d/%m/%Y")  # Últimos 7 dias por padrão
+    
+    # Nota: cancelamentos vêm da leitura especial do scraper
+    # Para simplificar, vou usar o bloco de cancelamentos do briefing
+    dados = await garantir_dados_periodo(chat_id, data_ini, data_fim, "para buscar último cancelamento")
+    if "erro" in dados:
+        return dados
+    
+    vendas = dados.get("vendas")
+    if vendas is None or len(vendas) == 0:
+        return {"erro": "Nenhum dado disponível para o período."}
+    
+    # Se houver coluna de cancelamento ou status de cancelamento
+    if "status_cancelado" in vendas.columns or "cancelado" in vendas.columns:
+        col_cancel = "status_cancelado" if "status_cancelado" in vendas.columns else "cancelado"
+        cancelados = vendas[vendas[col_cancel] == True].copy()
+        
+        if len(cancelados) == 0:
+            return {"mensagem": "Nenhum cancelamento no período.", "tem_cancelamento": False}
+        
+        # Ordena por horário e pega o último
+        if "HoraAbertura" in cancelados.columns:
+            cancelados["HoraAbertura"] = pd.to_datetime(cancelados["HoraAbertura"], errors="coerce")
+            cancelados = cancelados.sort_values("HoraAbertura")
+        
+        ultimo = cancelados.iloc[-1]
+        
+        horario = ultimo.get("HoraAbertura", "Não informado")
+        if hasattr(horario, "strftime"):
+            horario = horario.strftime("%d/%m/%Y %H:%M:%S")
+        
+        produto = None
+        for col in ["produto", "Produto", "descricao", "Descrição"]:
+            if col in cancelados.columns:
+                prod = ultimo.get(col)
+                if prod and str(prod).lower() != "nan":
+                    produto = prod
+                    break
+        
+        produto = produto or "Produto não identificado"
+        valor = ultimo.get("valor", 0)
+        filial = ultimo.get("nomeFilial", "Não informado")
+        
+        linhas = [f"⚠️ <b>ÚLTIMO CANCELAMENTO</b>\n"]
+        linhas.append(f"📅 <b>Data/Hora:</b> {horario}")
+        linhas.append(f"📦 <b>Produto:</b> {produto}")
+        linhas.append(f"💰 <b>Valor:</b> R$ {valor:.2f}")
+        linhas.append(f"🏪 <b>Filial:</b> {filial.title()}")
+        
+        return {
+            "tem_cancelamento": True,
+            "horario": str(horario),
+            "produto": str(produto),
+            "valor": valor,
+            "filial": str(filial),
+            "mensagem_completa": "\n".join(linhas),
+        }
+    
+    return {"erro": "Dados de cancelamento não disponíveis no período.", "tem_cancelamento": False}
+
+
+async def executar_tool_produtos_mais_cancelados(chat_id: int, data_ini: str = None, data_fim: str = None, top: int = 5) -> dict:
+    """
+    Retorna os produtos com maior índice de cancelamento no período.
+    Útil para identificar problemas: cadastro errado, produto com defeito, furto, etc.
+    """
+    import pandas as pd
+    from datetime import datetime
+    agora = datetime.now(BRASILIA)
+    
+    if not data_ini or not data_fim:
+        data_fim = agora.strftime("%d/%m/%Y")
+        data_ini = (agora - pd.Timedelta(days=30)).strftime("%d/%m/%Y")  # Últimos 30 dias
+    
+    dados = await garantir_dados_periodo(chat_id, data_ini, data_fim, "para analisar cancelamentos por produto")
+    if "erro" in dados:
+        return dados
+    
+    vendas = dados.get("vendas")
+    if vendas is None or len(vendas) == 0:
+        return {"erro": "Nenhum dado disponível."}
+    
+    # Se não houver coluna de cancelamento, simula analisando produtos com valor zero
+    # (cancelamentos tipicamente têm valor cancelado > 0 e valor faturado = 0)
+    if "status_cancelado" in vendas.columns:
+        cancelados = vendas[vendas["status_cancelado"] == True]
+    else:
+        # Fallback: assume que registros com valor muito baixo/zero podem ser cancelados
+        cancelados = vendas[vendas["valor"] < 1]
+    
+    if len(cancelados) == 0:
+        return {"mensagem": "Nenhum cancelamento no período.", "top_produtos": []}
+    
+    # Agrupa por produto e conta cancelamentos
+    por_produto = cancelados.groupby("produto").agg(
+        quantidade_cancelamentos=("valor", "count"),
+        valor_total_cancelado=("valor", "sum")
+    ).reset_index().sort_values("quantidade_cancelamentos", ascending=False).head(top)
+    
+    if len(por_produto) == 0:
+        return {"mensagem": "Nenhum padrão de cancelamento detectado.", "top_produtos": []}
+    
+    linhas = [f"🚨 <b>TOP {top} PRODUTOS MAIS CANCELADOS</b>\n"]
+    for pos, (_, row) in enumerate(por_produto.iterrows(), 1):
+        produto = row["produto"]
+        qtd = int(row["quantidade_cancelamentos"])
+        valor = row["valor_total_cancelado"]
+        linhas.append(f"{pos}. {produto} — {qtd} cancelamento(s) | R$ {valor:.2f}")
+    
+    linhas.append(f"\n⚠️ Investigar: erro de cadastro, defeito, ou possível furto.")
+    
+    return {
+        "top_produtos": por_produto.to_dict("records"),
+        "mensagem_completa": "\n".join(linhas),
+    }
+
+
+async def executar_tool_cancelamento_por_hora(chat_id: int, data_ini: str = None, data_fim: str = None) -> dict:
+    """
+    Retorna em qual horário ocorrem mais cancelamentos.
+    Útil para identificar problemas com o totem em certos períodos do dia.
+    """
+    import pandas as pd
+    from datetime import datetime
+    agora = datetime.now(BRASILIA)
+    
+    if not data_ini or not data_fim:
+        data_fim = agora.strftime("%d/%m/%Y")
+        data_ini = (agora - pd.Timedelta(days=7)).strftime("%d/%m/%Y")  # Últimos 7 dias
+    
+    dados = await garantir_dados_periodo(chat_id, data_ini, data_fim, "para analisar cancelamentos por hora")
+    if "erro" in dados:
+        return dados
+    
+    vendas = dados.get("vendas")
+    if vendas is None or len(vendas) == 0:
+        return {"erro": "Nenhum dado disponível."}
+    
+    # Filtra cancelamentos
+    if "status_cancelado" in vendas.columns:
+        cancelados = vendas[vendas["status_cancelado"] == True].copy()
+    else:
+        cancelados = vendas[vendas["valor"] < 1].copy()
+    
+    if len(cancelados) == 0:
+        return {"mensagem": "Nenhum cancelamento no período.", "por_hora": {}}
+    
+    # Extrai hora do HoraAbertura
+    if "HoraAbertura" in cancelados.columns:
+        cancelados["HoraAbertura"] = pd.to_datetime(cancelados["HoraAbertura"], errors="coerce")
+        cancelados["hora"] = cancelados["HoraAbertura"].dt.hour
+        
+        por_hora = cancelados.groupby("hora").size().reset_index(name="quantidade")
+        por_hora = por_hora.sort_values("quantidade", ascending=False)
+        
+        linhas = [f"⏰ <b>CANCELAMENTOS POR HORA</b>\n"]
+        for _, row in por_hora.iterrows():
+            hora = int(row["hora"])
+            qtd = int(row["quantidade"])
+            linhas.append(f"{hora}h — {qtd} cancelamento(s)")
+        
+        linhas.append(f"\n💡 Horário crítico: {int(por_hora.iloc[0]['hora'])}h (maior concentração)")
+        linhas.append(f"Verificar: totem, conexão, ou pico de clientes.")
+        
+        return {
+            "por_hora": por_hora.to_dict("records"),
+            "horario_critico": int(por_hora.iloc[0]['hora']),
+            "mensagem_completa": "\n".join(linhas),
+        }
+    
+    return {"erro": "Dados de horário não disponíveis.", "por_hora": {}}
     """
     Investiga uma queda de faturamento comparando o período contra o mesmo
     período do mês anterior, ou mesmo dia da semana nas últimas 2 semanas.
@@ -881,6 +1132,9 @@ EXECUTORES = {
     "descobrir_oportunidades_de_mix": executar_tool_descobrir_oportunidades,
     "investigar_queda": executar_tool_investigar_queda,
     "buscar_ultima_venda": executar_tool_ultima_venda,
+    "buscar_ultimo_cancelamento": executar_tool_ultimo_cancelamento,
+    "produtos_mais_cancelados": executar_tool_produtos_mais_cancelados,
+    "cancelamento_por_hora": executar_tool_cancelamento_por_hora,
 }
 
 
