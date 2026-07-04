@@ -1078,27 +1078,33 @@ async def executar_tool_cancelamentos(chat_id: int, data_ini: str = None, data_f
         data_fim = agora.strftime("%d/%m/%Y")
         data_ini = agora.strftime("%d/%m/%Y")
     
+    logger.info(f"[CANCELAMENTOS] Buscando cancelamentos para {data_ini} a {data_fim}")
+    
     dados = await garantir_dados_periodo(chat_id, data_ini, data_fim, "para buscar cancelamentos")
     if "erro" in dados:
+        logger.error(f"[CANCELAMENTOS] Erro ao garantir dados: {dados}")
         return dados
     
     total_cancel = dados.get("total_cancelamento", 0)
+    logger.info(f"[CANCELAMENTOS] total_cancel recebido: {total_cancel} (tipo: {type(total_cancel)})")
     
+    # Extrai o valor total de forma robusta
+    valor_total = 0
     if isinstance(total_cancel, dict):
-        valor_total = total_cancel.get("_total", 0)
+        valor_total = float(total_cancel.get("_total", 0))
+        logger.info(f"[CANCELAMENTOS] É dict, _total = {valor_total}")
     else:
         valor_total = float(total_cancel) if total_cancel else 0
+        logger.info(f"[CANCELAMENTOS] Não é dict, valor = {valor_total}")
     
-    if valor_total == 0:
-        return {
-            "tem_cancelamento": False,
-            "mensagem": f"✅ Ótimo! Nenhum cancelamento em {data_ini}.",
-        }
+    logger.info(f"[CANCELAMENTOS] Valor total final: R$ {valor_total:.2f}")
     
-    # Tenta ler o arquivo de detalhes que o scraper salvou
+    # Tenta ler o arquivo de detalhes SEMPRE (independente do valor_total)
     detalhe_path = Path("/tmp/pdvlegal/cancelamentos_detalhe.json")
     amostra = []
     headers = []
+    
+    logger.info(f"[CANCELAMENTOS] Procurando arquivo: {detalhe_path}")
     
     if detalhe_path.exists():
         try:
@@ -1106,16 +1112,82 @@ async def executar_tool_cancelamentos(chat_id: int, data_ini: str = None, data_f
                 detalhe = json.load(f)
                 amostra = detalhe.get("amostra", [])
                 headers = detalhe.get("headers", [])
-                logger.info(f"Cancelamentos — Arquivo detalhe lido: {len(amostra)} linhas, {len(headers)} headers")
+                logger.info(f"[CANCELAMENTOS] Arquivo lido: {len(amostra)} linhas, {len(headers)} headers")
         except Exception as e:
-            logger.warning(f"Cancelamentos — Erro ao ler arquivo detalhe: {e}")
+            logger.error(f"[CANCELAMENTOS] Erro ao ler arquivo: {e}")
+    else:
+        logger.warning(f"[CANCELAMENTOS] Arquivo não encontrado em {detalhe_path}")
     
-    # Se não tem amostra, retorna apenas o total
-    if not amostra or not headers:
-        linhas = [f"⚠️ <b>CANCELAMENTOS</b>\n"]
-        linhas.append(f"📅 <b>Data:</b> {data_ini}")
-        linhas.append(f"💰 <b>Valor total:</b> R$ {valor_total:.2f}")
-        linhas.append(f"\n💡 Para detalhes por produto e horário, consulte o PDV Legal.")
+    # Se valor_total é 0 E não tem amostra, sem cancelamento
+    if valor_total == 0 and not amostra:
+        logger.info(f"[CANCELAMENTOS] Sem dados de cancelamento")
+        return {
+            "tem_cancelamento": False,
+            "mensagem": f"✅ Ótimo! Nenhum cancelamento em {data_ini}.",
+        }
+    
+    # **TEM CANCELAMENTOS!** Monta resposta
+    linhas = [f"⚠️ <b>CANCELAMENTOS</b>\n"]
+    linhas.append(f"💰 <b>Valor total:</b> R$ {valor_total:.2f}")
+    
+    # Se tem detalhes, adiciona o último
+    if amostra and headers:
+        logger.info(f"[CANCELAMENTOS] Processando último cancelamento")
+        ultimo = amostra[-1]  # Última linha (último cancelamento)
+        
+        # Mapeia colunas
+        resultado_dict = {}
+        for idx, header in enumerate(headers):
+            if idx < len(ultimo):
+                resultado_dict[header] = ultimo[idx]
+        
+        data_hora = resultado_dict.get("Data", "Não informado")
+        num_venda = resultado_dict.get("Nº Venda", "Não informado")
+        filial = resultado_dict.get("Filial", "Não informado")
+        valor_cancel = resultado_dict.get("Valor cancelamento", "0,00")
+        
+        # Tenta encontrar produto em várias colunas
+        produto = None
+        for col in ["Descrição Itens", "Desc. Itens", "Produto", "produto", "Item"]:
+            if col in resultado_dict:
+                prod = resultado_dict[col]
+                if prod and str(prod).strip() and str(prod).lower() != "nan" and prod not in ["0,00", "0.00"]:
+                    produto = prod
+                    break
+        
+        produto = produto or "Produto não identificado"
+        
+        # Converte valor
+        try:
+            valor_cancel_f = float(valor_cancel.replace(".", "").replace(",", "."))
+        except:
+            valor_cancel_f = 0.0
+        
+        linhas.append(f"\n📍 <b>ÚLTIMO CANCELAMENTO:</b>\n")
+        linhas.append(f"📅 <b>Data/Hora:</b> {data_hora}")
+        linhas.append(f"🔢 <b>Nº Venda:</b> {num_venda}")
+        linhas.append(f"📦 <b>Produto:</b> {produto}")
+        linhas.append(f"💰 <b>Valor:</b> R$ {valor_cancel_f:.2f}")
+        linhas.append(f"🏪 <b>Filial:</b> {filial.title()}")
+        
+        logger.info(f"[CANCELAMENTOS] Último: {data_hora} | {produto} | R$ {valor_cancel_f:.2f}")
+        
+        return {
+            "tem_cancelamento": True,
+            "valor_total": valor_total,
+            "ultimo_cancelamento": {
+                "data_hora": data_hora,
+                "venda": num_venda,
+                "produto": produto,
+                "valor": valor_cancel_f,
+                "filial": filial,
+            },
+            "mensagem_completa": "\n".join(linhas),
+        }
+    else:
+        # Tem total mas sem detalhes (saída de fallback)
+        linhas.append(f"\n💡 Para detalhes, consulte o PDV Legal.")
+        logger.info(f"[CANCELAMENTOS] Tem total mas sem detalhes")
         
         return {
             "tem_cancelamento": True,
@@ -1123,63 +1195,6 @@ async def executar_tool_cancelamentos(chat_id: int, data_ini: str = None, data_f
             "data": data_ini,
             "mensagem_completa": "\n".join(linhas),
         }
-    
-    # **TEM DETALHES!** Mapeia o último cancelamento
-    ultimo = amostra[-1]  # Última linha da amostra (último cancelamento)
-    
-    # Mapeia colunas pelos headers
-    resultado_dict = {}
-    for idx, header in enumerate(headers):
-        if idx < len(ultimo):
-            resultado_dict[header] = ultimo[idx]
-    
-    # Extrai os campos principais
-    data_hora = resultado_dict.get("Data", "Não informado")
-    num_venda = resultado_dict.get("Nº Venda", "Não informado")
-    filial = resultado_dict.get("Filial", "Não informado")
-    valor_cancel = resultado_dict.get("Valor cancelamento", "0,00")
-    
-    # Tenta encontrar o produto em várias colunas possíveis
-    produto = None
-    for col in ["Descrição Itens", "Desc. Itens", "Produto", "produto", "Item", "item"]:
-        if col in resultado_dict:
-            prod = resultado_dict[col]
-            if prod and str(prod).strip() and str(prod).lower() != "nan" and prod not in ["0,00", "0.00"]:
-                produto = prod
-                break
-    
-    produto = produto or "Produto não identificado"
-    
-    # Converte valor
-    try:
-        valor_cancel_f = float(valor_cancel.replace(".", "").replace(",", "."))
-    except:
-        valor_cancel_f = 0.0
-    
-    # Monta resposta completa
-    linhas = [f"⚠️ <b>CANCELAMENTOS</b>\n"]
-    linhas.append(f"💰 <b>Valor total:</b> R$ {valor_total:.2f}\n")
-    linhas.append(f"📍 <b>ÚLTIMO CANCELAMENTO:</b>\n")
-    linhas.append(f"📅 <b>Data/Hora:</b> {data_hora}")
-    linhas.append(f"🔢 <b>Nº Venda:</b> {num_venda}")
-    linhas.append(f"📦 <b>Produto:</b> {produto}")
-    linhas.append(f"💰 <b>Valor:</b> R$ {valor_cancel_f:.2f}")
-    linhas.append(f"🏪 <b>Filial:</b> {filial.title()}")
-    
-    logger.info(f"Cancelamentos — Último: {data_hora} | {produto} | R$ {valor_cancel_f:.2f}")
-    
-    return {
-        "tem_cancelamento": True,
-        "valor_total": valor_total,
-        "ultimo_cancelamento": {
-            "data_hora": data_hora,
-            "venda": num_venda,
-            "produto": produto,
-            "valor": valor_cancel_f,
-            "filial": filial,
-        },
-        "mensagem_completa": "\n".join(linhas),
-    }
 
 
 async def executar_tool_investigar_queda(chat_id: int, data_ini: str = None, data_fim: str = None) -> dict:
