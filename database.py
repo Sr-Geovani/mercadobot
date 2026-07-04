@@ -155,10 +155,11 @@ async def atualizar_usuario(chat_id: int, **campos):
 
 async def usuario_tem_acesso(chat_id: int) -> tuple[bool, str]:
     """
-    Verifica acesso SIMPLES:
-    - Se assinatura_fim existe e agora <= assinatura_fim: LIBERA
-    - Se trial_fim existe e agora <= trial_fim: LIBERA  
-    - Senão: BLOQUEIA
+    Verifica acesso baseado em DATAS (não em status):
+    - Se assinatura_fim existe: usa assinatura_fim como fonte de verdade
+      * agora <= assinatura_fim: LIBERA acesso
+      * agora > assinatura_fim: BLOQUEIA acesso (não checa trial_fim)
+    - Se assinatura_fim NÃO existe, checa trial_fim
     """
     user = await buscar_usuario(chat_id)
     if not user:
@@ -166,35 +167,39 @@ async def usuario_tem_acesso(chat_id: int) -> tuple[bool, str]:
 
     agora = datetime.now(BRASILIA)
     
-    # 1. Verifica assinatura_fim (prioridade)
+    # PRIORIDADE ABSOLUTA: assinatura_fim
     assinatura_fim_raw = user.get("assinatura_fim")
     if assinatura_fim_raw:
         try:
             fim = datetime.fromisoformat(assinatura_fim_raw)
             if agora <= fim:
+                # ✅ Assinatura ainda válida
                 return True, "ativo"
             else:
-                # Expirou
+                # ❌ Assinatura expirou - NÃO checa trial_fim!
                 await atualizar_usuario(chat_id, status="expirado")
                 return False, "expirado"
-        except:
+        except Exception as e:
+            logger.error(f"Erro ao parsear assinatura_fim: {e}")
             pass
     
-    # 2. Verifica trial_fim (fallback)
+    # Se NÃO tem assinatura_fim, checa trial_fim
     trial_fim_raw = user.get("trial_fim")
     if trial_fim_raw:
         try:
             fim = datetime.fromisoformat(trial_fim_raw)
             if agora <= fim:
+                # ✅ Trial ainda válido
                 return True, "trial"
             else:
-                # Trial expirou
+                # ❌ Trial expirou
                 await atualizar_usuario(chat_id, status="bloqueado")
                 return False, "trial_expirado"
-        except:
+        except Exception as e:
+            logger.error(f"Erro ao parsear trial_fim: {e}")
             pass
     
-    # 3. Sem datas válidas = bloqueado
+    # Sem nenhuma data válida
     return False, "bloqueado"
 
 
