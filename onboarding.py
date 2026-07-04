@@ -83,13 +83,27 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return ConversationHandler.END
 
-        if status in ("bloqueado", "cancelado", "expirado"):
+        if status in ("bloqueado", "cancelado", "cancelado_mas_ativo", "expirado"):
+            # Assinatura cancelada ou expirada
+            fim = usuario.get("assinatura_fim")
+            if status == "cancelado_mas_ativo" and fim:
+                # Cancelado mas ainda com acesso
+                try:
+                    from datetime import datetime
+                    fim_dt = datetime.fromisoformat(fim)
+                    data_str = fim_dt.strftime("%d/%m/%Y")
+                    mensagem = f"Sua assinatura foi cancelada mas você pode usar até {b(data_str)}."
+                except:
+                    mensagem = "Sua assinatura foi cancelada mas você ainda tem acesso."
+            else:
+                mensagem = "Sua assinatura está inativa."
+            
             kb = InlineKeyboardMarkup([
                 [InlineKeyboardButton("🔄 Reativar assinatura", callback_data="reativar")],
             ])
             await update.message.reply_text(
                 f"👋 {b(nome)}, bem-vindo de volta!\n\n"
-                f"Sua assinatura está inativa. Para reativar:",
+                f"{mensagem} Para reativar:",
                 parse_mode="HTML",
                 reply_markup=kb
             )
