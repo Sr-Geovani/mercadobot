@@ -166,40 +166,52 @@ async def usuario_tem_acesso(chat_id: int) -> tuple[bool, str]:
         return False, "nao_cadastrado"
 
     agora = datetime.now(BRASILIA)
+    logger.info(f"[ACESSO-DEBUG] chat_id={chat_id}, agora={agora}")
     
     # PRIORIDADE ABSOLUTA: assinatura_fim
     assinatura_fim_raw = user.get("assinatura_fim")
+    logger.info(f"[ACESSO-DEBUG] assinatura_fim_raw={assinatura_fim_raw}")
+    
     if assinatura_fim_raw:
         try:
             fim = datetime.fromisoformat(assinatura_fim_raw)
+            logger.info(f"[ACESSO-DEBUG] fim={fim}, agora={agora}, agora <= fim = {agora <= fim}")
+            
             if agora <= fim:
                 # ✅ Assinatura ainda válida
+                logger.info(f"[ACESSO-DEBUG] ✅ LIBERA - assinatura válida")
                 return True, "ativo"
             else:
                 # ❌ Assinatura expirou - NÃO checa trial_fim!
+                logger.info(f"[ACESSO-DEBUG] ❌ BLOQUEIA - assinatura expirou")
                 await atualizar_usuario(chat_id, status="expirado")
                 return False, "expirado"
         except Exception as e:
-            logger.error(f"Erro ao parsear assinatura_fim: {e}")
+            logger.error(f"[ACESSO-DEBUG] Erro ao parsear assinatura_fim: {e}")
             pass
     
     # Se NÃO tem assinatura_fim, checa trial_fim
     trial_fim_raw = user.get("trial_fim")
+    logger.info(f"[ACESSO-DEBUG] trial_fim_raw={trial_fim_raw}")
+    
     if trial_fim_raw:
         try:
             fim = datetime.fromisoformat(trial_fim_raw)
             if agora <= fim:
                 # ✅ Trial ainda válido
+                logger.info(f"[ACESSO-DEBUG] ✅ LIBERA - trial válido")
                 return True, "trial"
             else:
                 # ❌ Trial expirou
+                logger.info(f"[ACESSO-DEBUG] ❌ BLOQUEIA - trial expirou")
                 await atualizar_usuario(chat_id, status="bloqueado")
                 return False, "trial_expirado"
         except Exception as e:
-            logger.error(f"Erro ao parsear trial_fim: {e}")
+            logger.error(f"[ACESSO-DEBUG] Erro ao parsear trial_fim: {e}")
             pass
     
     # Sem nenhuma data válida
+    logger.info(f"[ACESSO-DEBUG] ❌ BLOQUEIA - sem datas válidas")
     return False, "bloqueado"
 
 
