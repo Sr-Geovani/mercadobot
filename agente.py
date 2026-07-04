@@ -897,8 +897,8 @@ async def executar_tool_cancelamento_por_hora(chat_id: int, data_ini: str = None
     if vendas_hoje is None or len(vendas_hoje) == 0:
         return {"erro": "Sem dados de vendas para o período solicitado."}
     
-    # Busca histórico (últimas 2 semanas antes, mesmo dia da semana)
-    dias_atras = 14
+    # Busca histórico de 6 semanas (backfill) para Z-score por dia da semana
+    dias_atras = 42
     data_hist_ini = (agora - timedelta(days=dias_atras)).strftime("%d/%m/%Y")
     data_hist_fim = (agora - timedelta(days=1)).strftime("%d/%m/%Y")
     
@@ -911,7 +911,7 @@ async def executar_tool_cancelamento_por_hora(chat_id: int, data_ini: str = None
         return {"erro": "Sem histórico para comparação."}
     
     # Detecta queda
-    resultado = detectar_queda(vendas_hoje, vendas_hist, threshold=35.0)
+    resultado = detectar_queda(vendas_hoje, vendas_hist)
     
     if not resultado.get("tem_queda"):
         return {
@@ -919,27 +919,52 @@ async def executar_tool_cancelamento_por_hora(chat_id: int, data_ini: str = None
             "desvio": resultado.get("desvio", 0),
             "mensagem": "Seu faturamento está dentro do esperado — sem sinais de queda significativa.",
         }
-    
-    # HÁ QUEDA — monta resposta investigativa
-    linhas = [f"📉 {b('INVESTIGAÇÃO DE QUEDA')}\n"]
-    linhas.append(f"Faturamento: R$ {resultado.get('faturamento_hoje', 0):,.2f}")
-    linhas.append(f"Esperado: R$ {resultado.get('faturamento_esperado', 0):,.2f}")
-    linhas.append(f"Desvio: {resultado.get('desvio_percentual', 0):.1f}%\n")
-    
+
+    return _formatar_resposta_queda(resultado)
+
+
+def _formatar_resposta_queda(resultado: dict) -> dict:
+    """
+    Formata a resposta de queda usando os campos do Z-score.
+    Mensagem varia conforme a confiança (inicial / média / alta).
+    """
+    confianca = resultado.get("confianca", "media")
+    fat_hoje = resultado.get("faturamento_hoje", 0)
+
+    if confianca == "inicial":
+        linhas = [f"⚠️ {b('Possível queda — análise inicial')}\n"]
+        linhas.append(f"Faturamento hoje: R$ {fat_hoje:,.2f}")
+        linhas.append(f"Média recente: R$ {resultado.get('faturamento_esperado', 0):,.2f} "
+                      f"({resultado.get('desvio_percentual', 0):.0f}%)\n")
+    else:
+        dia = resultado.get("dia_semana", "hoje")
+        faixa_min = resultado.get("faixa_min", 0)
+        faixa_max = resultado.get("faixa_max", 0)
+        diferenca = abs(resultado.get("diferenca", 0))
+        linhas = [f"⚠️ {b(f'Queda fora do padrão — {dia}')}\n"]
+        linhas.append(f"Faturamento hoje: R$ {fat_hoje:,.2f}")
+        linhas.append(f"Esperado p/ {dia}: R$ {faixa_min:,.2f} a R$ {faixa_max:,.2f}")
+        linhas.append(f"Você está R$ {diferenca:,.2f} abaixo da faixa normal.\n")
+
     causas = resultado.get("causas", [])
     if causas:
-        linhas.append(f"{b('Possível causa(s):')}")
+        linhas.append(f"🔍 {b('O que pode explicar:')}")
         for causa in causas:
             linhas.append(f"  • {causa}")
+
+    n_amostras = resultado.get("n_amostras", 0)
+    if confianca == "inicial":
+        linhas.append(f"\n{i(f'Ainda estou aprendendo seu padrão ({n_amostras} de 6 amostras). A precisão melhora a cada semana.')}")
+    elif confianca == "media":
+        linhas.append(f"\n{i(f'Baseado em {n_amostras} dias anteriores — análise ainda afinando.')}")
     else:
-        linhas.append("Queda detectada — investigar as condições operacionais.")
-    
-    linhas.append(f"\n{i('Dica: Verifique totem, reposição de produtos, feriado ou fechamento da loja.')}")
-    
+        dia = resultado.get("dia_semana", "dias")
+        linhas.append(f"\n{i(f'Baseado em {n_amostras} {dia}s anteriores.')}")
+
     return {
         "tem_queda": True,
-        "desvio_percentual": resultado.get("desvio_percentual"),
-        "faturamento_hoje": resultado.get("faturamento_hoje"),
+        "confianca": confianca,
+        "faturamento_hoje": fat_hoje,
         "causas": causas,
         "mensagem_completa": "\n".join(linhas),
     }
@@ -1051,17 +1076,92 @@ async def executar_tool_descobrir_oportunidades(chat_id: int) -> dict:
             ),
         }
 
+    # Transforma volume bruto em NÍVEL DE OPORTUNIDADE (opção 2).
+    # Não expõe quantidade vendida — o operador quer descobrir o item,
+    # não saber quanto outros venderam. Classifica por quantas lojas vendem
+    # e volume relativo, apresentando como alta/média oportunidade.
+    sugestoes_raw = resultado["sugestoes"][:10]
+
+    # Calcula o teto de volume para normalizar em faixas
+    vol_max = max((s.get("volume_total_outras", 0) for s in sugestoes_raw), default=0)
+
+    sugestoes_formatadas = []
+    for s in sugestoes_raw:
+        lojas = s.get("lojas_que_vendem", 0)
+        vol = s.get("volume_total_outras", 0)
+        # Nível de oportunidade: combina alcance (nº lojas) e volume relativo
+        score_rel = (vol / vol_max) if vol_max > 0 else 0
+        if lojas >= 3 or score_rel >= 0.6:
+            nivel = "alta"
+            selo = "🔥 alta oportunidade"
+        elif lojas == 2 or score_rel >= 0.3:
+            nivel = "media"
+            selo = "oportunidade média"
+        else:
+            nivel = "baixa"
+            selo = "vale testar"
+        sugestoes_formatadas.append({
+            "produto": s["produto"],
+            "nivel": nivel,
+            "selo": selo,
+        })
+
     return {
         "tem_sugestoes": True,
         "outros_clientes": resultado["outros_clientes"],
-        "sugestoes": resultado["sugestoes"][:10],  # Top 10
+        "sugestoes": sugestoes_formatadas,
         "observacao": (
-            "Estes são produtos que vendem bem em outras lojas e que você ainda não "
-            "tem no catálogo. Considere a realidade do seu público antes de adotar — "
-            "nem todo produto de outra região funciona igual."
+            "Estes são produtos com forte potencial que você ainda não vende. "
+            "Apresento por nível de oportunidade (não por volume) — a ideia é te "
+            "ajudar a descobrir itens novos. Considere a realidade do seu público "
+            "antes de adotar: nem todo produto funciona igual em toda operação."
         ),
     }
 
+
+
+def _formatar_alertas_cancelamento(alertas: list) -> str:
+    """
+    Formata os alertas de cancelamento suspeito em texto para o operador.
+    Prioriza os mais críticos (valor alto) e limita a 2 alertas para não poluir.
+    """
+    if not alertas:
+        return ""
+
+    linhas = [f"\n\n🚨 <b>SINAIS DE ATENÇÃO</b>"]
+
+    for alerta in alertas[:2]:  # no máximo 2 para não virar spam
+        tipo = alerta.get("tipo")
+
+        if tipo == "valor_alto":
+            tc = alerta.get("tipo_cancelamento", "")
+            filial = str(alerta.get("filial", "")).title()
+            linhas.append(
+                f"\n💸 <b>Cancelamento de valor alto</b>\n"
+                f"Venda {alerta.get('venda', '?')} — R$ {alerta.get('valor', 0):.2f} ({tc})\n"
+                f"Filial: {filial} • {alerta.get('data_hora', '')}\n"
+                f"Está bem acima dos seus cancelamentos habituais. Vale conferir."
+            )
+        elif tipo == "taxa_dia":
+            linhas.append(
+                f"\n📊 <b>Cancelamentos acima do normal hoje</b>\n"
+                f"{alerta.get('qtd', 0)} cancelamentos (R$ {alerta.get('valor_total', 0):.2f}) — "
+                f"acima do seu padrão para este dia."
+            )
+        elif tipo == "concentracao_horaria":
+            linhas.append(
+                f"\n🕐 <b>Concentração de cancelamentos</b>\n"
+                f"{alerta.get('qtd', 0)} cancelamentos concentrados às {alerta.get('hora', '?')}h. "
+                f"Vale verificar o que aconteceu nesse horário."
+            )
+        elif tipo == "janela_curta":
+            linhas.append(
+                f"\n⏱️ <b>Cancelamentos em sequência</b>\n"
+                f"{alerta.get('qtd', 0)} cancelamentos em {alerta.get('minutos', 0)} min "
+                f"(a partir das {alerta.get('inicio', '?')})."
+            )
+
+    return "\n".join(linhas)
 
 
 async def executar_tool_cancelamentos(chat_id: int, data_ini: str = None, data_fim: str = None) -> dict:
@@ -1217,7 +1317,18 @@ async def executar_tool_cancelamentos(chat_id: int, data_ini: str = None, data_f
         linhas.append(f"❌ <b>Cancelado:</b> R$ {valor_cancel_f:.2f}")
         
         logger.info(f"[CANCELAMENTOS] Último: {data_hora} | {filial} | {tipo_cancelamento} | Faturado: R$ {faturado_f:.2f}")
-        
+
+        # ─── DETECÇÃO DE CANCELAMENTOS SUSPEITOS (mitigação de furto) ───
+        try:
+            from bot import detectar_cancelamentos_suspeitos
+            deteccao = detectar_cancelamentos_suspeitos(todas_linhas, headers, piso_valor_alto=40.0)
+            if deteccao.get("tem_alerta"):
+                bloco = _formatar_alertas_cancelamento(deteccao["alertas"])
+                if bloco:
+                    linhas.append(bloco)
+        except Exception as e:
+            logger.warning(f"[CANCELAMENTOS] Erro na detecção de suspeitos: {e}")
+
         return {
             "tem_cancelamento": True,
             "valor_total": valor_total,
@@ -1274,8 +1385,8 @@ async def executar_tool_investigar_queda(chat_id: int, data_ini: str = None, dat
     if vendas_hoje is None or len(vendas_hoje) == 0:
         return {"erro": "Sem dados de vendas para o período solicitado."}
     
-    # Busca histórico (últimas 2 semanas antes, mesmo dia da semana)
-    dias_atras = 14
+    # Busca histórico de 6 semanas (backfill) para Z-score por dia da semana
+    dias_atras = 42
     data_hist_ini = (agora - timedelta(days=dias_atras)).strftime("%d/%m/%Y")
     data_hist_fim = (agora - timedelta(days=1)).strftime("%d/%m/%Y")
     
@@ -1288,7 +1399,7 @@ async def executar_tool_investigar_queda(chat_id: int, data_ini: str = None, dat
         return {"erro": "Sem histórico para comparação."}
     
     # Detecta queda
-    resultado = detectar_queda(vendas_hoje, vendas_hist, threshold=35.0)
+    resultado = detectar_queda(vendas_hoje, vendas_hist)
     
     if not resultado.get("tem_queda"):
         return {
@@ -1297,29 +1408,8 @@ async def executar_tool_investigar_queda(chat_id: int, data_ini: str = None, dat
             "mensagem": "Seu faturamento está dentro do esperado — sem sinais de queda significativa.",
         }
     
-    # HÁ QUEDA — monta resposta investigativa
-    linhas = [f"📉 {b('INVESTIGAÇÃO DE QUEDA')}\n"]
-    linhas.append(f"Faturamento: R$ {resultado.get('faturamento_hoje', 0):,.2f}")
-    linhas.append(f"Esperado: R$ {resultado.get('faturamento_esperado', 0):,.2f}")
-    linhas.append(f"Desvio: {resultado.get('desvio_percentual', 0):.1f}%\n")
-    
-    causas = resultado.get("causas", [])
-    if causas:
-        linhas.append(f"{b('Possível causa(s):')}")
-        for causa in causas:
-            linhas.append(f"  • {causa}")
-    else:
-        linhas.append("Queda detectada — investigar as condições operacionais.")
-    
-    linhas.append(f"\n{i('Dica: Verifique totem, reposição de produtos, feriado ou fechamento da loja.')}")
-    
-    return {
-        "tem_queda": True,
-        "desvio_percentual": resultado.get("desvio_percentual"),
-        "faturamento_hoje": resultado.get("faturamento_hoje"),
-        "causas": causas,
-        "mensagem_completa": "\n".join(linhas),
-    }
+    # HÁ QUEDA — usa a formatação padronizada (Z-score)
+    return _formatar_resposta_queda(resultado)
 
 
 # Mapa de nome de tool -> função Python que efetivamente a executa
@@ -1429,7 +1519,14 @@ def _construir_system_prompt(fatos_cliente: dict = None) -> str:
         "concentrados na filial X — vale verificar o totem de lá'. Use as "
         "ferramentas de análise para cruzar filial, produto e período antes de "
         "concluir. Se não houver dado suficiente para apontar a causa, seja honesto "
-        "sobre isso em vez de inventar uma."
+        "sobre isso em vez de inventar uma.\n\n"
+        "OPORTUNIDADES DE MIX: ao apresentar sugestões de produtos que o operador "
+        "ainda não vende (ferramenta descobrir_oportunidades_de_mix), NUNCA cite "
+        "quantidade vendida ou volume de outras lojas. O objetivo é o operador "
+        "DESCOBRIR itens novos, não saber quanto os outros venderam. Apresente cada "
+        "sugestão pelo NÍVEL de oportunidade (campo 'selo': '🔥 alta oportunidade', "
+        "'oportunidade média', 'vale testar') — uma linha por produto com 💡. "
+        "Enquadre como potencial de sortimento, não como número de vendas."
     )
 
     # Memória persistente parcial — injeta fatos consolidados do cliente, se houver,
@@ -1530,9 +1627,9 @@ def obter_historico_sessao(chat_id: int) -> list[dict]:
 
 def salvar_historico_sessao(chat_id: int, historico: list[dict], limite_mensagens: int = 20):
     """
-    Salva o histórico atualizado, truncando para as últimas N mensagens
-    (evita o histórico crescer sem limite dentro do mesmo dia e inflar o
-    custo de cada chamada nova).
+    Salva o histórico atualizado, truncando para as últimas N mensagens.
+    IMPORTANTE: Não trunca no meio de um par tool_use/tool_result, pois isso
+    deixa um tool_result órfão e a API da Anthropic rejeita com erro 400.
     """
     from bot import dados_usuario
 
@@ -1540,9 +1637,32 @@ def salvar_historico_sessao(chat_id: int, historico: list[dict], limite_mensagen
     if chat_id not in dados_usuario:
         dados_usuario[chat_id] = {}
 
+    # Trunca respeitando pares tool_use/tool_result
+    historico_truncado = historico[-limite_mensagens:]
+    
+    # Se a primeira mensagem for um tool_result órfão, remove ela
+    # (o tool_use correspondente foi cortado no truncamento)
+    while historico_truncado:
+        primeira = historico_truncado[0]
+        content = primeira.get("content")
+        
+        # Verifica se é uma mensagem com tool_result
+        tem_tool_result = False
+        if isinstance(content, list):
+            for bloco in content:
+                if isinstance(bloco, dict) and bloco.get("type") == "tool_result":
+                    tem_tool_result = True
+                    break
+        
+        if tem_tool_result:
+            # Remove o tool_result órfão do início
+            historico_truncado = historico_truncado[1:]
+        else:
+            break
+
     dados_usuario[chat_id]["agente_sessao"] = {
         "data": hoje,
-        "historico": historico[-limite_mensagens:],
+        "historico": historico_truncado,
     }
 
 

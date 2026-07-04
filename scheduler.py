@@ -819,6 +819,105 @@ async def enviar_fechamento_semanal():
             logger.error(f"Erro no fechamento semanal para {chat_id}: {e}")
 
 
+async def verificar_alertas_proativos(bot, chat_id, pdv_email, pdv_senha, vendas_hoje, total_cancel, hora_atual=None):
+    """
+    Verificação PROATIVA reutilizável nas janelas (13h/19h/20h/22h):
+    1. Ritmo de faturamento (acumulado até a hora vs mesmo dia da semana) + projeção
+    2. Cancelamentos suspeitos (valor alto, concentração, etc)
+
+    Baixa 6 semanas de histórico (para o Z-score de ritmo) e envia alertas
+    somente quando há sinal relevante. Não envia nada se está tudo normal.
+
+    Retorna lista de mensagens enviadas (para log/controle).
+    """
+    from datetime import datetime, timedelta
+    from bot import (detectar_queda_ritmo, detectar_cancelamentos_suspeitos,
+                     normalizar_vendas, kb_menu)
+    import json
+    from pathlib import Path
+
+    mensagens_enviadas = []
+    agora = datetime.now(BRASILIA)
+    if hora_atual is None:
+        hora_atual = agora.hour
+
+    # ─── 1. RITMO DE FATURAMENTO ───
+    try:
+        # Baixa histórico de 6 semanas (só uma vez por execução)
+        d_ini = (agora - timedelta(days=42)).strftime("%d/%m/%Y")
+        d_fim = (agora - timedelta(days=1)).strftime("%d/%m/%Y")
+
+        from scraper import baixar_relatorios_periodo
+        path_v_hist, _, _ = await asyncio.get_event_loop().run_in_executor(
+            None, baixar_relatorios_periodo, d_ini, d_fim, pdv_email, pdv_senha
+        )
+        vendas_hist = normalizar_vendas(pd.read_excel(path_v_hist))
+
+        resultado_ritmo = detectar_queda_ritmo(vendas_hoje, vendas_hist, hora_atual=hora_atual)
+
+        if resultado_ritmo.get("tem_queda"):
+            msg = _formatar_ritmo_queda(resultado_ritmo)
+            await bot.send_message(chat_id=chat_id, text=msg, parse_mode="HTML",
+                                    reply_markup=kb_menu())
+            mensagens_enviadas.append("ritmo")
+            await asyncio.sleep(2)
+    except Exception as e:
+        logger.warning(f"Alerta ritmo falhou para {chat_id}: {e}")
+
+    # ─── 2. CANCELAMENTOS SUSPEITOS ───
+    try:
+        detalhe_path = Path("/tmp/pdvlegal/cancelamentos_detalhe.json")
+        if detalhe_path.exists():
+            with open(detalhe_path, "r", encoding="utf-8") as f:
+                detalhe = json.load(f)
+            todas_linhas = detalhe.get("linhas", detalhe.get("amostra", []))
+            headers = detalhe.get("headers", [])
+
+            if todas_linhas and headers:
+                deteccao = detectar_cancelamentos_suspeitos(todas_linhas, headers, piso_valor_alto=40.0)
+                if deteccao.get("tem_alerta"):
+                    from agente import _formatar_alertas_cancelamento
+                    bloco = _formatar_alertas_cancelamento(deteccao["alertas"])
+                    if bloco:
+                        await bot.send_message(chat_id=chat_id, text=bloco.strip(),
+                                                parse_mode="HTML", reply_markup=kb_menu())
+                        mensagens_enviadas.append("cancelamento")
+                        await asyncio.sleep(2)
+    except Exception as e:
+        logger.warning(f"Alerta cancelamento falhou para {chat_id}: {e}")
+
+    return mensagens_enviadas
+
+
+def _formatar_ritmo_queda(r: dict) -> str:
+    """Formata o alerta proativo de ritmo de faturamento."""
+    dia = r.get("dia_semana", "hoje")
+    hora = r.get("hora_atual", "")
+    acum = r.get("acumulado_atual", 0)
+    esperado = r.get("esperado_ate_agora_media", 0)
+    projecao = r.get("projecao_fechamento")
+    media_dia = r.get("media_fechamento_dia", 0)
+
+    linhas = [f"⚠️ {b(f'Ritmo abaixo do normal — {dia}')}\n"]
+    linhas.append(f"Até as {hora}h você fez: {b(f'R$ {acum:,.2f}')}")
+    linhas.append(f"Um {dia} normal já teria: R$ {esperado:,.2f} neste horário")
+
+    if projecao and media_dia:
+        linhas.append(
+            f"\n📉 No ritmo atual, o dia fecha em ~{b(f'R$ {projecao:,.2f}')} "
+            f"(um {dia} costuma fechar R$ {media_dia:,.2f})"
+        )
+
+    causas = r.get("causas", [])
+    if causas:
+        linhas.append(f"\n🔍 {b('O que pode explicar:')}")
+        for c in causas:
+            linhas.append(f"  • {c}")
+
+    linhas.append(f"\n{i('Ainda dá tempo de reagir — verifique totens, reposição e acesso.')}")
+    return "\n".join(linhas)
+
+
 async def enviar_parcial_dia():
     """
     Dispara às 13h todos os dias.
@@ -876,6 +975,14 @@ async def enviar_parcial_dia():
                 )
                 await asyncio.sleep(3)
                 continue
+
+            # ─── VERIFICAÇÃO PROATIVA (ritmo + cancelamento suspeito) ───
+            try:
+                await verificar_alertas_proativos(
+                    bot, chat_id, pdv_email, pdv_senha, vendas, total_cancel, hora_atual=13
+                )
+            except Exception as e:
+                logger.warning(f"Parcial 13h: alertas proativos falharam para {chat_id}: {e}")
 
             total  = vendas["valor"].sum()
             n      = len(vendas)
@@ -974,8 +1081,18 @@ async def enviar_alertas_proativos(modo: str = "completo"):
             if len(vendas) == 0:
                 continue
 
-            alertas = []
             hora_atual = agora.hour
+
+            # ─── VERIFICAÇÃO PROATIVA (ritmo + cancelamento suspeito) ───
+            # Roda em todas as janelas (19h/20h/22h) além da parcial das 13h.
+            try:
+                await verificar_alertas_proativos(
+                    bot, chat_id, pdv_email, pdv_senha, vendas, total_cancel, hora_atual=hora_atual
+                )
+            except Exception as e:
+                logger.warning(f"Alertas proativos falharam para {chat_id} às {hora_atual}h: {e}")
+
+            alertas = []
 
             # Alerta de cancelamentos — só no modo completo (qui-dom às 22h)
             if modo == "completo":

@@ -208,62 +208,304 @@ def g_pico(vendas):
     return salvar(fig)
 
 # ─── FORMATAÇÃO HTML (cores no texto) ────────────────────────
+def detectar_queda_ritmo(
+    vendas_hoje: pd.DataFrame,
+    vendas_historico: pd.DataFrame,
+    hora_atual: int = None,
+) -> dict:
+    """
+    Detecção PROATIVA de queda por RITMO: compara o faturamento ACUMULADO até a
+    hora atual com o que os mesmos dias da semana normalmente já tinham feito
+    até essa mesma hora. Compara períodos equivalentes (mesmo ponto do dia),
+    não o total — o que permite avisar cedo, com tempo de reagir.
+
+    Também PROJETA o fechamento do dia usando a curva intradiária média:
+    se historicamente X% do faturamento do dia já saiu até esta hora, projeta
+    o total dividindo o acumulado atual por essa fração.
+
+    Retorna dict com tem_queda, acumulado_atual, esperado_ate_agora (faixa),
+    projecao_fechamento, media_fechamento_dia, e causas.
+    """
+    import numpy as np
+
+    if len(vendas_hoje) == 0 or len(vendas_historico) == 0:
+        return {"tem_queda": False, "motivo": "Sem dados"}
+
+    if hora_atual is None:
+        hora_atual = datetime.now(ZoneInfo("America/Sao_Paulo")).hour
+
+    # Coluna de data/hora
+    col_dh = None
+    for c in ("HoraAbertura", "data", "Data", "dataVenda"):
+        if c in vendas_hoje.columns:
+            col_dh = c
+            break
+    if col_dh is None or col_dh not in vendas_historico.columns:
+        return {"tem_queda": False, "motivo": "Sem coluna de hora"}
+
+    # Dia da semana de hoje
+    dia_semana_hoje = None
+    try:
+        dt_hoje = pd.to_datetime(vendas_hoje[col_dh], errors="coerce", dayfirst=True).dropna()
+        if len(dt_hoje) > 0:
+            dia_semana_hoje = int(dt_hoje.dt.dayofweek.mode()[0])
+    except Exception:
+        pass
+    if dia_semana_hoje is None:
+        return {"tem_queda": False, "motivo": "Sem dia da semana"}
+
+    # Acumulado de HOJE até a hora atual
+    acumulado_atual = vendas_hoje["valor"].sum()
+
+    # Constrói, para cada dia-calendário histórico do mesmo dia-da-semana:
+    #   (a) acumulado até hora_atual  (b) total do dia
+    try:
+        hist = vendas_historico.copy()
+        hist["_dt"] = pd.to_datetime(hist[col_dh], errors="coerce", dayfirst=True)
+        hist = hist.dropna(subset=["_dt"])
+        hist["_dia_cal"] = hist["_dt"].dt.date
+        hist["_dow"] = hist["_dt"].dt.dayofweek
+        hist["_hora"] = hist["_dt"].dt.hour
+
+        hist_dow = hist[hist["_dow"] == dia_semana_hoje]
+        if len(hist_dow) == 0:
+            return {"tem_queda": False, "motivo": "Sem histórico deste dia da semana"}
+
+        acumulados_ate_hora = []
+        totais_dia = []
+        fracoes = []  # % do dia já feito até a hora atual
+
+        for dia_cal, grupo in hist_dow.groupby("_dia_cal"):
+            total_dia = grupo["valor"].sum()
+            ate_hora = grupo[grupo["_hora"] <= hora_atual]["valor"].sum()
+            if total_dia > 0:
+                acumulados_ate_hora.append(ate_hora)
+                totais_dia.append(total_dia)
+                fracoes.append(ate_hora / total_dia)
+    except Exception as e:
+        logger.warning(f"Erro ao construir curva intradiária: {e}")
+        return {"tem_queda": False, "motivo": "Erro no cálculo"}
+
+    n = len(acumulados_ate_hora)
+    if n < 3:
+        # Poucos dados — não arrisca alerta proativo (evita falso positivo)
+        return {"tem_queda": False, "motivo": "Histórico insuficiente", "n_amostras": n}
+
+    media_ate_hora = float(np.mean(acumulados_ate_hora))
+    desvio_ate_hora = float(np.std(acumulados_ate_hora, ddof=1)) if n > 1 else 0.0
+    media_total_dia = float(np.mean(totais_dia))
+    fracao_media = float(np.mean(fracoes)) if fracoes else 0.0
+
+    # Faixa esperada até a hora atual (1.5 desvios se maduro, 2.0 se médio)
+    n_desvios = 1.5 if n >= 6 else 2.0
+    limite_inferior = media_ate_hora - (n_desvios * desvio_ate_hora)
+
+    # Projeção de fechamento: acumulado / fração média do dia já decorrida
+    projecao = acumulado_atual / fracao_media if fracao_media > 0.05 else None
+
+    nomes_dow = ["segunda", "terça", "quarta", "quinta", "sexta", "sábado", "domingo"]
+    nome_dia = nomes_dow[dia_semana_hoje]
+
+    # Só alerta se está ABAIXO da faixa esperada para este ponto do dia
+    if desvio_ate_hora > 0 and acumulado_atual >= limite_inferior:
+        return {
+            "tem_queda": False,
+            "acumulado_atual": acumulado_atual,
+            "esperado_ate_agora": media_ate_hora,
+            "projecao_fechamento": projecao,
+            "dia_semana": nome_dia,
+        }
+
+    # Fallback sem desvio: alerta se abaixo de 70% da média até a hora
+    if desvio_ate_hora <= 0 and acumulado_atual >= media_ate_hora * 0.7:
+        return {"tem_queda": False, "acumulado_atual": acumulado_atual}
+
+    causas = _analisar_causas_queda(vendas_hoje, vendas_historico)
+
+    return {
+        "tem_queda": True,
+        "confianca": "alta" if n >= 6 else "media",
+        "n_amostras": n,
+        "dia_semana": nome_dia,
+        "hora_atual": hora_atual,
+        "acumulado_atual": acumulado_atual,
+        "esperado_ate_agora_min": max(0, limite_inferior),
+        "esperado_ate_agora_media": media_ate_hora,
+        "projecao_fechamento": projecao,
+        "media_fechamento_dia": media_total_dia,
+        "causas": causas,
+    }
+
+
 def detectar_queda(vendas_hoje: pd.DataFrame, vendas_historico: pd.DataFrame, threshold: float = 35.0) -> dict:
     """
-    Detecta queda de faturamento comparando hoje vs. mesmo dia da semana (últimas 2 semanas).
-    Threshold padrão: -35% de desvio.
-    
-    Retorna análise em camadas:
-    - filial_maior_impacto: qual filial puxou mais pra baixo
-    - horario_buraco: qual hora teve zero vendas ou pico baixo
-    - produto_indisponivel: qual top produto não vendeu
-    
-    Se não há queda, retorna {tem_queda: False}
+    Detecta queda de faturamento usando Z-score por dia da semana.
+
+    Aprende o padrão de cada dia da semana a partir do histórico (idealmente
+    6 semanas via backfill) e alerta quando o faturamento de hoje foge da faixa
+    normal DAQUELE dia da semana específico.
+
+    Estratégia em camadas (degradê de confiança):
+    - 0-2 amostras do mesmo dia da semana: threshold fixo (-30%) vs média geral
+    - 3-5 amostras: Z-score provisório (faixa conservadora, 2.0 desvios)
+    - 6+ amostras: Z-score maduro (faixa normal, 1.5 desvios)
+
+    Retorna análise em camadas com causas prováveis.
     """
+    import numpy as np
+
     if len(vendas_hoje) == 0 or len(vendas_historico) == 0:
         return {"tem_queda": False, "motivo": "Sem dados suficientes"}
-    
-    # Calcula faturamento do dia vs. média histórica
+
     fat_hoje = vendas_hoje["valor"].sum()
-    fat_media = vendas_historico["valor"].mean() if len(vendas_historico) > 0 else 0
-    
-    if fat_media == 0:
-        return {"tem_queda": False, "motivo": "Sem histórico"}
-    
-    desvio = ((fat_hoje - fat_media) / fat_media) * 100
-    
-    # Se desvio > -35%, não há alerta
-    if desvio > -threshold:
-        return {"tem_queda": False, "desvio": desvio}
-    
-    # HÁ QUEDA — analisa causas em camadas
+
+    # Descobre o dia da semana de hoje (0=segunda ... 6=domingo)
+    dia_semana_hoje = None
+    col_data = None
+    for c in ("data", "Data", "dataVenda", "HoraAbertura"):
+        if c in vendas_hoje.columns:
+            col_data = c
+            break
+
+    if col_data is not None:
+        try:
+            dt_hoje = pd.to_datetime(vendas_hoje[col_data], errors="coerce", dayfirst=True).dropna()
+            if len(dt_hoje) > 0:
+                dia_semana_hoje = int(dt_hoje.dt.dayofweek.mode()[0])
+        except Exception:
+            pass
+
+    # Constrói série histórica de faturamento POR DIA
+    fat_por_dia = None
+    amostras_mesmo_dia = []
+
+    if col_data is not None and col_data in vendas_historico.columns:
+        try:
+            hist = vendas_historico.copy()
+            hist["_dt"] = pd.to_datetime(hist[col_data], errors="coerce", dayfirst=True)
+            hist = hist.dropna(subset=["_dt"])
+            hist["_dia_cal"] = hist["_dt"].dt.date
+            hist["_dow"] = hist["_dt"].dt.dayofweek
+
+            # Faturamento total por dia-calendário
+            fat_por_dia = hist.groupby("_dia_cal")["valor"].sum()
+
+            # Mapeia cada dia-calendário ao seu dia-da-semana
+            dow_por_dia = hist.groupby("_dia_cal")["_dow"].first()
+
+            if dia_semana_hoje is not None:
+                dias_do_mesmo_dow = dow_por_dia[dow_por_dia == dia_semana_hoje].index
+                amostras_mesmo_dia = [fat_por_dia[d] for d in dias_do_mesmo_dow if d in fat_por_dia.index]
+        except Exception as e:
+            logger.warning(f"Erro ao construir série por dia: {e}")
+
+    n_amostras = len(amostras_mesmo_dia)
+
+    # ─── CAMADA 1: poucos dados (0-2 amostras) → threshold fixo ───
+    if n_amostras < 3:
+        fat_media = vendas_historico["valor"].sum() / max(1, _contar_dias_distintos(vendas_historico, col_data))
+        if fat_media <= 0:
+            return {"tem_queda": False, "motivo": "Sem histórico"}
+        desvio = ((fat_hoje - fat_media) / fat_media) * 100
+        if desvio > -30:
+            return {"tem_queda": False, "desvio": desvio, "confianca": "inicial"}
+        return {
+            "tem_queda": True,
+            "confianca": "inicial",
+            "n_amostras": n_amostras,
+            "desvio_percentual": desvio,
+            "faturamento_hoje": fat_hoje,
+            "faturamento_esperado": fat_media,
+            "causas": _analisar_causas_queda(vendas_hoje, vendas_historico),
+        }
+
+    # ─── CAMADA 2/3: Z-score ───
+    media_dia = float(np.mean(amostras_mesmo_dia))
+    desvio_padrao = float(np.std(amostras_mesmo_dia, ddof=1)) if n_amostras > 1 else 0.0
+
+    # Faixa de sensibilidade conforme confiança
+    if n_amostras >= 6:
+        n_desvios = 1.5
+        confianca = "alta"
+    else:
+        n_desvios = 2.0
+        confianca = "media"
+
+    if desvio_padrao <= 0:
+        # Sem variação no histórico — cai pra comparação simples
+        desvio = ((fat_hoje - media_dia) / media_dia) * 100 if media_dia > 0 else 0
+        if desvio > -30:
+            return {"tem_queda": False, "desvio": desvio, "confianca": confianca}
+        limite_inferior = media_dia
+        z = None
+    else:
+        z = (fat_hoje - media_dia) / desvio_padrao
+        limite_inferior = media_dia - (n_desvios * desvio_padrao)
+        # Só alerta se hoje está ABAIXO da faixa esperada
+        if fat_hoje >= limite_inferior:
+            return {
+                "tem_queda": False,
+                "z_score": z,
+                "confianca": confianca,
+                "faixa_min": media_dia - (n_desvios * desvio_padrao),
+                "faixa_max": media_dia + (n_desvios * desvio_padrao),
+            }
+
+    nomes_dow = ["segunda", "terça", "quarta", "quinta", "sexta", "sábado", "domingo"]
+    nome_dia = nomes_dow[dia_semana_hoje] if dia_semana_hoje is not None else "hoje"
+
+    return {
+        "tem_queda": True,
+        "confianca": confianca,
+        "n_amostras": n_amostras,
+        "dia_semana": nome_dia,
+        "z_score": z,
+        "faturamento_hoje": fat_hoje,
+        "media_dia_semana": media_dia,
+        "faixa_min": max(0, media_dia - (n_desvios * desvio_padrao)),
+        "faixa_max": media_dia + (n_desvios * desvio_padrao),
+        "diferenca": fat_hoje - media_dia,
+        "causas": _analisar_causas_queda(vendas_hoje, vendas_historico),
+    }
+
+
+def _contar_dias_distintos(vendas: pd.DataFrame, col_data: str) -> int:
+    """Conta quantos dias-calendário distintos há no dataframe."""
+    if col_data is None or col_data not in vendas.columns:
+        return 1
+    try:
+        dt = pd.to_datetime(vendas[col_data], errors="coerce", dayfirst=True).dropna()
+        return max(1, dt.dt.date.nunique())
+    except Exception:
+        return 1
+
+
+def _analisar_causas_queda(vendas_hoje: pd.DataFrame, vendas_historico: pd.DataFrame) -> list:
+    """Analisa causas prováveis da queda em camadas (filial, horário, produto)."""
     causas = []
-    
+
     # 1. FILIAL COM MAIOR IMPACTO
     if "nomeFilial" in vendas_hoje.columns and "nomeFilial" in vendas_historico.columns:
         fat_fil_hoje = vendas_hoje.groupby("nomeFilial")["valor"].sum()
         fat_fil_hist = vendas_historico.groupby("nomeFilial")["valor"].mean()
-        
+
         desvios_filial = {}
         for fil in fat_fil_hoje.index:
             hoje_f = fat_fil_hoje.get(fil, 0)
             hist_f = fat_fil_hist.get(fil, 0)
             if hist_f > 0:
-                desv_f = ((hoje_f - hist_f) / hist_f) * 100
-                desvios_filial[fil] = desv_f
-        
+                desvios_filial[fil] = ((hoje_f - hist_f) / hist_f) * 100
+
         if desvios_filial:
             pior_fil = min(desvios_filial.items(), key=lambda x: x[1])
-            if pior_fil[1] < -20:  # Só reporta se significativo
+            if pior_fil[1] < -20:
                 causas.append(f"Filial {pior_fil[0].title()} concentra {abs(pior_fil[1]):.0f}% de queda")
-    
+
     # 2. HORÁRIO COM BURACO
     if "HoraAbertura" in vendas_hoje.columns:
-        # Agrupa por hora e procura por zero vendas
         vendas_hoje_cpy = vendas_hoje.copy()
         vendas_hoje_cpy["hora"] = pd.to_datetime(vendas_hoje_cpy["HoraAbertura"], errors="coerce").dt.hour
         vendas_por_hora = vendas_hoje_cpy.groupby("hora")["valor"].count()
-        
         horas_zeradas = vendas_por_hora[vendas_por_hora == 0].index.tolist()
         if horas_zeradas:
             if len(horas_zeradas) == 1:
@@ -272,23 +514,175 @@ def detectar_queda(vendas_hoje: pd.DataFrame, vendas_historico: pd.DataFrame, th
                 causas.append(f"Horários sem movimento: {', '.join(str(h) + 'h' for h in horas_zeradas)}")
             else:
                 causas.append(f"Múltiplos horários sem movimento ({len(horas_zeradas)} períodos)")
-    
+
     # 3. PRODUTO TOP NÃO VENDIDO
     if "produto" in vendas_hoje.columns:
         top_produtos_hist = vendas_historico.groupby("produto")["valor"].sum().nlargest(5).index.tolist()
         produtos_hoje = set(vendas_hoje["produto"].astype(str).unique())
-        
         faltantes = [p for p in top_produtos_hist if p not in produtos_hoje]
         if faltantes:
             causas.append(f"Produto top indisponível: {faltantes[0]}")
-    
-    return {
-        "tem_queda": True,
-        "desvio_percentual": desvio,
-        "faturamento_hoje": fat_hoje,
-        "faturamento_esperado": fat_media,
-        "causas": causas if causas else ["Queda detectada — investigar manual"],
-    }
+
+    return causas if causas else ["Queda detectada — investigar manual"]
+
+
+def detectar_cancelamentos_suspeitos(
+    linhas: list,
+    headers: list,
+    historico_valores: list = None,
+    piso_valor_alto: float = 40.0,
+) -> dict:
+    """
+    Detecta cancelamentos suspeitos (mitigação de furto) em 4 camadas priorizadas:
+
+    1. VALOR ALTO (prioridade 1): cancelamento individual no topo 10% do histórico
+       E acima do piso (R$ 40 default). Duas condições ao mesmo tempo, para não
+       alertar item barato só por ser o maior do dia.
+    2. TAXA DO DIA (prioridade 2): nº/valor de cancelamentos do dia acima do normal.
+    3. CONCENTRAÇÃO HORÁRIA (prioridade 3): muitos cancelamentos na mesma hora.
+    4. JANELA CURTA (prioridade 4): vários cancelamentos em poucos minutos.
+
+    historico_valores: lista de valores de cancelamentos passados (para o percentil).
+    Se None ou vazio, usa só o piso absoluto para a camada 1.
+
+    Retorna {tem_alerta: bool, alertas: [...]} — cada alerta com tipo, prioridade e texto.
+    """
+    import numpy as np
+
+    if not linhas or not headers:
+        return {"tem_alerta": False, "alertas": []}
+
+    # Mapeia índices das colunas de interesse
+    def idx(nome_parcial):
+        for k, h in enumerate(headers):
+            if nome_parcial.lower() in str(h).lower():
+                return k
+        return None
+
+    i_data   = idx("data")
+    i_filial = idx("filial")
+    i_venda  = idx("venda")
+    i_tipo   = idx("tipo")
+    i_valor  = idx("valor cancel")
+    i_fatur  = idx("faturado")
+
+    def val(linha, i):
+        if i is None or i >= len(linha):
+            return None
+        return linha[i]
+
+    def to_float(x):
+        try:
+            s = str(x).replace("R$", "").replace(".", "").replace(",", ".").strip()
+            return float(s)
+        except Exception:
+            return 0.0
+
+    # Extrai valores de cancelamento de cada linha
+    registros = []
+    for ln in linhas:
+        v = to_float(val(ln, i_valor))
+        if v <= 0:
+            continue
+        registros.append({
+            "valor": v,
+            "filial": val(ln, i_filial),
+            "venda": val(ln, i_venda),
+            "tipo": val(ln, i_tipo),
+            "data_hora": val(ln, i_data),
+            "faturado": to_float(val(ln, i_fatur)) if i_fatur is not None else None,
+        })
+
+    if not registros:
+        return {"tem_alerta": False, "alertas": []}
+
+    alertas = []
+
+    # ─── CAMADA 1: VALOR ALTO (topo 10% E acima do piso) ───
+    # Define o limiar do percentil a partir do histórico (ou dos próprios registros)
+    base_percentil = historico_valores if historico_valores else [r["valor"] for r in registros]
+    limiar_p90 = float(np.percentile(base_percentil, 90)) if len(base_percentil) >= 3 else 0.0
+
+    for r in registros:
+        if r["valor"] >= piso_valor_alto and (limiar_p90 == 0 or r["valor"] >= limiar_p90):
+            tipo_cancel = "integral" if (r.get("faturado") == 0) else "parcial"
+            alertas.append({
+                "tipo": "valor_alto",
+                "prioridade": 1,
+                "valor": r["valor"],
+                "filial": r["filial"],
+                "venda": r["venda"],
+                "tipo_cancelamento": tipo_cancel,
+                "data_hora": r["data_hora"],
+            })
+
+    # ─── CAMADA 2: TAXA DO DIA acima do normal ───
+    total_hoje = sum(r["valor"] for r in registros)
+    qtd_hoje = len(registros)
+    if historico_valores and len(historico_valores) >= 5:
+        media_hist = float(np.mean(historico_valores))
+        # nº esperado de cancelamentos = tamanho médio do histórico por dia (aproximação)
+        if total_hoje > 0 and media_hist > 0:
+            # Alerta se o volume do dia é 2x+ a média típica de um cancelamento * qtd
+            limiar_dia = media_hist * max(3, qtd_hoje)
+            if total_hoje >= limiar_dia and qtd_hoje >= 4:
+                alertas.append({
+                    "tipo": "taxa_dia",
+                    "prioridade": 2,
+                    "qtd": qtd_hoje,
+                    "valor_total": total_hoje,
+                })
+
+    # ─── CAMADA 3: CONCENTRAÇÃO HORÁRIA ───
+    if i_data is not None:
+        horas = {}
+        for r in registros:
+            try:
+                dt = pd.to_datetime(r["data_hora"], errors="coerce", dayfirst=True)
+                if pd.notna(dt):
+                    h = dt.hour
+                    horas[h] = horas.get(h, 0) + 1
+            except Exception:
+                continue
+        if horas:
+            hora_pico, qtd_pico = max(horas.items(), key=lambda x: x[1])
+            # Concentração: uma hora com 3+ cancelamentos e >50% do total
+            if qtd_pico >= 3 and qtd_pico >= qtd_hoje * 0.5:
+                alertas.append({
+                    "tipo": "concentracao_horaria",
+                    "prioridade": 3,
+                    "hora": hora_pico,
+                    "qtd": qtd_pico,
+                })
+
+    # ─── CAMADA 4: JANELA CURTA (vários em poucos minutos) ───
+    if i_data is not None:
+        tempos = []
+        for r in registros:
+            try:
+                dt = pd.to_datetime(r["data_hora"], errors="coerce", dayfirst=True)
+                if pd.notna(dt):
+                    tempos.append(dt)
+            except Exception:
+                continue
+        tempos.sort()
+        for k in range(len(tempos) - 2):
+            # 3 cancelamentos dentro de 10 minutos
+            delta = (tempos[k + 2] - tempos[k]).total_seconds() / 60
+            if delta <= 10:
+                alertas.append({
+                    "tipo": "janela_curta",
+                    "prioridade": 4,
+                    "qtd": 3,
+                    "minutos": round(delta, 1),
+                    "inicio": tempos[k].strftime("%H:%M"),
+                })
+                break
+
+    # Ordena por prioridade (1 = mais crítico)
+    alertas.sort(key=lambda a: a["prioridade"])
+
+    return {"tem_alerta": len(alertas) > 0, "alertas": alertas}
 
 
 def b(t): return f"<b>{t}</b>"          # negrito
