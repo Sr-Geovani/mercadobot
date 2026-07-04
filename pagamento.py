@@ -522,13 +522,43 @@ async def cancelar_cobrancas_futuras(asaas_cliente_id: str, dias_uso_ciclo_atual
 
 
 async def cancelar_assinatura(asaas_id: str) -> bool:
-    """Cancela assinatura no Asaas."""
-    async with httpx.AsyncClient() as client:
-        resp = await client.delete(
-            f"{ASAAS_URL}/subscriptions/{asaas_id}",
-            headers=_headers()
-        )
-        return resp.status_code == 200
+    """Cancela assinatura no Asaas E deleta payment pendente."""
+    try:
+        async with httpx.AsyncClient() as client:
+            # 1. Busca payments PENDING da subscription
+            resp_payments = await client.get(
+                f"{ASAAS_URL}/payments",
+                headers=_headers(),
+                params={"subscription": asaas_id, "status": "PENDING"}
+            )
+            
+            if resp_payments.status_code == 200:
+                data = resp_payments.json()
+                pagamentos = data.get("data", [])
+                
+                # Deleta cada payment pendente
+                for payment in pagamentos:
+                    payment_id = payment.get("id")
+                    if payment_id:
+                        logger.info(f"Deletando payment pendente: {payment_id}")
+                        await client.delete(
+                            f"{ASAAS_URL}/payments/{payment_id}",
+                            headers=_headers()
+                        )
+            
+            # 2. Cancela a subscription
+            resp_sub = await client.delete(
+                f"{ASAAS_URL}/subscriptions/{asaas_id}",
+                headers=_headers()
+            )
+            
+            success = resp_sub.status_code == 200
+            logger.info(f"Assinatura {asaas_id} cancelada: {success}")
+            return success
+            
+    except Exception as e:
+        logger.error(f"Erro em cancelar_assinatura: {e}")
+        return False
 
 
 def processar_webhook(payload: dict) -> dict:
