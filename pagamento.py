@@ -99,27 +99,30 @@ async def criar_cliente_asaas(nome: str, email: str, cpf: str = None, empresa: s
         if data.get("data"):
             cliente = data["data"][0]
             logger.info(f"Cliente já existe no Asaas: {email}")
-            # Atualiza campos faltantes
+            # Atualiza campos obrigatórios para checkout (SEMPRE, não só se vazio)
             update_payload = {}
-            if cpf and not cliente.get("cpfCnpj"):
+            if cpf:
                 update_payload["cpfCnpj"] = cpf
-            if empresa and not cliente.get("company"):
+            if empresa:
                 update_payload["company"] = empresa
-            if telefone and not cliente.get("mobilePhone"):
+            if telefone:
                 update_payload["mobilePhone"] = telefone
                 update_payload["phone"] = telefone
-            if cep and not cliente.get("postalCode"):
+            if cep:
                 update_payload["postalCode"] = cep
-            if endereco_numero and not cliente.get("addressNumber"):
+            if endereco_numero:
                 update_payload["addressNumber"] = endereco_numero
+            
             if update_payload:
-                await client.put(
+                logger.info(f"[CLIENTE] Atualizando cliente {cliente['id']} com: {update_payload}")
+                resp_update = await client.put(
                     f"{ASAAS_URL}/customers/{cliente['id']}",
                     json=update_payload,
                     headers=_headers()
                 )
-                logger.info(f"Cliente atualizado: {update_payload}")
-                cliente.update(update_payload)
+                logger.info(f"[CLIENTE] Update response: {resp_update.status_code}")
+                if resp_update.status_code == 200:
+                    cliente.update(update_payload)
             return cliente
 
         payload = {"name": nome, "email": email}
@@ -523,82 +526,106 @@ async def cancelar_cobrancas_futuras(asaas_cliente_id: str, dias_uso_ciclo_atual
 
 async def cancelar_assinatura(asaas_id: str) -> bool:
     """
-    Cancela customer no Asaas - isso cancela:
-    - Subscriptions
+    Cancela customer no Asaas - deleta:
+    - Subscriptions ativas
+    - Checkouts pendentes (importante!)
     - Payments futuros
-    - Checkouts pendentes
-    Tudo vinculado ao customer.
     """
     try:
         async with httpx.AsyncClient() as client:
-            logger.info(f"[CANCELAR] Cancelando customer {asaas_id}")
+            logger.info(f"[CANCELAR] Cancelando {asaas_id}")
             
-            # Asaas não tem endpoint direto para deletar customer
-            # MAS deletar subscription/checkout associado já funciona
-            # Se for customer ID, busca e deleta o subscription
-            
-            if asaas_id.startswith("cus_"):
-                logger.info(f"[CANCELAR] É customer ID, buscando subscriptions...")
+            # Se for subscription ID, extrai o customer
+            customer_id = asaas_id
+            if asaas_id.startswith("sub_"):
+                logger.info(f"[CANCELAR] É subscription ID, buscando customer...")
                 
-                # Busca subscriptions ativas
                 resp = await client.get(
-                    f"{ASAAS_URL}/subscriptions",
-                    headers=_headers(),
-                    params={"customer": asaas_id, "status": "ACTIVE"}
-                )
-                
-                if resp.status_code == 200:
-                    data = resp.json()
-                    subscriptions = data.get("data", [])
-                    
-                    for sub in subscriptions:
-                        sub_id = sub.get("id")
-                        logger.info(f"[CANCELAR] Deletando subscription {sub_id}")
-                        
-                        delete_resp = await client.delete(
-                            f"{ASAAS_URL}/subscriptions/{sub_id}",
-                            headers=_headers()
-                        )
-                        logger.info(f"[CANCELAR] Delete subscription: {delete_resp.status_code}")
-                
-                # Busca e deleta checkouts pendentes
-                resp_checkout = await client.get(
-                    f"{ASAAS_URL}/checkouts",
-                    headers=_headers(),
-                    params={"customer": asaas_id}
-                )
-                
-                if resp_checkout.status_code == 200:
-                    data = resp_checkout.json()
-                    checkouts = data.get("data", [])
-                    
-                    for checkout in checkouts:
-                        checkout_id = checkout.get("id")
-                        status_checkout = checkout.get("status")
-                        
-                        if status_checkout == "ACTIVE":
-                            logger.info(f"[CANCELAR] Deletando checkout {checkout_id}")
-                            
-                            delete_resp = await client.delete(
-                                f"{ASAAS_URL}/checkouts/{checkout_id}",
-                                headers=_headers()
-                            )
-                            logger.info(f"[CANCELAR] Delete checkout: {delete_resp.status_code}")
-                
-                logger.info(f"[CANCELAR] ✅ Customer {asaas_id} cancelado - subscriptions e checkouts deletados")
-                return True
-            
-            else:
-                # Se for subscription ID direto
-                logger.info(f"[CANCELAR] É subscription ID, deletando...")
-                resp_sub = await client.delete(
                     f"{ASAAS_URL}/subscriptions/{asaas_id}",
                     headers=_headers()
                 )
                 
-                success = resp_sub.status_code in [200, 204]
-                logger.info(f"[CANCELAR] Delete subscription response: {resp_sub.status_code}")
-                return success
+                if resp.status_code == 200:
+                    data = resp.json()
+                    customer_id = data.get("customer")
+                    logger.info(f"[CANCELAR] Customer encontrado: {customer_id}")
+            
+            # Agora temos o customer_id, vamos deletar tudo associado
+            logger.info(f"[CANCELAR] Deletando tudo do customer {customer_id}")
+            
+            # 1. Deletar subscriptions ativas
+            resp_subs = await client.get(
+                f"{ASAAS_URL}/subscriptions",
+                headers=_headers(),
+                params={"customer": customer_id}
+            )
+            
+            if resp_subs.status_code == 200:
+                data = resp_subs.json()
+                subscriptions = data.get("data", [])
+                logger.info(f"[CANCELAR] Encontradas {len(subscriptions)} subscriptions")
+                
+                for sub in subscriptions:
+                    sub_id = sub.get("id")
+                    sub_status = sub.get("status")
+                    logger.info(f"[CANCELAR] Deletando subscription {sub_id} (status={sub_status})")
+                    
+                    delete_resp = await client.delete(
+                        f"{ASAAS_URL}/subscriptions/{sub_id}",
+                        headers=_headers()
+                    )
+                    logger.info(f"[CANCELAR] Delete subscription: {delete_resp.status_code}")
+            
+            # 2. Deletar checkouts pendentes (IMPORTANTE - aqui está a cobrança!)
+            resp_checkouts = await client.get(
+                f"{ASAAS_URL}/checkouts",
+                headers=_headers(),
+                params={"customer": customer_id}
+            )
+            
+            if resp_checkouts.status_code == 200:
+                data = resp_checkouts.json()
+                checkouts = data.get("data", [])
+                logger.info(f"[CANCELAR] Encontrados {len(checkouts)} checkouts")
+                
+                for checkout in checkouts:
+                    checkout_id = checkout.get("id")
+                    checkout_status = checkout.get("status")
+                    logger.info(f"[CANCELAR] Checkout {checkout_id} (status={checkout_status})")
+                    
+                    if checkout_status in ["ACTIVE", "PENDING"]:
+                        logger.info(f"[CANCELAR] Deletando checkout {checkout_id}")
+                        
+                        delete_resp = await client.delete(
+                            f"{ASAAS_URL}/checkouts/{checkout_id}",
+                            headers=_headers()
+                        )
+                        logger.info(f"[CANCELAR] Delete checkout: {delete_resp.status_code}")
+            
+            # 3. Deletar payments pendentes vinculados ao customer
+            resp_payments = await client.get(
+                f"{ASAAS_URL}/payments",
+                headers=_headers(),
+                params={"customer": customer_id, "status": "PENDING"}
+            )
+            
+            if resp_payments.status_code == 200:
+                data = resp_payments.json()
+                payments = data.get("data", [])
+                logger.info(f"[CANCELAR] Encontrados {len(payments)} payments pendentes")
+                
+                for payment in payments:
+                    payment_id = payment.get("id")
+                    logger.info(f"[CANCELAR] Deletando payment {payment_id}")
+                    
+                    delete_resp = await client.delete(
+                        f"{ASAAS_URL}/payments/{payment_id}",
+                        headers=_headers()
+                    )
+                    logger.info(f"[CANCELAR] Delete payment: {delete_resp.status_code}")
+            
+            logger.info(f"[CANCELAR] ✅ Customer {customer_id} completamente cancelado")
+            return True
             
     except Exception as e:
         logger.error(f"[CANCELAR] ❌ Exceção: {e}")
