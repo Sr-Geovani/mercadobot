@@ -182,14 +182,32 @@ async def handle_webhook(request: web.Request) -> web.Response:
                 )
 
         elif evento in ("assinatura_cancelada", "pagamento_cancelado"):
-            await atualizar_usuario(chat_id, status="cancelado")
+            usuario = await buscar_usuario(chat_id)
+            
+            # Lógica correta de cancelamento
+            if usuario:
+                status_antes = usuario.get("status")
+                
+                if status_antes == "trial":
+                    # Trial cancelado = sem assinatura_fim
+                    novo_status = "cancelado"
+                    await atualizar_usuario(chat_id, status=novo_status)
+                else:
+                    # Ativo ou outro = mantém assinatura_fim mas marca como cancelado_mas_ativo
+                    novo_status = "cancelado_mas_ativo"
+                    await atualizar_usuario(chat_id, status=novo_status)
+                
+                logger.info(f"Cancelamento: {status_antes} → {novo_status}")
+            else:
+                await atualizar_usuario(chat_id, status="cancelado")
+            
             if _bot:
                 await _bot.send_message(
                     chat_id=chat_id,
                     text=(
-                        "😔 <b>Assinatura cancelada</b>\n\n"
-                        "Seu acesso ao MercadoBot foi encerrado.\n"
-                        "Use /assinar para reativar quando quiser."
+                        "❌ <b>Assinatura cancelada</b>\n\n"
+                        "Você deixará de receber cobranças.\n"
+                        "Use /start para reativar quando quiser."
                     ),
                     parse_mode="HTML"
                 )

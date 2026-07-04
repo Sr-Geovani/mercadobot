@@ -50,28 +50,29 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return ConversationHandler.END
 
         if status == "pendente":
-            try:
-                from pagamento import verificar_pagamento_confirmado
-                pago = await verificar_pagamento_confirmado(usuario.get("asaas_id", ""))
-                if pago:
-                    from datetime import datetime, timedelta
-                    from zoneinfo import ZoneInfo
-                    brasilia  = ZoneInfo("America/Sao_Paulo")
-                    trial_fim = (datetime.now(brasilia) + timedelta(days=7)).isoformat()
-                    assin_fim = (datetime.now(brasilia) + timedelta(days=31)).isoformat()
-                    await atualizar_usuario(chat_id, status="trial", trial_fim=trial_fim, assinatura_fim=assin_fim)
-                    from bot import kb_menu
-                    await update.message.reply_text(
-                        f"👋 Bem-vindo(a) de volta, {b(nome)}!\n\n"
-                        f"✅ Pagamento identificado. Acesso liberado!\n\n"
-                        f"Use o menu abaixo para começar 👇",
-                        parse_mode="HTML",
-                        reply_markup=kb_menu()
-                    )
-                    return ConversationHandler.END
-            except Exception as e:
-                logger.warning(f"Erro ao verificar pagamento: {e}")
-
+            # Pendente = cartão não validado AINDA
+            # Mas se tem assinatura_fim válida, mostra menu (erro anterior de status)
+            assinatura_fim_raw = usuario.get("assinatura_fim")
+            if assinatura_fim_raw:
+                try:
+                    from datetime import datetime
+                    assinatura_fim = datetime.fromisoformat(assinatura_fim_raw)
+                    agora = datetime.now(ZoneInfo("America/Sao_Paulo"))
+                    if agora <= assinatura_fim:
+                        # Tem acesso válido - mostra menu
+                        from bot import kb_menu
+                        await update.message.reply_text(
+                            f"👋 Bem-vindo(a) de volta, {b(nome)}!\n\n"
+                            f"✅ Acesso ativo até {assinatura_fim.strftime('%d/%m/%Y')}.\n\n"
+                            f"Use o menu abaixo 👇",
+                            parse_mode="HTML",
+                            reply_markup=kb_menu()
+                        )
+                        return ConversationHandler.END
+                except:
+                    pass
+            
+            # Pendente SEM assinatura_fim = realmente precisa validar cartão
             await update.message.reply_text(
                 f"👋 {b(nome)}, você já tem um cadastro!\n\n"
                 f"⏳ Ainda não identifiquei a confirmação do seu cartão.\n"
