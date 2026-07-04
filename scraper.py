@@ -666,6 +666,15 @@ async def exportar_cancelamentos(page, data_ini: str, data_fim: str) -> dict:
             logger.info(f"Cancelamentos — DETALHE headers: {detalhe.get('headers')}")
             logger.info(f"Cancelamentos — DETALHE total_linhas: {detalhe.get('total_linhas')}")
             logger.info(f"Cancelamentos — DETALHE amostra (5 primeiras linhas): {detalhe.get('amostra')}")
+            
+            # Debug: mapeia valores com headers para identificar produto
+            if detalhe.get('amostra') and detalhe.get('headers'):
+                primeira_linha = detalhe['amostra'][0]
+                logger.info(f"Cancelamentos — DEBUG PRIMEIRA LINHA MAPEADA:")
+                for idx, header in enumerate(detalhe['headers']):
+                    valor = primeira_linha[idx] if idx < len(primeira_linha) else "N/A"
+                    logger.info(f"  [{idx}] {header}: '{valor}'")
+            
             # Adiciona os detalhes ao resultado para uso posterior
             resultado["_detalhe"] = detalhe
         except Exception as e:
