@@ -555,15 +555,28 @@ async def cmd_cancelar_assinatura(update: Update, context: ContextTypes.DEFAULT_
     """Cancela a assinatura do usuário."""
     from database import buscar_usuario, atualizar_usuario
     from pagamento import cancelar_assinatura
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
 
     chat_id = update.effective_chat.id
     usuario = await buscar_usuario(chat_id)
 
-    if not usuario or usuario["status"] not in ("trial", "ativo"):
+    if not usuario or usuario["status"] not in ("trial", "ativo", "cancelado_mas_ativo"):
         await update.message.reply_text(
             "Você não tem uma assinatura ativa para cancelar."
         )
         return
+
+    # Calcula data de vencimento se houver assinatura_fim
+    mensagem_vencimento = ""
+    assinatura_fim_raw = usuario.get("assinatura_fim")
+    if assinatura_fim_raw:
+        try:
+            assinatura_fim_dt = datetime.fromisoformat(assinatura_fim_raw)
+            data_vencimento = assinatura_fim_dt.strftime("%d/%m/%Y")
+            mensagem_vencimento = f"\n• Você pode usar até {b(data_vencimento)} (data atual de término)"
+        except:
+            pass
 
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("❌ Sim, cancelar assinatura", callback_data="confirmar_cancelamento")],
@@ -572,9 +585,8 @@ async def cmd_cancelar_assinatura(update: Update, context: ContextTypes.DEFAULT_
     await update.message.reply_text(
         f"⚠️ {b('Cancelar assinatura')}\n\n"
         f"Tem certeza que deseja cancelar?\n\n"
-        f"• Seu acesso será encerrado imediatamente\n"
-        f"• Não haverá novas cobranças\n"
-        f"• Você pode reativar a qualquer momento com /start",
+        f"• Não haverá novas cobranças{mensagem_vencimento}\n"
+        f"• Você pode reativar a qualquer momento",
         parse_mode="HTML",
         reply_markup=kb
     )
