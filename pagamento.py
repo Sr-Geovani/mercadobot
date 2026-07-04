@@ -522,42 +522,67 @@ async def cancelar_cobrancas_futuras(asaas_cliente_id: str, dias_uso_ciclo_atual
 
 
 async def cancelar_assinatura(asaas_id: str) -> bool:
-    """Cancela assinatura no Asaas E deleta payment pendente."""
+    """Cancela assinatura no Asaas E deleta payment."""
     try:
         async with httpx.AsyncClient() as client:
-            # 1. Busca payments PENDING da subscription
-            resp_payments = await client.get(
-                f"{ASAAS_URL}/payments",
-                headers=_headers(),
-                params={"subscription": asaas_id, "status": "PENDING"}
-            )
+            logger.info(f"[CANCELAR] Iniciando cancelamento de {asaas_id}")
             
-            if resp_payments.status_code == 200:
-                data = resp_payments.json()
-                pagamentos = data.get("data", [])
+            # 1. Busca payments de TODOS os status (não só PENDING)
+            status_list = ["PENDING", "SCHEDULED", "AWAITING_CONFIRMATION"]
+            
+            for status in status_list:
+                logger.info(f"[CANCELAR] Buscando payments com status={status}")
                 
-                # Deleta cada payment pendente
-                for payment in pagamentos:
-                    payment_id = payment.get("id")
-                    if payment_id:
-                        logger.info(f"Deletando payment pendente: {payment_id}")
-                        await client.delete(
+                resp_payments = await client.get(
+                    f"{ASAAS_URL}/payments",
+                    headers=_headers(),
+                    params={"subscription": asaas_id, "status": status}
+                )
+                
+                logger.info(f"[CANCELAR] Response status: {resp_payments.status_code}")
+                
+                if resp_payments.status_code == 200:
+                    data = resp_payments.json()
+                    pagamentos = data.get("data", [])
+                    logger.info(f"[CANCELAR] Encontrados {len(pagamentos)} payments com status {status}")
+                    
+                    # Deleta cada payment
+                    for payment in pagamentos:
+                        payment_id = payment.get("id")
+                        payment_status = payment.get("status")
+                        logger.info(f"[CANCELAR] Deletando payment {payment_id} (status={payment_status})")
+                        
+                        delete_resp = await client.delete(
                             f"{ASAAS_URL}/payments/{payment_id}",
                             headers=_headers()
                         )
+                        
+                        logger.info(f"[CANCELAR] Delete response: {delete_resp.status_code}")
+                        
+                        if delete_resp.status_code not in [200, 204]:
+                            logger.error(f"[CANCELAR] Erro ao deletar payment {payment_id}: {delete_resp.status_code} - {delete_resp.text}")
+                        else:
+                            logger.info(f"[CANCELAR] Payment {payment_id} deletado com sucesso")
             
             # 2. Cancela a subscription
+            logger.info(f"[CANCELAR] Cancelando subscription {asaas_id}")
             resp_sub = await client.delete(
                 f"{ASAAS_URL}/subscriptions/{asaas_id}",
                 headers=_headers()
             )
             
-            success = resp_sub.status_code == 200
-            logger.info(f"Assinatura {asaas_id} cancelada: {success}")
+            logger.info(f"[CANCELAR] Delete subscription response: {resp_sub.status_code}")
+            success = resp_sub.status_code in [200, 204]
+            
+            if success:
+                logger.info(f"[CANCELAR] ✅ Assinatura {asaas_id} cancelada com sucesso")
+            else:
+                logger.error(f"[CANCELAR] ❌ Erro ao cancelar {asaas_id}: {resp_sub.status_code}")
+            
             return success
             
     except Exception as e:
-        logger.error(f"Erro em cancelar_assinatura: {e}")
+        logger.error(f"[CANCELAR] ❌ Exceção em cancelar_assinatura: {e}")
         return False
 
 
