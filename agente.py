@@ -1323,9 +1323,11 @@ async def executar_tool_cancelamentos(chat_id: int, data_ini: str = None, data_f
         logger.info(f"[CANCELAMENTOS] Último: {data_hora} | {filial} | {tipo_cancelamento} | Faturado: R$ {faturado_f:.2f}")
 
         # ─── DETECÇÃO DE CANCELAMENTOS SUSPEITOS (mitigação de furto) ───
+        # Consulta sob demanda: considera todo o período consultado (não força
+        # "só hoje"), mas com o piso R$ 30 e a correção de fuso já ativa.
         try:
             from bot import detectar_cancelamentos_suspeitos
-            deteccao = detectar_cancelamentos_suspeitos(todas_linhas, headers, piso_valor_alto=40.0)
+            deteccao = detectar_cancelamentos_suspeitos(todas_linhas, headers, piso_valor_alto=30.0)
             if deteccao.get("tem_alerta"):
                 bloco = _formatar_alertas_cancelamento(deteccao["alertas"])
                 if bloco:

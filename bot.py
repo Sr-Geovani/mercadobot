@@ -530,13 +530,15 @@ def detectar_cancelamentos_suspeitos(
     linhas: list,
     headers: list,
     historico_valores: list = None,
-    piso_valor_alto: float = 40.0,
+    piso_valor_alto: float = 30.0,
+    apenas_data=None,
+    origem_utc: bool = True,
 ) -> dict:
     """
     Detecta cancelamentos suspeitos (mitigação de furto) em 4 camadas priorizadas:
 
     1. VALOR ALTO (prioridade 1): cancelamento individual no topo 10% do histórico
-       E acima do piso (R$ 40 default). Duas condições ao mesmo tempo, para não
+       E acima do piso (R$ 30 default). Duas condições ao mesmo tempo, para não
        alertar item barato só por ser o maior do dia.
     2. TAXA DO DIA (prioridade 2): nº/valor de cancelamentos do dia acima do normal.
     3. CONCENTRAÇÃO HORÁRIA (prioridade 3): muitos cancelamentos na mesma hora.
@@ -545,12 +547,35 @@ def detectar_cancelamentos_suspeitos(
     historico_valores: lista de valores de cancelamentos passados (para o percentil).
     Se None ou vazio, usa só o piso absoluto para a camada 1.
 
+    apenas_data: se fornecido (date de Brasília), só considera cancelamentos DESTE
+    dia. Evita alertar cancelamentos de dias anteriores quando o scraper baixou um
+    período maior. Se None, considera todos os registros recebidos.
+
+    origem_utc: se True, os horários vêm em UTC e são convertidos para Brasília
+    (UTC-3) antes de qualquer cálculo de hora/dia. Corrige o deslocamento de 3h.
+
     Retorna {tem_alerta: bool, alertas: [...]} — cada alerta com tipo, prioridade e texto.
     """
     import numpy as np
 
     if not linhas or not headers:
         return {"tem_alerta": False, "alertas": []}
+
+    # Converte a string de data/hora do PDV para datetime já no fuso de Brasília.
+    # O PDV Legal entrega os cancelamentos em UTC+0; convertemos para America/Sao_Paulo
+    # (mesmo método já usado no restante do código, via astimezone — respeita a zona
+    # oficial). Retorna um datetime "naive" no horário local para facilitar comparações.
+    def parse_dt_brasilia(valor):
+        dt = pd.to_datetime(valor, errors="coerce", dayfirst=True)
+        if pd.isna(dt):
+            return None
+        if origem_utc:
+            try:
+                dt = dt.tz_localize("UTC").tz_convert("America/Sao_Paulo").tz_localize(None)
+            except Exception:
+                # Se já tiver tz ou falhar, cai no offset fixo (Brasília = UTC-3)
+                dt = dt - pd.Timedelta(hours=3)
+        return dt
 
     # Mapeia índices das colunas de interesse
     def idx(nome_parcial):
@@ -578,18 +603,27 @@ def detectar_cancelamentos_suspeitos(
         except Exception:
             return 0.0
 
-    # Extrai valores de cancelamento de cada linha
+    # Extrai valores de cancelamento de cada linha.
+    # Converte a data para Brasília e, se apenas_data foi passado, filtra o dia.
     registros = []
     for ln in linhas:
         v = to_float(val(ln, i_valor))
         if v <= 0:
             continue
+        dt_br = parse_dt_brasilia(val(ln, i_data)) if i_data is not None else None
+
+        # Filtro de dia: descarta cancelamentos que não são do dia corrente.
+        if apenas_data is not None:
+            if dt_br is None or dt_br.date() != apenas_data:
+                continue
+
         registros.append({
             "valor": v,
             "filial": val(ln, i_filial),
             "venda": val(ln, i_venda),
             "tipo": val(ln, i_tipo),
-            "data_hora": val(ln, i_data),
+            "data_hora": val(ln, i_data),   # string original (para exibição)
+            "dt_br": dt_br,                  # datetime já em Brasília (para cálculo)
             "faturado": to_float(val(ln, i_fatur)) if i_fatur is not None else None,
         })
 
@@ -606,6 +640,9 @@ def detectar_cancelamentos_suspeitos(
     for r in registros:
         if r["valor"] >= piso_valor_alto and (limiar_p90 == 0 or r["valor"] >= limiar_p90):
             tipo_cancel = "integral" if (r.get("faturado") == 0) else "parcial"
+            # Exibe a data/hora já convertida para Brasília (formato dd/mm HH:MM)
+            dt_br = r.get("dt_br")
+            data_hora_exibicao = dt_br.strftime("%d/%m %H:%M") if dt_br is not None else r["data_hora"]
             alertas.append({
                 "tipo": "valor_alto",
                 "prioridade": 1,
@@ -613,7 +650,7 @@ def detectar_cancelamentos_suspeitos(
                 "filial": r["filial"],
                 "venda": r["venda"],
                 "tipo_cancelamento": tipo_cancel,
-                "data_hora": r["data_hora"],
+                "data_hora": data_hora_exibicao,
             })
 
     # ─── CAMADA 2: TAXA DO DIA acima do normal ───
@@ -637,13 +674,10 @@ def detectar_cancelamentos_suspeitos(
     if i_data is not None:
         horas = {}
         for r in registros:
-            try:
-                dt = pd.to_datetime(r["data_hora"], errors="coerce", dayfirst=True)
-                if pd.notna(dt):
-                    h = dt.hour
-                    horas[h] = horas.get(h, 0) + 1
-            except Exception:
-                continue
+            dt = r.get("dt_br")
+            if dt is not None:
+                h = dt.hour
+                horas[h] = horas.get(h, 0) + 1
         if horas:
             hora_pico, qtd_pico = max(horas.items(), key=lambda x: x[1])
             # Concentração: uma hora com 3+ cancelamentos e >50% do total
@@ -657,14 +691,7 @@ def detectar_cancelamentos_suspeitos(
 
     # ─── CAMADA 4: JANELA CURTA (vários em poucos minutos) ───
     if i_data is not None:
-        tempos = []
-        for r in registros:
-            try:
-                dt = pd.to_datetime(r["data_hora"], errors="coerce", dayfirst=True)
-                if pd.notna(dt):
-                    tempos.append(dt)
-            except Exception:
-                continue
+        tempos = [r["dt_br"] for r in registros if r.get("dt_br") is not None]
         tempos.sort()
         for k in range(len(tempos) - 2):
             # 3 cancelamentos dentro de 10 minutos

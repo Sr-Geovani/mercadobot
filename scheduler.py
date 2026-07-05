@@ -874,7 +874,13 @@ async def verificar_alertas_proativos(bot, chat_id, pdv_email, pdv_senha, vendas
             headers = detalhe.get("headers", [])
 
             if todas_linhas and headers:
-                deteccao = detectar_cancelamentos_suspeitos(todas_linhas, headers, piso_valor_alto=40.0)
+                # Só considera cancelamentos de HOJE (Brasília) e usa piso R$ 30.
+                hoje_br = datetime.now(BRASILIA).date()
+                deteccao = detectar_cancelamentos_suspeitos(
+                    todas_linhas, headers,
+                    piso_valor_alto=30.0,
+                    apenas_data=hoje_br,
+                )
                 if deteccao.get("tem_alerta"):
                     from agente import _formatar_alertas_cancelamento
                     bloco = _formatar_alertas_cancelamento(deteccao["alertas"])
