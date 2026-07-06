@@ -1996,8 +1996,12 @@ async def comando_semana_atual(msg, chat_id: int):
     ini   = seg.strftime("%d/%m/%Y")
     fim   = agora.strftime("%d/%m/%Y")
 
+    # Garante que dados_usuario[chat_id] existe
+    if chat_id not in dados_usuario:
+        dados_usuario[chat_id] = {}
+    
     # Tenta pegar do cache primeiro, depois do banco
-    d      = dados_usuario.get(chat_id, {})
+    d      = dados_usuario[chat_id]
     pdv_email = d.get("pdv_email")
     pdv_senha = d.get("pdv_senha")
     
@@ -2055,8 +2059,14 @@ async def comando_semana_atual(msg, chat_id: int):
                 )
                 return
                 
+            # Garante novamente antes de salvar
+            if chat_id not in dados_usuario:
+                dados_usuario[chat_id] = {}
+            
             dados_usuario[chat_id]["vendas"]       = v
             dados_usuario[chat_id]["periodo_label"] = f"Semana atual ({ini} – {fim})"
+            dados_usuario[chat_id]["data_ini"]      = ini
+            logger.info(f"[SEMANA] Cache atualizado para {chat_id}")
         except Exception as e:
             logger.error(f"[SEMANA] Erro para {chat_id}: {type(e).__name__}: {e}", exc_info=True)
             await msg.reply_text(
@@ -2112,13 +2122,18 @@ async def comando_semana_comparativo(msg, chat_id: int):
 
     await msg.reply_text(f"⏳ Buscando {nome_atual} e {nome_anterior}...")
     try:
-        d         = dados_usuario.get(chat_id, {})
+        # Garante que dados_usuario[chat_id] existe
+        if chat_id not in dados_usuario:
+            dados_usuario[chat_id] = {}
+        
+        d         = dados_usuario[chat_id]
         pdv_email = d.get("pdv_email")
         pdv_senha = d.get("pdv_senha")
         
         # Se não tem no cache, busca do banco
         if not pdv_email or not pdv_senha:
             from database import buscar_usuario
+            logger.info(f"[COMPARATIVO] Buscando credenciais do banco para {chat_id}")
             usuario_db = await buscar_usuario(chat_id)
             if usuario_db:
                 pdv_email = pdv_email or usuario_db.get("pdv_email")
