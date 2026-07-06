@@ -1987,7 +1987,7 @@ async def abrir_submenu_semana(msg, chat_id: int):
 
 async def comando_semana_atual(msg, chat_id: int):
     """Semana atual — seg a dom da semana corrente."""
-    from datetime import datetime
+    from datetime import datetime, timedelta
     from zoneinfo import ZoneInfo
     br    = ZoneInfo("America/Sao_Paulo")
     agora = datetime.now(br)
@@ -2031,7 +2031,7 @@ async def comando_semana_atual(msg, chat_id: int):
 
 async def comando_semana_comparativo(msg, chat_id: int):
     """Mês atual x Mês anterior — semana a semana."""
-    from datetime import datetime
+    from datetime import datetime, timedelta
     from zoneinfo import ZoneInfo
     br    = ZoneInfo("America/Sao_Paulo")
     agora = datetime.now(br)

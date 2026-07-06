@@ -1396,11 +1396,29 @@ async def executar_tool_cancelamentos(chat_id: int, data_ini: str = None, data_f
     # Extrai o valor total de forma robusta
     valor_total = 0
     if isinstance(total_cancel, dict):
-        valor_total = float(total_cancel.get("_total", 0))
-        logger.info(f"[CANCELAMENTOS] É dict, _total = {valor_total}")
+        # Pode vir como string "R$ 1.500,00" ou float 1500.0
+        valor_str = total_cancel.get("_total", 0)
+        try:
+            if isinstance(valor_str, str):
+                # Remove "R$", espaços, pontos (separador de milhar) e converte vírgula
+                valor_str_clean = valor_str.replace("R$", "").strip().replace(".", "").replace(",", ".")
+                valor_total = float(valor_str_clean) if valor_str_clean else 0.0
+            else:
+                valor_total = float(valor_str) if valor_str else 0.0
+        except:
+            valor_total = 0.0
+        logger.info(f"[CANCELAMENTOS] É dict, _total extraído = R$ {valor_total:.2f}")
     else:
-        valor_total = float(total_cancel) if total_cancel else 0
-        logger.info(f"[CANCELAMENTOS] Não é dict, valor = {valor_total}")
+        # Valor vem direto como float ou string
+        try:
+            if isinstance(total_cancel, str):
+                valor_clean = total_cancel.replace("R$", "").strip().replace(".", "").replace(",", ".")
+                valor_total = float(valor_clean) if valor_clean else 0.0
+            else:
+                valor_total = float(total_cancel) if total_cancel else 0.0
+        except:
+            valor_total = 0.0
+        logger.info(f"[CANCELAMENTOS] Não é dict, valor extraído = R$ {valor_total:.2f}")
     
     logger.info(f"[CANCELAMENTOS] Valor total final: R$ {valor_total:.2f}")
     
