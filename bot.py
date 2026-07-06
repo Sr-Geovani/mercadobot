@@ -2531,7 +2531,11 @@ def calcular_dias_trial_restantes(usuario: dict) -> int:
         return 0
     try:
         fim   = datetime.fromisoformat(trial_fim)
-        agora = datetime.now(ZoneInfo("America/Sao_Paulo"))
+        brasilia = ZoneInfo("America/Sao_Paulo")
+        # Garantir que é offset-aware
+        if fim.tzinfo is None:
+            fim = fim.replace(tzinfo=brasilia)
+        agora = datetime.now(brasilia)
         dias  = (fim - agora).days
         return max(0, dias)
     except Exception:
@@ -2643,6 +2647,9 @@ async def cmd_reativar_handler(update: Update, context: ContextTypes.DEFAULT_TYP
             if usuario.get("assinatura_fim"):
                 try:
                     data_expiracao = datetime.fromisoformat(usuario["assinatura_fim"])
+                    # Garantir que é offset-aware
+                    if data_expiracao.tzinfo is None:
+                        data_expiracao = data_expiracao.replace(tzinfo=BRASILIA)
                 except:
                     pass
             
@@ -2650,6 +2657,9 @@ async def cmd_reativar_handler(update: Update, context: ContextTypes.DEFAULT_TYP
             if not data_expiracao and usuario.get("trial_fim"):
                 try:
                     data_expiracao = datetime.fromisoformat(usuario["trial_fim"])
+                    # Garantir que é offset-aware
+                    if data_expiracao.tzinfo is None:
+                        data_expiracao = data_expiracao.replace(tzinfo=BRASILIA)
                 except:
                     pass
             
@@ -2761,8 +2771,16 @@ async def verificar_status_callback(msg, chat_id: int):
 
     if status in ("trial", "ativo"):
         agora = datetime.now(brasilia)
-        fim   = datetime.fromisoformat(usuario.get("trial_fim") or usuario.get("assinatura_fim", ""))
-        dias  = max(0, (fim - agora).days + 1)
+        fim_raw = usuario.get("trial_fim") or usuario.get("assinatura_fim", "")
+        try:
+            fim = datetime.fromisoformat(fim_raw)
+            # Garantir que é offset-aware
+            if fim.tzinfo is None:
+                fim = fim.replace(tzinfo=brasilia)
+            dias = max(0, (fim - agora).days + 1)
+        except:
+            dias = 0  # Fallback se erro
+        
         await msg.reply_text(
             f"✅ {b('Acesso liberado!')}\n\n"
             f"Você tem {b(f'{dias} dias')} restantes.\n\n"

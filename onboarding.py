@@ -64,6 +64,9 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if usuario.get("assinatura_fim"):
                     try:
                         data_expiracao = datetime.fromisoformat(usuario["assinatura_fim"])
+                        # Garantir que é offset-aware
+                        if data_expiracao.tzinfo is None:
+                            data_expiracao = data_expiracao.replace(tzinfo=ZoneInfo("America/Sao_Paulo"))
                     except:
                         pass
                 
@@ -71,6 +74,9 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if not data_expiracao and usuario.get("trial_fim"):
                     try:
                         data_expiracao = datetime.fromisoformat(usuario["trial_fim"])
+                        # Garantir que é offset-aware
+                        if data_expiracao.tzinfo is None:
+                            data_expiracao = data_expiracao.replace(tzinfo=ZoneInfo("America/Sao_Paulo"))
                     except:
                         pass
                 
@@ -569,29 +575,52 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=kb
         )
     elif status == "trial":
-        fim = datetime.fromisoformat(usuario["trial_fim"])
-        dias = (fim - agora).days + 1
-        await update.message.reply_text(
-            f"✅ {b('Trial ativo')}\n\n"
-            f"Você tem {b(f'{dias} dias')} restantes de teste gratuito.\n"
-            f"A cobrança de R$ 29,90 só acontece após o trial.",
-            parse_mode="HTML"
-        )
+        try:
+            fim = datetime.fromisoformat(usuario["trial_fim"])
+            # Garantir que é offset-aware
+            if fim.tzinfo is None:
+                fim = fim.replace(tzinfo=brasilia)
+            dias = (fim - agora).days + 1
+            await update.message.reply_text(
+                f"✅ {b('Trial ativo')}\n\n"
+                f"Você tem {b(f'{dias} dias')} restantes de teste gratuito.\n"
+                f"A cobrança de R$ 29,90 só acontece após o trial.",
+                parse_mode="HTML"
+            )
+        except Exception as e:
+            logger.error(f"Erro ao calcular trial: {e}")
+            await update.message.reply_text(
+                "❌ Erro ao verificar seu trial.\n\nUse /menu para voltar.",
+                parse_mode="HTML"
+            )
     elif status == "ativo":
-        fim = datetime.fromisoformat(usuario["assinatura_fim"])
-        dias = (fim - agora).days + 1
-        await update.message.reply_text(
-            f"✅ {b('Assinatura ativa')}\n\n"
-            f"Próxima renovação em {b(f'{dias} dias')}.\n"
-            f"Valor: R$ 29,90/mês.",
-            parse_mode="HTML"
-        )
+        try:
+            fim = datetime.fromisoformat(usuario["assinatura_fim"])
+            # Garantir que é offset-aware
+            if fim.tzinfo is None:
+                fim = fim.replace(tzinfo=brasilia)
+            dias = (fim - agora).days + 1
+            await update.message.reply_text(
+                f"✅ {b('Assinatura ativa')}\n\n"
+                f"Próxima renovação em {b(f'{dias} dias')}.\n"
+                f"Valor: R$ 29,90/mês.",
+                parse_mode="HTML"
+            )
+        except Exception as e:
+            logger.error(f"Erro ao calcular assinatura ativa: {e}")
+            await update.message.reply_text(
+                "❌ Erro ao verificar sua assinatura.\n\nUse /menu para voltar.",
+                parse_mode="HTML"
+            )
     elif status == "cancelado_mas_ativo":
         # Cancelado mas ainda tem acesso até assinatura_fim ou trial_fim
         fim = None
         if usuario.get("assinatura_fim"):
             try:
                 fim = datetime.fromisoformat(usuario["assinatura_fim"])
+                # Garantir que é offset-aware
+                if fim.tzinfo is None:
+                    fim = fim.replace(tzinfo=brasilia)
             except:
                 pass
         
@@ -599,6 +628,9 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not fim and usuario.get("trial_fim"):
             try:
                 fim = datetime.fromisoformat(usuario["trial_fim"])
+                # Garantir que é offset-aware
+                if fim.tzinfo is None:
+                    fim = fim.replace(tzinfo=brasilia)
             except:
                 pass
         
