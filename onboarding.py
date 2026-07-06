@@ -651,7 +651,9 @@ async def cmd_cancelar_assinatura(update: Update, context: ContextTypes.DEFAULT_
     chat_id = update.effective_chat.id
     usuario = await buscar_usuario(chat_id)
 
-    if not usuario or usuario["status"] not in ("trial", "ativo"):
+    # Permite cancelar se está em trial, ativo OU cancelado_mas_ativo
+    # (cancelado_mas_ativo pode ter checkout agendado que precisa ser cancelado)
+    if not usuario or usuario["status"] not in ("trial", "ativo", "cancelado_mas_ativo"):
         await update.message.reply_text(
             "Você não tem uma assinatura ativa para cancelar."
         )
@@ -664,7 +666,10 @@ async def cmd_cancelar_assinatura(update: Update, context: ContextTypes.DEFAULT_
         try:
             assinatura_fim_dt = datetime.fromisoformat(assinatura_fim_raw)
             data_vencimento = assinatura_fim_dt.strftime("%d/%m/%Y")
-            mensagem_vencimento = f"\n• Você pode usar até {b(data_vencimento)} (data atual de término)"
+            if usuario["status"] == "cancelado_mas_ativo":
+                mensagem_vencimento = f"\n• Você ainda tem acesso até {b(data_vencimento)}\n• Depois dessa data, sua assinatura expirará"
+            else:
+                mensagem_vencimento = f"\n• Você pode usar até {b(data_vencimento)} (data atual de término)"
         except:
             pass
 

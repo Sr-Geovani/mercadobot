@@ -3004,7 +3004,7 @@ async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ─── Agendar renovação automática (cancelado_mas_ativo com acesso válido) ──
     if acao == "reativar_agendar":
         await query.answer()
-        from database import buscar_usuario
+        from database import buscar_usuario, atualizar_usuario
         from pagamento import gerar_link_pagamento
         from datetime import datetime
         
@@ -3034,6 +3034,11 @@ async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     parse_mode="HTML"
                 )
                 return
+            
+            # IMPORTANTE: salva o novo assinatura_id no banco para que o cancelamento funcione depois
+            if assinatura_id:
+                await atualizar_usuario(chat_id, assinatura_asaas_id=assinatura_id)
+                logger.info(f"Assinatura agendada para {chat_id}: {assinatura_id}")
             
             kb = InlineKeyboardMarkup([
                 [InlineKeyboardButton("💳 Confirmar cartão", url=link)],
