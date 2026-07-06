@@ -283,6 +283,78 @@ async def gerar_link_pagamento(asaas_cliente_id: str, chat_id: int, reativacao: 
         return link, checkout_id
 
 
+async def gerar_checkout_reativacao(asaas_cliente_id: str, chat_id: int, 
+                                   proxima_cobranca_em: str = None) -> tuple:
+    """
+    Cria Checkout SEM TRIAL para reativação (user já foi cliente antes).
+    Sempre RECURRENT, sem período de cortesia de 7 dias.
+    
+    Cenários:
+    - cancelado_mas_ativo com acesso: agendado para fim do período
+    - cancelado/expirado sem acesso: cobra hoje
+    
+    Args:
+        asaas_cliente_id: customer ID no Asaas
+        chat_id: telegram chat ID
+        proxima_cobranca_em: data/hora ISO (ex: "2026-08-10T20:00:00")
+                             Se None, cobra imediatamente
+    
+    Retorna: (link, subscription_id_ou_checkout_id)
+    """
+    
+    # Se não passou data, cobra hoje (reativação imediata)
+    if proxima_cobranca_em:
+        primeiro_vencimento = proxima_cobranca_em
+        descricao = "MercadoBot — Renovação da assinatura"
+    else:
+        primeiro_vencimento = datetime.now(BRASILIA).strftime("%Y-%m-%d %H:%M:%S")
+        descricao = "MercadoBot — Reativação da assinatura"
+
+    payload = {
+        "billingTypes": ["CREDIT_CARD"],
+        "chargeTypes": ["RECURRENT"],
+        "minutesToExpire": 60,
+        "callback": {
+            "successUrl": "https://t.me/MercadoBotOficial",
+            "cancelUrl": "https://t.me/MercadoBotOficial",
+            "expiredUrl": "https://t.me/MercadoBotOficial",
+        },
+        "items": [{
+            "name": "MercadoBot",
+            "description": descricao,
+            "quantity": 1,
+            "value": PRECO_MENSAL,
+        }],
+        "subscription": {
+            "cycle": "MONTHLY",
+            "nextDueDate": primeiro_vencimento,
+            "externalReference": str(chat_id),
+        },
+    }
+
+    if asaas_cliente_id:
+        payload["customer"] = asaas_cliente_id
+
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(
+            f"{ASAAS_URL}/checkouts",
+            json=payload,
+            headers=_headers()
+        )
+        data = resp.json()
+        logger.info(f"[CHECKOUT-REATIVACAO] Criado: {data.get('id')} para chat_id={chat_id}")
+
+        checkout_id = data.get("id", "")
+        link = data.get("link", "")
+
+        if not link:
+            logger.error(f"Erro ao gerar checkout reativação: {data.get('errors')}")
+            return None, None
+
+        # Retorna o checkout ID (depois será subscription ID após confirmação)
+        return link, checkout_id
+
+
 async def gerar_link_pagamento_legado(asaas_cliente_id: str, chat_id: int, reativacao: bool = False, dias_trial_restantes: int = 0) -> tuple:
     """
     MÉTODO ANTIGO — mantido apenas como referência/fallback.
