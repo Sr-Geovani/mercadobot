@@ -3182,8 +3182,13 @@ async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if assinatura_id:
                 # Sempre cancela a assinatura (funciona para trial e ativo)
                 # Cancela a subscription e qualquer cobrança futura associada
-                await cancelar_assinatura(assinatura_id)
-                logger.info(f"Assinatura cancelada: {assinatura_id}")
+                try:
+                    resultado = await cancelar_assinatura(assinatura_id)
+                    logger.info(f"✅ Assinatura cancelada com sucesso: {assinatura_id}")
+                except Exception as e_cancel:
+                    logger.error(f"❌ ERRO ao cancelar assinatura {assinatura_id}: {e_cancel}")
+            else:
+                logger.warning(f"⚠️ Usuário {chat_id} sem assinatura_asaas_id para cancelar no Asaas. Status apenas no banco será alterado.")
 
         await atualizar_usuario(chat_id, status="cancelado_mas_ativo")
 

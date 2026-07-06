@@ -138,17 +138,35 @@ async def handle_webhook(request: web.Request) -> web.Response:
             # nunca deixa o status como "trial" depois de um pagamento real.
             novo_status    = "ativo"
             assinatura_fim = (agora + timedelta(days=31)).isoformat()
-            asaas_subscription_id = resultado.get("asaas_id")
+            
+            # Busca subscription ID de várias possíveis localizações no webhook
+            asaas_subscription_id = None
+            
+            # Tenta: resultado.subscription.id (subscriptions normais)
+            if resultado.get("subscription") and isinstance(resultado["subscription"], dict):
+                asaas_subscription_id = resultado["subscription"].get("id")
+            
+            # Tenta: resultado.asaas_id (fallback, se houver)
+            if not asaas_subscription_id:
+                asaas_subscription_id = resultado.get("asaas_id")
+            
+            # Tenta: resultado.id se começar com "sub_" (edge case)
+            if not asaas_subscription_id and resultado.get("id", "").startswith("sub_"):
+                asaas_subscription_id = resultado.get("id")
 
             campos_update = dict(
                 status=novo_status,
                 assinatura_fim=assinatura_fim,
                 trial_usado=True,
             )
+            
             # Atualiza a referência da subscription real, caso ainda não tivéssemos
             # (acontece no primeiro pagamento confirmado vindo de um Checkout)
             if asaas_subscription_id and asaas_subscription_id.startswith("sub_"):
                 campos_update["assinatura_asaas_id"] = asaas_subscription_id
+                logger.info(f"✅ Subscription salva: {asaas_subscription_id}")
+            else:
+                logger.warning(f"⚠️ Nenhum subscription ID encontrado no webhook. Resultado: {resultado}")
 
             await atualizar_usuario(chat_id, **campos_update)
 
@@ -179,7 +197,7 @@ async def handle_webhook(request: web.Request) -> web.Response:
                         f"FALHA AO NOTIFICAR chat_id={chat_id} sobre pagamento_confirmado: {e_envio}. "
                         f"Usuário foi ativado no banco mas pode não ter recebido a mensagem."
                     )
-            logger.info(f"Usuário {chat_id} reativado — status={novo_status}, assinatura_fim={assinatura_fim}.")
+            logger.info(f"Usuário {chat_id} reativado — status={novo_status}, assinatura_fim={assinatura_fim}, sub_id={asaas_subscription_id}.")
 
         elif evento == "pagamento_atrasado":
             if _bot:
