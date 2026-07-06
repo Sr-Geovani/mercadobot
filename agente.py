@@ -275,6 +275,26 @@ TOOLS = [
             },
         },
     },
+    {
+        "name": "listar_cancelamentos_detalhe",
+        "description": (
+            "Lista os ÚLTIMOS cancelamentos com TODOS os detalhes (até 10). "
+            "Use quando o usuário quer investigar MÚLTIPLOS cancelamentos, entender padrões, "
+            "analisar motivos, etc. Retorna data/hora, nº da venda, filial, valor, "
+            "tipo (parcial/integral), motivo e produto de cada cancelamento. "
+            "Se não especificar período, busca hoje. "
+            "Muito útil para responder: 'por que tive cancelamentos altos?', "
+            "'liste os cancelamentos de hoje', 'mostra detalhes dos últimos cancelamentos'."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "data_ini": {"type": "string", "description": "Data inicial (DD/MM/YYYY), opcional"},
+                "data_fim": {"type": "string", "description": "Data final (DD/MM/YYYY), opcional"},
+                "limite": {"type": "integer", "description": "Quantos últimos cancelamentos listar (1-20, padrão 10)", "default": 10},
+            },
+        },
+    },
 ]
 
 
@@ -1179,8 +1199,174 @@ def _formatar_alertas_cancelamento(alertas: list) -> str:
                 f"{alerta.get('qtd', 0)} cancelamentos em {alerta.get('minutos', 0)} min "
                 f"(a partir das {alerta.get('inicio', '?')})."
             )
+        elif tipo == "cancelamento_parcial_alto":
+            filial = str(alerta.get("filial", "")).title()
+            linhas.append(
+                f"\n⚠️ <b>Cancelamento parcial de alto valor</b>\n"
+                f"Venda {alerta.get('venda', '?')} — R$ {alerta.get('valor', 0):.2f}\n"
+                f"Filial: {filial} • {alerta.get('data_hora', '')}\n"
+                f"Cancelamento parcial acima de R$ 35. Verifique o motivo com o cliente."
+            )
+        elif tipo == "multiplos_altos_filial":
+            filial = str(alerta.get("filial", "")).title()
+            linhas.append(
+                f"\n🚨 <b>Múltiplos cancelamentos altos na mesma filial</b>\n"
+                f"{alerta.get('qtd', 0)} cancelamentos de R$ {alerta.get('valor_total', 0):.2f}\n"
+                f"Filial: {filial} • Entre {alerta.get('horario_inicio', '?')} e próximas 2 horas\n"
+                f"Padrão suspeito de cancelamentos concentrados. Verifique com o operador."
+            )
 
     return "\n".join(linhas)
+
+
+async def executar_tool_listar_cancelamentos_detalhe(chat_id: int, data_ini: str = None, data_fim: str = None, limite: int = 10) -> dict:
+    """
+    Lista os ÚLTIMOS cancelamentos do período em DETALHE (não apenas o último).
+    Retorna até `limite` cancelamentos (padrão 10) ordenados do mais recente.
+    
+    Útil quando o bot/agente precisa analisar múltiplos cancelamentos para
+    entender padrões, investigar problemas, etc.
+    
+    Campos inclusos: Data/Hora, Nº Venda, Filial, Valor, Tipo (parcial/integral)
+    """
+    import json
+    from pathlib import Path
+    from datetime import datetime as dt
+    agora = dt.now(BRASILIA)
+    
+    if not data_ini or not data_fim:
+        data_fim = agora.strftime("%d/%m/%Y")
+        data_ini = agora.strftime("%d/%m/%Y")
+    
+    logger.info(f"[CANCELAMENTOS-DETALHE] Buscando {limite} últimos de {data_ini} a {data_fim}")
+    
+    # Garante que tem dados do período
+    dados = await garantir_dados_periodo(chat_id, data_ini, data_fim, "para listar cancelamentos detalhados")
+    if "erro" in dados:
+        logger.error(f"[CANCELAMENTOS-DETALHE] Erro ao garantir dados: {dados}")
+        return dados
+    
+    # Tenta ler o arquivo de detalhes
+    detalhe_path = Path("/tmp/pdvlegal/cancelamentos_detalhe.json")
+    todas_linhas = []
+    headers = []
+    
+    if detalhe_path.exists():
+        try:
+            with open(detalhe_path, "r", encoding="utf-8") as f:
+                detalhe = json.load(f)
+                todas_linhas = detalhe.get("linhas", detalhe.get("amostra", []))
+                headers = detalhe.get("headers", [])
+                logger.info(f"[CANCELAMENTOS-DETALHE] Arquivo: {len(todas_linhas)} cancelamentos encontrados")
+        except Exception as e:
+            logger.error(f"[CANCELAMENTOS-DETALHE] Erro ao ler: {e}")
+            return {"erro": "Não consegui acessar os detalhes de cancelamentos"}
+    else:
+        logger.warning(f"[CANCELAMENTOS-DETALHE] Arquivo não existe")
+        return {"erro": "Arquivo de cancelamentos não disponível"}
+    
+    if not todas_linhas:
+        return {
+            "tem_cancelamentos": False,
+            "mensagem": f"✅ Nenhum cancelamento em {data_ini}"
+        }
+    
+    # Ordena por data (mais recente primeiro)
+    idx_data = None
+    for idx, h in enumerate(headers):
+        if h.lower() == "data":
+            idx_data = idx
+            break
+    
+    if idx_data is not None:
+        def parse_data_hora(linha):
+            try:
+                if len(linha) > idx_data:
+                    return dt.strptime(linha[idx_data], "%d/%m/%Y %H:%M")
+            except:
+                pass
+            return dt.min
+        
+        todas_linhas_sorted = sorted(todas_linhas, key=parse_data_hora, reverse=True)
+    else:
+        todas_linhas_sorted = todas_linhas
+    
+    # Pega os últimos N
+    ultimos_cancelamentos = todas_linhas_sorted[:limite]
+    
+    # Formata cada um
+    cancelamentos_formatados = []
+    for linha in ultimos_cancelamentos:
+        resultado_dict = {}
+        for idx, header in enumerate(headers):
+            if idx < len(linha):
+                resultado_dict[header] = linha[idx]
+        
+        # Extrai campos importantes
+        data_hora = resultado_dict.get("Data", "?")
+        num_venda = resultado_dict.get("Nº Venda", "?")
+        filial = resultado_dict.get("Filial", "?")
+        valor_cancel = resultado_dict.get("Valor cancelamento", "0,00")
+        faturado = resultado_dict.get("Faturado", "0,00")
+        motivo = resultado_dict.get("Motivo", "")
+        produto = resultado_dict.get("Produto", "")
+        
+        # Converte para float
+        try:
+            valor_f = float(valor_cancel.replace(".", "").replace(",", "."))
+        except:
+            valor_f = 0.0
+        
+        try:
+            faturado_f = float(faturado.replace(".", "").replace(",", "."))
+        except:
+            faturado_f = 0.0
+        
+        tipo_cancel = "parcial" if faturado_f > 0 else "integral"
+        
+        # Converte hora para Brasília
+        if data_hora != "?":
+            try:
+                from datetime import timezone
+                dt_utc = dt.strptime(data_hora, "%d/%m/%Y %H:%M").replace(tzinfo=timezone.utc)
+                dt_br = dt_utc.astimezone(BRASILIA)
+                data_hora = dt_br.strftime("%d/%m/%Y %H:%M")
+            except:
+                pass
+        
+        cancelamentos_formatados.append({
+            "data_hora": data_hora,
+            "venda": num_venda,
+            "filial": str(filial).title(),
+            "valor": valor_f,
+            "tipo": tipo_cancel,
+            "motivo": motivo,
+            "produto": produto
+        })
+    
+    # Monta resposta em HTML
+    linhas = [f"📋 <b>Últimos {len(cancelamentos_formatados)} Cancelamentos</b>\n"]
+    
+    for i, c in enumerate(cancelamentos_formatados, 1):
+        tipo_emoji = "🔴" if c["tipo"] == "integral" else "🟡"
+        linhas.append(
+            f"{i}. {c['data_hora']} — Venda #{c['venda']}\n"
+            f"   {tipo_emoji} {c['tipo'].upper()} — R$ {c['valor']:.2f}\n"
+            f"   📍 {c['filial']}"
+        )
+        if c['motivo']:
+            linhas.append(f"   💬 Motivo: {c['motivo']}")
+        if c['produto']:
+            linhas.append(f"   📦 Produto: {c['produto']}")
+        linhas.append("")
+    
+    return {
+        "tem_cancelamentos": True,
+        "total": len(cancelamentos_formatados),
+        "periodo": f"{data_ini} a {data_fim}",
+        "cancelamentos": cancelamentos_formatados,
+        "mensagem": "\n".join(linhas)
+    }
 
 
 async def executar_tool_cancelamentos(chat_id: int, data_ini: str = None, data_fim: str = None) -> dict:
@@ -1444,6 +1630,7 @@ EXECUTORES = {
     "investigar_queda": executar_tool_investigar_queda,
     "buscar_ultima_venda": executar_tool_ultima_venda,
     "buscar_cancelamentos": executar_tool_cancelamentos,
+    "listar_cancelamentos_detalhe": executar_tool_listar_cancelamentos_detalhe,
 }
 
 

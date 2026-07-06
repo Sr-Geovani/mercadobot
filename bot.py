@@ -706,6 +706,78 @@ def detectar_cancelamentos_suspeitos(
                 })
                 break
 
+    # ─── CAMADA 5: CANCELAMENTO INDIVIDUAL > R$35 EM VENDA PARCIAL ───
+    # Gatilho: qualquer cancelamento >= R$35 que seja parcial (faturado > 0)
+    for r in registros:
+        if r["valor"] >= 35.0:
+            tipo_cancel = "integral" if (r.get("faturado") == 0) else "parcial"
+            if tipo_cancel == "parcial":  # ← SÓ PARCIAL!
+                dt_br = r.get("dt_br")
+                data_hora_exibicao = dt_br.strftime("%d/%m %H:%M") if dt_br is not None else r["data_hora"]
+                # Evita duplicar com valor_alto já identificado
+                ja_tem = any(
+                    a.get("tipo") == "valor_alto" and a.get("valor") == r["valor"]
+                    for a in alertas
+                )
+                if not ja_tem:
+                    alertas.append({
+                        "tipo": "cancelamento_parcial_alto",
+                        "prioridade": 2,
+                        "valor": r["valor"],
+                        "filial": r["filial"],
+                        "venda": r["venda"],
+                        "tipo_cancel": tipo_cancel,
+                        "data_hora": data_hora_exibicao,
+                        "descricao": f"Cancelamento parcial de R$ {r['valor']:.2f} em {r['filial']}"
+                    })
+
+    # ─── CAMADA 6: MÚLTIPLOS CANCELAMENTOS ALTOS (>R$35) NA MESMA FILIAL EM <2h ───
+    # Gatilho: 2+ cancelamentos >= R$35 na mesma filial em janela de 2 horas
+    filiais_cancelamentos = {}
+    for r in registros:
+        if r["valor"] >= 35.0:
+            filial = r.get("filial", "Desconhecida")
+            if filial not in filiais_cancelamentos:
+                filiais_cancelamentos[filial] = []
+            if r.get("dt_br"):
+                filiais_cancelamentos[filial].append((r["dt_br"], r["valor"]))
+    
+    for filial, cancelamentos_filial in filiais_cancelamentos.items():
+        if len(cancelamentos_filial) >= 2:
+            # Ordena por tempo
+            cancelamentos_filial.sort(key=lambda x: x[0])
+            # Procura janelas de 2 horas com 2+ cancelamentos
+            for i in range(len(cancelamentos_filial) - 1):
+                tempo_inicio = cancelamentos_filial[i][0]
+                tempo_fim = tempo_inicio + pd.Timedelta(hours=2)
+                
+                # Conta quantos estão dentro dessa janela
+                nella_janela = [
+                    (t, v) for t, v in cancelamentos_filial
+                    if tempo_inicio <= t <= tempo_fim
+                ]
+                
+                if len(nella_janela) >= 2:
+                    valor_total_janela = sum(v for _, v in nella_janela)
+                    qtd_cancelamentos = len(nella_janela)
+                    # Verifica se já tem alerta deste tipo para evitar duplicação
+                    ja_tem_multiplo = any(
+                        a.get("tipo") == "multiplos_altos_filial" and a.get("filial") == filial
+                        for a in alertas
+                    )
+                    if not ja_tem_multiplo:
+                        alertas.append({
+                            "tipo": "multiplos_altos_filial",
+                            "prioridade": 2,
+                            "qtd": qtd_cancelamentos,
+                            "valor_total": valor_total_janela,
+                            "filial": filial,
+                            "janela_minutos": 120,
+                            "horario_inicio": tempo_inicio.strftime("%H:%M"),
+                            "descricao": f"{qtd_cancelamentos} cancelamentos altos em {filial} entre {tempo_inicio.strftime('%H:%M')} e {tempo_fim.strftime('%H:%M')}"
+                        })
+                    break  # Evita múltiplos alertas da mesma filial
+
     # Ordena por prioridade (1 = mais crítico)
     alertas.sort(key=lambda a: a["prioridade"])
 

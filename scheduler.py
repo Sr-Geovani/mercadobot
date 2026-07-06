@@ -928,7 +928,7 @@ async def enviar_parcial_dia():
     """
     Dispara às 13h todos os dias.
     Busca dados frescos do dia, atualiza dados_usuario,
-    e envia sempre um resumo parcial do dia — independente de alertas.
+    e envia SEMPRE um resumo parcial do dia — independente de alertas.
     """
     from database import listar_usuarios_ativos
     usuarios = await listar_usuarios_ativos()
@@ -997,14 +997,10 @@ async def enviar_parcial_dia():
             # Verifica cancelamentos
             cancel_total = total_cancel.get("_total", 0) if isinstance(total_cancel, dict) else float(total_cancel or 0)
             pct_cancel   = (cancel_total / (total + cancel_total) * 100) if (total + cancel_total) > 0 else 0
-            alerta_cancel = pct_cancel > 25
 
-            # Só envia se houver algo relevante — senão silêncio (atualiza dados_usuario por baixo)
-            if not alerta_cancel:
-                logger.info(f"Parcial 13h: tudo normal para {chat_id} — sem mensagem")
-                await asyncio.sleep(3)
-                continue
-
+            # ─── SEMPRE ENVIA RESUMO ─────────────────────────────────────
+            # (antes só enviava se tinha alerta de cancelamento > 25%)
+            
             # Faturamento por filial
             filiais_txt = ""
             if "nomeFilial" in vendas.columns:
@@ -1014,30 +1010,37 @@ async def enviar_parcial_dia():
 
             # Cancelamentos por filial
             cancel_txt = ""
-            if alerta_cancel:
-                cancel_txt = f"\n\n⚠️ <b>Cancelamentos: R$ {cancel_total:.2f} ({pct_cancel:.1f}%)</b> — acima de 25%"
+            if cancel_total > 0:
+                cancel_txt = f"\n\n⚠️ <b>Cancelamentos: R$ {cancel_total:.2f} ({pct_cancel:.1f}%)</b>"
                 if isinstance(total_cancel, dict):
                     linhas_c = [f"  • {f.title()}: R$ {v:.2f}" for f, v in total_cancel.items() if not f.startswith("_") and v > 0]
                     if linhas_c:
                         cancel_txt += "\n" + "\n".join(linhas_c)
 
+            # Mensagem de resumo SEMPRE enviada
+            msg_resumo = (
+                f"📊 <b>Parcial do dia — {hoje}</b>\n\n"
+                f"💰 Até as 13h:\n"
+                f"  • Total: <b>R$ {total:,.2f}</b>\n"
+                f"  • Transações: {n}\n"
+                f"  • Ticket médio: R$ {ticket:.2f}"
+                f"{filiais_txt}"
+                f"{cancel_txt}"
+            )
+            
             await bot.send_message(
                 chat_id=chat_id,
-                text=(
-                    f"📊 <b>Parcial do dia — {hoje}</b>\n\n"
-                    f"💰 Faturamento: {b(f'R$ {total:,.2f}')}{filiais_txt}\n\n"
-                    f"🛒 Transações: {b(str(n))} | Ticket: R$ {ticket:.2f}"
-                    f"{cancel_txt}\n\n"
-                    f"<i>Dados de hoje até 13h.</i>"
-                ),
+                text=msg_resumo,
                 parse_mode="HTML",
                 reply_markup=kb_menu(f"Hoje ({hoje})")
             )
-            logger.info(f"Parcial 13h enviado para {chat_id} — cancelamentos {pct_cancel:.1f}%")
+            logger.info(f"Parcial 13h enviada para {chat_id} ✅")
             await asyncio.sleep(3)
 
         except Exception as e:
-            logger.error(f"Erro no parcial do dia para {chat_id}: {e}")
+            logger.error(f"Erro em enviar_parcial_dia para {chat_id}: {e}")
+            await asyncio.sleep(3)
+            continue
 
 
 async def enviar_alertas_proativos(modo: str = "completo"):
