@@ -59,15 +59,36 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             # Mensagem diferenciada se foi cancelado mas ainda tem acesso
             if status == "cancelado_mas_ativo":
-                assinatura_fim = datetime.fromisoformat(usuario["assinatura_fim"])
-                agora = datetime.now(ZoneInfo("America/Sao_Paulo"))
-                dias_restantes = (assinatura_fim - agora).days + 1
-                msg_texto = (
-                    f"👋 Bem-vindo(a) de volta, {b(nome)}!\n\n"
-                    f"⏸️ Sua assinatura foi cancelada, mas você ainda tem acesso até {b(assinatura_fim.strftime('%d/%m/%Y'))}.\n"
-                    f"Restam {b(f'{dias_restantes} dias')} de uso.\n\n"
-                    f"Use /reativar para continuar depois dessa data."
-                )
+                # Determina a data de expiração (assinatura_fim ou trial_fim)
+                data_expiracao = None
+                if usuario.get("assinatura_fim"):
+                    try:
+                        data_expiracao = datetime.fromisoformat(usuario["assinatura_fim"])
+                    except:
+                        pass
+                
+                # Se não tem assinatura_fim (vem de trial), usa trial_fim
+                if not data_expiracao and usuario.get("trial_fim"):
+                    try:
+                        data_expiracao = datetime.fromisoformat(usuario["trial_fim"])
+                    except:
+                        pass
+                
+                if data_expiracao:
+                    agora = datetime.now(ZoneInfo("America/Sao_Paulo"))
+                    dias_restantes = (data_expiracao - agora).days + 1
+                    msg_texto = (
+                        f"👋 Bem-vindo(a) de volta, {b(nome)}!\n\n"
+                        f"⏸️ Sua assinatura foi cancelada, mas você ainda tem acesso até {b(data_expiracao.strftime('%d/%m/%Y'))}.\n"
+                        f"Restam {b(f'{dias_restantes} dias')} de uso.\n\n"
+                        f"Use /reativar para continuar depois dessa data."
+                    )
+                else:
+                    msg_texto = (
+                        f"👋 Bem-vindo(a) de volta, {b(nome)}!\n\n"
+                        f"⏸️ Sua assinatura foi cancelada.\n\n"
+                        f"Use /reativar para voltar a usar o MercadoBot."
+                    )
             else:
                 msg_texto = (
                     f"👋 Bem-vindo(a) de volta, {b(nome)}!\n\n"
@@ -659,19 +680,33 @@ async def cmd_cancelar_assinatura(update: Update, context: ContextTypes.DEFAULT_
         )
         return
 
-    # Calcula data de vencimento se houver assinatura_fim
+    # Calcula data de vencimento se houver assinatura_fim ou trial_fim
     mensagem_vencimento = ""
+    data_expiracao_str = None
+    
     assinatura_fim_raw = usuario.get("assinatura_fim")
     if assinatura_fim_raw:
         try:
             assinatura_fim_dt = datetime.fromisoformat(assinatura_fim_raw)
-            data_vencimento = assinatura_fim_dt.strftime("%d/%m/%Y")
-            if usuario["status"] == "cancelado_mas_ativo":
-                mensagem_vencimento = f"\n• Você ainda tem acesso até {b(data_vencimento)}\n• Depois dessa data, sua assinatura expirará"
-            else:
-                mensagem_vencimento = f"\n• Você pode usar até {b(data_vencimento)} (data atual de término)"
+            data_expiracao_str = assinatura_fim_dt.strftime("%d/%m/%Y")
         except:
             pass
+    
+    # Se não tem assinatura_fim (vem de trial), usa trial_fim
+    if not data_expiracao_str:
+        trial_fim_raw = usuario.get("trial_fim")
+        if trial_fim_raw:
+            try:
+                trial_fim_dt = datetime.fromisoformat(trial_fim_raw)
+                data_expiracao_str = trial_fim_dt.strftime("%d/%m/%Y")
+            except:
+                pass
+    
+    if data_expiracao_str:
+        if usuario["status"] == "cancelado_mas_ativo":
+            mensagem_vencimento = f"\n• Você ainda tem acesso até {b(data_expiracao_str)}\n• Depois dessa data, sua assinatura expirará"
+        else:
+            mensagem_vencimento = f"\n• Você pode usar até {b(data_expiracao_str)} (data atual de término)"
 
     kb = InlineKeyboardMarkup([
         [InlineKeyboardButton("❌ Sim, cancelar assinatura", callback_data="confirmar_cancelamento")],

@@ -2638,21 +2638,44 @@ async def cmd_reativar_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     if status == "cancelado_mas_ativo":
         tem_acesso, _ = await usuario_tem_acesso(chat_id)
         if tem_acesso:
-            assinatura_fim = datetime.fromisoformat(usuario["assinatura_fim"])
-            dias_restantes = (assinatura_fim - agora).days + 1
+            # Determina qual é a data de expiração (pode vir de trial ou de assinatura)
+            data_expiracao = None
+            if usuario.get("assinatura_fim"):
+                try:
+                    data_expiracao = datetime.fromisoformat(usuario["assinatura_fim"])
+                except:
+                    pass
+            
+            # Se não tem assinatura_fim (vem de trial), usa trial_fim
+            if not data_expiracao and usuario.get("trial_fim"):
+                try:
+                    data_expiracao = datetime.fromisoformat(usuario["trial_fim"])
+                except:
+                    pass
+            
+            # Se ainda não encontrou a data, erro — não deveria acontecer
+            if not data_expiracao:
+                await update.message.reply_text(
+                    "❌ Erro: não foi possível determinar sua data de expiração.\n\n"
+                    "Use /status para verificar seu acesso.",
+                    parse_mode="HTML"
+                )
+                return
+            
+            dias_restantes = (data_expiracao - agora).days + 1
             
             kb = InlineKeyboardMarkup([
-                [InlineKeyboardButton("✅ Sim, renovar em " + assinatura_fim.strftime('%d/%m'), 
+                [InlineKeyboardButton("✅ Sim, renovar em " + data_expiracao.strftime('%d/%m'), 
                                       callback_data="reativar_agendar")],
                 [InlineKeyboardButton("❌ Não, deixar expirar", callback_data="menu_principal")],
             ])
             
             await update.message.reply_text(
                 f"⏸️ {b('Sua assinatura foi cancelada.')}\n\n"
-                f"Mas você ainda tem acesso até {b(assinatura_fim.strftime('%d/%m/%Y'))}.\n"
+                f"Mas você ainda tem acesso até {b(data_expiracao.strftime('%d/%m/%Y'))}.\n"
                 f"Restam {b(f'{dias_restantes} dias')}.\n\n"
                 f"🔄 {b('Deseja renovar automaticamente?')}\n"
-                f"Cobraremos R$ 29,90 em {b(assinatura_fim.strftime('%d/%m'))}\n"
+                f"Cobraremos R$ 29,90 em {b(data_expiracao.strftime('%d/%m'))}\n"
                 f"(sem cobranças até lá).",
                 parse_mode="HTML",
                 reply_markup=kb
@@ -3013,13 +3036,34 @@ async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await msg.reply_text("Erro: usuário não encontrado.")
             return
         
-        assinatura_fim = datetime.fromisoformat(usuario["assinatura_fim"])
+        # Determina a data de expiração (assinatura_fim ou trial_fim)
+        data_expiracao = None
+        if usuario.get("assinatura_fim"):
+            try:
+                data_expiracao = datetime.fromisoformat(usuario["assinatura_fim"])
+            except:
+                pass
+        
+        # Se não tem assinatura_fim (vem de trial), usa trial_fim
+        if not data_expiracao and usuario.get("trial_fim"):
+            try:
+                data_expiracao = datetime.fromisoformat(usuario["trial_fim"])
+            except:
+                pass
+        
+        if not data_expiracao:
+            await msg.reply_text(
+                "❌ Erro ao determinar data de renovação.\n\n"
+                "Use /reativar para tentar novamente.",
+                parse_mode="HTML"
+            )
+            return
         
         # Formata a data para o Asaas (YYYY-MM-DD HH:MM:SS)
-        proxima_cobranca_str = assinatura_fim.strftime("%Y-%m-%d %H:%M:%S")
+        proxima_cobranca_str = data_expiracao.strftime("%Y-%m-%d %H:%M:%S")
         
         try:
-            # Gera checkout agendado para começar em assinatura_fim
+            # Gera checkout agendado para começar em data_expiracao
             link, assinatura_id = await gerar_link_pagamento(
                 usuario.get("asaas_id"),
                 chat_id,
@@ -3047,7 +3091,7 @@ async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await msg.reply_text(
                 f"✅ {b('Renovação agendada!')}\n\n"
                 f"Clique no botão abaixo para confirmar seu cartão.\n\n"
-                f"💳 Cobraremos em {b(assinatura_fim.strftime('%d/%m/%Y'))}\n"
+                f"💳 Cobraremos em {b(data_expiracao.strftime('%d/%m/%Y'))}\n"
                 f"(valor: R$ 29,90)\n\n"
                 f"Até lá, você tem acesso normal! 🎉",
                 parse_mode="HTML",
