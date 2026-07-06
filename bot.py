@@ -2544,14 +2544,19 @@ def calcular_dias_trial_restantes(usuario: dict) -> int:
 
 async def enviar_reativacao(update_or_msg, chat_id: int, is_callback: bool = False):
     """
-    FUNÇÃO ÚNICA para enviar mensagem de reativação (para usuários SEM acesso).
-    Usa checkout de reativação (sem trial).
+    FUNÇÃO ÚNICA para enviar mensagem de reativação.
+    
+    Dois cenários:
+    1. cancelado_mas_ativo COM acesso: oferece agendamento
+    2. Sem acesso (expirado/cancelado): cobra imediatamente
     
     update_or_msg: pode ser Message (de /reativar) ou CallbackQuery.message (de callback)
     is_callback: True se vem de callback_query, False se de /reativar
     """
-    from database import buscar_usuario, atualizar_usuario
+    from database import buscar_usuario, atualizar_usuario, usuario_tem_acesso
     from pagamento import gerar_checkout_reativacao
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
     
     usuario = await buscar_usuario(chat_id)
     if not usuario:
@@ -2571,11 +2576,79 @@ async def enviar_reativacao(update_or_msg, chat_id: int, is_callback: bool = Fal
                 await update_or_msg.reply_text(msg_text)
             return
         
-        # Gera checkout de reativação SEM TRIAL (cobra hoje)
+        brasilia = ZoneInfo("America/Sao_Paulo")
+        status = usuario.get("status")
+        
+        # ─── CENÁRIO 1: cancelado_mas_ativo COM ACESSO ───────────────────
+        # Ofereça agendamento para a data de expiração
+        if status == "cancelado_mas_ativo":
+            tem_acesso, _ = await usuario_tem_acesso(chat_id)
+            if tem_acesso:
+                # Determina data de expiração
+                data_expiracao = None
+                if usuario.get("assinatura_fim"):
+                    try:
+                        data_expiracao = datetime.fromisoformat(usuario["assinatura_fim"])
+                        if data_expiracao.tzinfo is None:
+                            data_expiracao = data_expiracao.replace(tzinfo=brasilia)
+                    except:
+                        pass
+                
+                # Fallback para trial_fim
+                if not data_expiracao and usuario.get("trial_fim"):
+                    try:
+                        data_expiracao = datetime.fromisoformat(usuario["trial_fim"])
+                        if data_expiracao.tzinfo is None:
+                            data_expiracao = data_expiracao.replace(tzinfo=brasilia)
+                    except:
+                        pass
+                
+                if data_expiracao:
+                    proxima_cobranca_str = data_expiracao.strftime("%Y-%m-%d %H:%M:%S")
+                    
+                    # Gera checkout agendado
+                    link, assinatura_id = await gerar_checkout_reativacao(
+                        asaas_id, 
+                        chat_id,
+                        proxima_cobranca_em=proxima_cobranca_str
+                    )
+                    
+                    if not link:
+                        msg_text = "❌ Erro ao processar reativação.\n\nUse /start para tentar novamente."
+                        if is_callback:
+                            await update_or_msg.message.reply_text(msg_text)
+                        else:
+                            await update_or_msg.reply_text(msg_text)
+                        return
+                    
+                    # Salva novo assinatura_id
+                    if assinatura_id:
+                        await atualizar_usuario(chat_id, assinatura_asaas_id=assinatura_id)
+                    
+                    kb = InlineKeyboardMarkup([
+                        [InlineKeyboardButton("💳 Confirmar pagamento", url=link)],
+                    ])
+                    
+                    msg_text = (
+                        f"👋 {b('Bem-vindo de volta!')}\n\n"
+                        f"Clique no botão para confirmar seu cartão.\n\n"
+                        f"💳 Cobraremos R$ 29,90 em {b(data_expiracao.strftime('%d/%m/%Y'))}\n"
+                        f"(sua próxima renovação)\n\n"
+                        f"Até lá, você tem acesso normal! 🎉"
+                    )
+                    
+                    if is_callback:
+                        await update_or_msg.message.reply_text(msg_text, parse_mode="HTML", reply_markup=kb)
+                    else:
+                        await update_or_msg.reply_text(msg_text, parse_mode="HTML", reply_markup=kb)
+                    return
+        
+        # ─── CENÁRIO 2: SEM ACESSO (cancelado/expirado) ───────────────────
+        # Cobra imediatamente
         link, assinatura_id = await gerar_checkout_reativacao(
             asaas_id, 
             chat_id,
-            proxima_cobranca_em=None  # Cobra imediatamente
+            proxima_cobranca_em=None  # Cobra hoje
         )
         
         if not link:
@@ -2586,11 +2659,11 @@ async def enviar_reativacao(update_or_msg, chat_id: int, is_callback: bool = Fal
                 await update_or_msg.reply_text(msg_text)
             return
         
-        # Salva o novo assinatura_id
+        # Salva novo assinatura_id
         if assinatura_id:
             await atualizar_usuario(chat_id, assinatura_asaas_id=assinatura_id)
         
-        # Mensagem de boas-vindas de reativação
+        # Mensagem de boas-vindas (acesso imediato)
         kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("💳 Confirmar pagamento", url=link)],
         ])
