@@ -2614,8 +2614,8 @@ async def enviar_reativacao(update_or_msg, chat_id: int, is_callback: bool = Fal
 
 
 async def cmd_reativar_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Comando /reativar — reabre fluxo de reativação."""
-    from database import buscar_usuario
+    """Comando /reativar — fluxo diferenciado por status."""
+    from database import buscar_usuario, usuario_tem_acesso
     from datetime import datetime
     from zoneinfo import ZoneInfo
     
@@ -2628,8 +2628,41 @@ async def cmd_reativar_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         )
         return
 
-    # Se tem acesso ativo, não precisa reativar
-    if usuario["status"] in ("trial", "ativo", "cancelado_mas_ativo"):
+    status = usuario["status"]
+    BRASILIA = ZoneInfo("America/Sao_Paulo")
+    agora = datetime.now(BRASILIA)
+
+    # ─── Caso 1: cancelado_mas_ativo COM acesso válido ─────────────────────────
+    # Usuário cancelou mas ainda tem dias de acesso já pago.
+    # Ofereça agendar renovação para a data de vencimento (sem cobrar agora)
+    if status == "cancelado_mas_ativo":
+        tem_acesso, _ = await usuario_tem_acesso(chat_id)
+        if tem_acesso:
+            assinatura_fim = datetime.fromisoformat(usuario["assinatura_fim"])
+            dias_restantes = (assinatura_fim - agora).days + 1
+            
+            kb = InlineKeyboardMarkup([
+                [InlineKeyboardButton("✅ Sim, renovar em " + assinatura_fim.strftime('%d/%m'), 
+                                      callback_data="reativar_agendar")],
+                [InlineKeyboardButton("❌ Não, deixar expirar", callback_data="menu_principal")],
+            ])
+            
+            await update.message.reply_text(
+                f"⏸️ {b('Sua assinatura foi cancelada.')}\n\n"
+                f"Mas você ainda tem acesso até {b(assinatura_fim.strftime('%d/%m/%Y'))}.\n"
+                f"Restam {b(f'{dias_restantes} dias')}.\n\n"
+                f"🔄 {b('Deseja renovar automaticamente?')}\n"
+                f"Cobraremos R$ 29,90 em {b(assinatura_fim.strftime('%d/%m'))}\n"
+                f"(sem cobranças até lá).",
+                parse_mode="HTML",
+                reply_markup=kb
+            )
+            return
+        # Senão, caiu fora e vai para o fluxo de cobrança abaixo
+
+    # ─── Caso 2: trial, ativo, ou cancelado_mas_ativo SEM acesso ─────────────
+    # Verifica se tem acesso válido em geral
+    if status in ("trial", "ativo"):
         tem_acesso, _ = await usuario_tem_acesso(chat_id)
         if tem_acesso:
             await update.message.reply_text(
@@ -2639,28 +2672,35 @@ async def cmd_reativar_handler(update: Update, context: ContextTypes.DEFAULT_TYP
             )
             return
     
-    # Verifica se ainda tem assinatura_fim válida
-    assinatura_fim_raw = usuario.get("assinatura_fim")
-    if assinatura_fim_raw:
-        try:
-            assinatura_fim = datetime.fromisoformat(assinatura_fim_raw)
-            agora = datetime.now(ZoneInfo("America/Sao_Paulo"))
-            
-            if agora <= assinatura_fim:
-                # Ainda tem acesso! Não precisa pagar nada
-                await update.message.reply_text(
-                    f"✅ {b('Sua assinatura ainda está ativa!')}\n\n"
-                    f"Você pode usar o MercadoBot até {assinatura_fim.strftime('%d/%m/%Y')}.\n"
-                    f"Use /menu para acessar o bot.",
-                    parse_mode="HTML",
-                    reply_markup=kb_menu()
-                )
-                return
-        except Exception as e:
-            logger.error(f"Erro ao parsear assinatura_fim: {e}")
+    # ─── Caso 3: status cancelado, expirado, ou cancelado_mas_ativo EXPIRADO ──
+    # Precisa fazer novo pagamento para reativar
+    faltando = []
+    if not usuario.get("telefone"):
+        faltando.append("telefone")
+    if not usuario.get("cep"):
+        faltando.append("cep")
+    if not usuario.get("endereco_numero"):
+        faltando.append("numero")
 
-    # Assinatura expirou, precisa pagar - usa função ÚNICA de reativação
+    if faltando:
+        if chat_id not in dados_usuario:
+            dados_usuario[chat_id] = {}
+        dados_usuario[chat_id]["aguardando"] = "reativar_telefone"
+        dados_usuario[chat_id]["reativar_dados_pendentes"] = faltando
+        await update.message.reply_text(
+            f"🔄 {b('Reativar MercadoBot')}\n\n"
+            f"Antes de continuar, vamos {b('atualizar seu cadastro')} — "
+            f"são só 3 perguntas rápidas.\n\n"
+            f"📱 Informe seu {b('telefone com DDD')} (só números):\n\n"
+            f"Exemplo: 11987654321",
+            parse_mode="HTML"
+        )
+        return
+
+    # Dados completos — gera novo checkout de cobrança
     await enviar_reativacao(update.message, chat_id, is_callback=False)
+
+
 
 
 async def cmd_cancelar_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2960,6 +3000,64 @@ async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Usa função ÚNICA de reativação
         await enviar_reativacao(msg, chat_id, is_callback=False)
         return
+
+    # ─── Agendar renovação automática (cancelado_mas_ativo com acesso válido) ──
+    if acao == "reativar_agendar":
+        await query.answer()
+        from database import buscar_usuario
+        from pagamento import gerar_link_pagamento
+        from datetime import datetime
+        
+        usuario = await buscar_usuario(chat_id)
+        if not usuario:
+            await msg.reply_text("Erro: usuário não encontrado.")
+            return
+        
+        assinatura_fim = datetime.fromisoformat(usuario["assinatura_fim"])
+        
+        # Formata a data para o Asaas (YYYY-MM-DD HH:MM:SS)
+        proxima_cobranca_str = assinatura_fim.strftime("%Y-%m-%d %H:%M:%S")
+        
+        try:
+            # Gera checkout agendado para começar em assinatura_fim
+            link, assinatura_id = await gerar_link_pagamento(
+                usuario.get("asaas_id"),
+                chat_id,
+                reativacao=True,
+                proxima_cobranca_em=proxima_cobranca_str
+            )
+            
+            if not link:
+                await msg.reply_text(
+                    "❌ Erro ao gerar link de pagamento.\n\n"
+                    "Use /reativar para tentar novamente.",
+                    parse_mode="HTML"
+                )
+                return
+            
+            kb = InlineKeyboardMarkup([
+                [InlineKeyboardButton("💳 Confirmar cartão", url=link)],
+            ])
+            
+            await msg.reply_text(
+                f"✅ {b('Renovação agendada!')}\n\n"
+                f"Clique no botão abaixo para confirmar seu cartão.\n\n"
+                f"💳 Cobraremos em {b(assinatura_fim.strftime('%d/%m/%Y'))}\n"
+                f"(valor: R$ 29,90)\n\n"
+                f"Até lá, você tem acesso normal! 🎉",
+                parse_mode="HTML",
+                reply_markup=kb
+            )
+        except Exception as e:
+            logger.error(f"Erro ao agendar renovação: {e}")
+            await msg.reply_text(
+                "❌ Erro ao processar agendamento.\n\n"
+                "Use /reativar para tentar novamente.",
+                parse_mode="HTML"
+            )
+        return
+
+
 
     # ─── Verificar status de pagamento ──────────────────────
     if acao == "verificar_status":

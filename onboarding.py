@@ -7,6 +7,7 @@ from telegram.ext import ContextTypes, ConversationHandler, CommandHandler, Mess
 
 from database import criar_usuario, buscar_usuario, atualizar_usuario, usuario_tem_acesso
 from pagamento import criar_cliente_asaas, gerar_link_pagamento
+from zoneinfo import ZoneInfo
 
 logger = logging.getLogger(__name__)
 
@@ -54,13 +55,31 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             
             # ✅ Tem acesso, mostra menu
             from bot import kb_menu
+            from datetime import datetime
+            
+            # Mensagem diferenciada se foi cancelado mas ainda tem acesso
+            if status == "cancelado_mas_ativo":
+                assinatura_fim = datetime.fromisoformat(usuario["assinatura_fim"])
+                agora = datetime.now(ZoneInfo("America/Sao_Paulo"))
+                dias_restantes = (assinatura_fim - agora).days + 1
+                msg_texto = (
+                    f"👋 Bem-vindo(a) de volta, {b(nome)}!\n\n"
+                    f"⏸️ Sua assinatura foi cancelada, mas você ainda tem acesso até {b(assinatura_fim.strftime('%d/%m/%Y'))}.\n"
+                    f"Restam {b(f'{dias_restantes} dias')} de uso.\n\n"
+                    f"Use /reativar para continuar depois dessa data."
+                )
+            else:
+                msg_texto = (
+                    f"👋 Bem-vindo(a) de volta, {b(nome)}!\n\n"
+                    f"Sua assinatura está ativa. O que deseja fazer?"
+                )
+            
             kb = InlineKeyboardMarkup([
                 [InlineKeyboardButton("📊 Abrir menu", callback_data="menu_principal")],
                 [InlineKeyboardButton("⚙️ Atualizar credenciais PDV Legal", callback_data="atualizar_credenciais")],
             ])
             await update.message.reply_text(
-                f"👋 Bem-vindo(a) de volta, {b(nome)}!\n\n"
-                f"Sua assinatura está ativa. O que deseja fazer?",
+                msg_texto,
                 parse_mode="HTML",
                 reply_markup=kb
             )
@@ -551,10 +570,14 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="HTML"
         )
     elif status in ("bloqueado", "cancelado", "expirado"):
+        kb = InlineKeyboardMarkup([[
+            InlineKeyboardButton("🔄 Reativar assinatura", callback_data="reativar")
+        ]])
         await update.message.reply_text(
             f"❌ {b('Assinatura inativa.')}\n\n"
-            f"Use /start para reativar.",
-            parse_mode="HTML"
+            f"Para continuar usando o MercadoBot, clique em reativar abaixo.",
+            parse_mode="HTML",
+            reply_markup=kb
         )
 
 
