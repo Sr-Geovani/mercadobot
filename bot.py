@@ -2986,6 +2986,61 @@ async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
+    # ─── Validar cartão no onboarding (trial) ──────────────────
+    if acao == "validar_cartao_trial":
+        await query.answer()
+        from database import buscar_usuario
+        from pagamento import gerar_link_pagamento
+        
+        usuario = await buscar_usuario(chat_id)
+        if not usuario or not usuario.get("asaas_id"):
+            await msg.reply_text(
+                "❌ Erro ao validar cartão.\n\n"
+                "Use /start para criar um novo cadastro."
+            )
+            return
+        
+        try:
+            # Gera checkout COM TRIAL — não cobra agora, cobra após 7 dias
+            link, assinatura_id = await gerar_link_pagamento(
+                usuario.get("asaas_id"),
+                chat_id,
+                reativacao=False,  # Não é reativação, é trial inicial
+                dias_trial_restantes=7
+            )
+            
+            if not link:
+                await msg.reply_text(
+                    "❌ Erro ao gerar link de validação.\n\n"
+                    "Use /start para tentar novamente.",
+                    parse_mode="HTML"
+                )
+                return
+            
+            kb = InlineKeyboardMarkup([
+                [InlineKeyboardButton("💳 Validar Cartão (7 dias grátis)", url=link)],
+            ])
+            
+            await msg.reply_text(
+                f"🎁 {b('7 dias de trial grátis!')}\n\n"
+                f"Clique no botão para validar seu cartão de crédito.\n\n"
+                f"✅ Nenhuma cobrança agora.\n"
+                f"💳 Primeira cobrança: em 7 dias (R$ 29,90)\n\n"
+                f"Pode cancelar a qualquer momento sem custo.",
+                parse_mode="HTML",
+                reply_markup=kb
+            )
+            
+            logger.info(f"[ONBOARDING] Link de validação gerado para {chat_id}: {link}")
+        except Exception as e:
+            logger.error(f"Erro ao gerar link de validação: {e}")
+            await msg.reply_text(
+                "❌ Erro ao processar validação.\n\n"
+                "Use /start para tentar novamente.",
+                parse_mode="HTML"
+            )
+        return
+
     # ─── Reativar assinatura ─────────────────────────────────
     if acao == "reativar":
         await query.answer()  # Remove o "spinning" do botão

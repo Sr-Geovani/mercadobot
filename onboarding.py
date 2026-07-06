@@ -144,11 +144,13 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # Tem asaas_id mas não validou cartão ainda = gerar novo link
             await update.message.reply_text(
                 f"👋 {b(nome)}, você já tem um cadastro!\n\n"
-                f"⏳ Ainda não identifiquei a confirmação do seu cartão.\n"
-                f"Se já preencheu, aguarde alguns instantes. Se não, ou se o link expirou, gere um novo:",
+                f"🎁 Você tem direito a {b('7 dias grátis')} de trial.\n"
+                f"Clique no botão abaixo para validar seu cartão e ativar o trial.\n\n"
+                f"✅ Nenhuma cobrança agora.\n"
+                f"💳 Primeira cobrança será daqui a 7 dias.",
                 parse_mode="HTML",
                 reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("🔄 Gerar novo link de pagamento", callback_data="reativar")],
+                    [InlineKeyboardButton("💳 Validar Cartão (7 dias grátis)", callback_data="validar_cartao_trial")],
                 ])
             )
             return ConversationHandler.END
@@ -554,11 +556,17 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     agora  = datetime.now(brasilia)
 
     if status == "pendente":
+        kb = InlineKeyboardMarkup([[
+            InlineKeyboardButton("💳 Validar Cartão (7 dias grátis)", callback_data="validar_cartao_trial")
+        ]])
         await update.message.reply_text(
-            f"⏳ {b('Aguardando confirmação do pagamento.')}\n\n"
-            f"Se já cadastrou o cartão, aguarde alguns instantes.\n"
-            f"O acesso é liberado automaticamente após a confirmação.",
-            parse_mode="HTML"
+            f"⏳ {b('Seu cadastro está quase pronto!')}\n\n"
+            f"Clique no botão para validar seu cartão.\n\n"
+            f"🎁 Você tem direito a {b('7 dias grátis')} de trial.\n"
+            f"✅ Nenhuma cobrança agora.\n"
+            f"💳 Primeira cobrança será daqui a 7 dias.",
+            parse_mode="HTML",
+            reply_markup=kb
         )
     elif status == "trial":
         fim = datetime.fromisoformat(usuario["trial_fim"])
@@ -579,17 +587,37 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="HTML"
         )
     elif status == "cancelado_mas_ativo":
-        # Cancelado mas ainda tem acesso até assinatura_fim
-        fim = datetime.fromisoformat(usuario["assinatura_fim"])
-        dias = (fim - agora).days + 1
-        await update.message.reply_text(
-            f"⏸️ {b('Assinatura cancelada')}\n\n"
-            f"Você pode usar o MercadoBot até {b(fim.strftime('%d/%m/%Y'))}.\n"
-            f"Restam {b(f'{dias} dias')} de acesso.\n\n"
-            f"Não haverá novas cobranças.\n"
-            f"Use /reativar para voltar a usar após essa data.",
-            parse_mode="HTML"
-        )
+        # Cancelado mas ainda tem acesso até assinatura_fim ou trial_fim
+        fim = None
+        if usuario.get("assinatura_fim"):
+            try:
+                fim = datetime.fromisoformat(usuario["assinatura_fim"])
+            except:
+                pass
+        
+        # Se não tem assinatura_fim, tenta trial_fim
+        if not fim and usuario.get("trial_fim"):
+            try:
+                fim = datetime.fromisoformat(usuario["trial_fim"])
+            except:
+                pass
+        
+        if fim:
+            dias = (fim - agora).days + 1
+            await update.message.reply_text(
+                f"⏸️ {b('Assinatura cancelada')}\n\n"
+                f"Você pode usar o MercadoBot até {b(fim.strftime('%d/%m/%Y'))}.\n"
+                f"Restam {b(f'{dias} dias')} de acesso.\n\n"
+                f"Não haverá novas cobranças.\n"
+                f"Use /reativar para voltar a usar após essa data.",
+                parse_mode="HTML"
+            )
+        else:
+            await update.message.reply_text(
+                f"⏸️ {b('Assinatura cancelada')}\n\n"
+                f"Use /reativar para voltar a usar o MercadoBot.",
+                parse_mode="HTML"
+            )
     elif status in ("bloqueado", "cancelado", "expirado"):
         kb = InlineKeyboardMarkup([[
             InlineKeyboardButton("🔄 Reativar assinatura", callback_data="reativar")
