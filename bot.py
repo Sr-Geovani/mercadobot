@@ -1996,7 +1996,19 @@ async def comando_semana_atual(msg, chat_id: int):
     ini   = seg.strftime("%d/%m/%Y")
     fim   = agora.strftime("%d/%m/%Y")
 
+    # Tenta pegar do cache primeiro, depois do banco
     d      = dados_usuario.get(chat_id, {})
+    pdv_email = d.get("pdv_email")
+    pdv_senha = d.get("pdv_senha")
+    
+    # Se não tem no cache, busca do banco
+    if not pdv_email or not pdv_senha:
+        from database import buscar_usuario
+        usuario_db = await buscar_usuario(chat_id)
+        if usuario_db:
+            pdv_email = pdv_email or usuario_db.get("pdv_email")
+            pdv_senha = pdv_senha or usuario_db.get("pdv_senha")
+    
     vendas = d.get("vendas")
 
     # Se dados carregados já cobrem a semana, usa — senão busca
@@ -2006,12 +2018,6 @@ async def comando_semana_atual(msg, chat_id: int):
     else:
         await msg.reply_text("⏳ Buscando dados da semana atual...")
         try:
-            from scraper import baixar_relatorios_periodo
-            import asyncio
-            loop = asyncio.get_event_loop()
-            pdv_email = d.get("pdv_email") or dados_usuario.get(chat_id, {}).get("pdv_email")
-            pdv_senha = d.get("pdv_senha") or dados_usuario.get(chat_id, {}).get("pdv_senha")
-            
             if not pdv_email or not pdv_senha:
                 await msg.reply_text(
                     "❌ Seus dados de acesso ao PDV não estão configurados.\n\n"
@@ -2019,6 +2025,10 @@ async def comando_semana_atual(msg, chat_id: int):
                 )
                 return
             
+            from scraper import baixar_relatorios_periodo
+            import asyncio
+            loop = asyncio.get_event_loop()
+
             logger.info(f"[SEMANA] Buscando {ini} a {fim} para {chat_id}")
             path_v, path_p, total_c = await loop.run_in_executor(
                 None, baixar_relatorios_periodo, ini, fim, pdv_email, pdv_senha
@@ -2095,13 +2105,21 @@ async def comando_semana_comparativo(msg, chat_id: int):
         pdv_email = d.get("pdv_email")
         pdv_senha = d.get("pdv_senha")
         
+        # Se não tem no cache, busca do banco
+        if not pdv_email or not pdv_senha:
+            from database import buscar_usuario
+            usuario_db = await buscar_usuario(chat_id)
+            if usuario_db:
+                pdv_email = pdv_email or usuario_db.get("pdv_email")
+                pdv_senha = pdv_senha or usuario_db.get("pdv_senha")
+        
         if not pdv_email or not pdv_senha:
             await msg.reply_text(
                 "❌ Seus dados de acesso ao PDV não estão configurados.\n\n"
                 "Use /start para atualizar suas credenciais."
             )
             return
-            
+        
         from scraper import baixar_relatorios_periodo
         import asyncio
         loop = asyncio.get_event_loop()
@@ -2131,38 +2149,44 @@ async def comando_semana_comparativo(msg, chat_id: int):
     
     logger.info(f"[COMPARATIVO] Atual: R$ {fat_atual:.2f}, Anterior: R$ {fat_anterior:.2f}, Var: {var_pct:.1f}%")
 
-    texto = (
-        f"📊 {b('Mês atual x Mês anterior')}\n\n"
-        f"📅 {b(nome_atual)}: R$ {fat_atual:,.2f}\n"
-        f"📅 {b(nome_anterior)}: R$ {fat_anterior:,.2f}\n\n"
-        f"{sinal} Variação: {b(f'R$ {abs(var):,.2f}')} ({var_pct:+.1f}%)\n"
-    )
+    try:
+        texto = (
+            f"📊 {b('Mês atual x Mês anterior')}\n\n"
+            f"📅 {b(nome_atual)}: R$ {fat_atual:,.2f}\n"
+            f"📅 {b(nome_anterior)}: R$ {fat_anterior:,.2f}\n\n"
+            f"{sinal} Variação: {b(f'R$ {abs(var):,.2f}')} ({var_pct:+.1f}%)\n"
+        )
 
-    # Detalhamento por filial
-    if "nomeFilial" in v_atual.columns and "nomeFilial" in v_anterior.columns:
-        filiais_atual    = v_atual.groupby("nomeFilial")["valor"].sum()
-        filiais_anterior = v_anterior.groupby("nomeFilial")["valor"].sum()
-        texto += f"\n{b('Por filial:')}\n"
-        for filial in filiais_atual.index:
-            fa = filiais_atual.get(filial, 0)
-            fb = filiais_anterior.get(filial, 0)
-            vf = fa - fb
-            pf = (vf / fb * 100) if fb > 0 else 0
-            sf = "📈" if vf >= 0 else "📉"
-            texto += f"  {sf} {filial.title()}: R$ {fa:,.2f} ({pf:+.1f}%)\n"
+        # Detalhamento por filial
+        if "nomeFilial" in v_atual.columns and "nomeFilial" in v_anterior.columns:
+            filiais_atual    = v_atual.groupby("nomeFilial")["valor"].sum()
+            filiais_anterior = v_anterior.groupby("nomeFilial")["valor"].sum()
+            texto += f"\n{b('Por filial:')}\n"
+            for filial in filiais_atual.index:
+                fa = filiais_atual.get(filial, 0)
+                fb = filiais_anterior.get(filial, 0)
+                vf = fa - fb
+                pf = (vf / fb * 100) if fb > 0 else 0
+                sf = "📈" if vf >= 0 else "📉"
+                texto += f"  {sf} {filial.title()}: R$ {fa:,.2f} ({pf:+.1f}%)\n"
 
-    await enviar(msg, texto)
+        await enviar(msg, texto)
 
-    # Gráfico usando dados combinados com label de mês
-    v_atual["mes"]    = nome_atual
-    v_anterior["mes"] = nome_anterior
-    v_combined = pd.concat([v_anterior, v_atual])
-    await msg.reply_photo(photo=g_semanal(v_combined))
+        # Gráfico usando dados combinados com label de mês
+        v_atual["mes"]    = nome_atual
+        v_anterior["mes"] = nome_anterior
+        v_combined = pd.concat([v_anterior, v_atual])
+        await msg.reply_photo(photo=g_semanal(v_combined))
 
-    ctx = f"Comparativo {nome_atual} (R$ {fat_atual:.2f}) vs {nome_anterior} (R$ {fat_anterior:.2f}). Variação: {var_pct:+.1f}%"
-    insight = await insight_ia(ctx, "comparativo entre os dois meses e oportunidades de melhoria")
-    await enviar(msg, f"💡 {b('INSIGHT')}\n\n{insight}")
-    await abrir_menu(msg, chat_id)
+        ctx = f"Comparativo {nome_atual} (R$ {fat_atual:.2f}) vs {nome_anterior} (R$ {fat_anterior:.2f}). Variação: {var_pct:+.1f}%"
+        insight = await insight_ia(ctx, "comparativo entre os dois meses e oportunidades de melhoria")
+        await enviar(msg, f"💡 {b('INSIGHT')}\n\n{insight}")
+        await abrir_menu(msg, chat_id)
+    except Exception as e:
+        logger.error(f"[COMPARATIVO] Erro ao processar/enviar para {chat_id}: {e}", exc_info=True)
+        await msg.reply_text(
+            f"❌ Erro ao processar dados: {str(e)[:100]}"
+        )
 
 
 async def comando_semana_mes(msg, chat_id: int):
