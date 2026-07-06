@@ -2001,13 +2001,22 @@ async def comando_semana_atual(msg, chat_id: int):
     pdv_email = d.get("pdv_email")
     pdv_senha = d.get("pdv_senha")
     
+    logger.info(f"[SEMANA] Iniciando para {chat_id}, cache_email={bool(pdv_email)}")
+    
     # Se não tem no cache, busca do banco
     if not pdv_email or not pdv_senha:
-        from database import buscar_usuario
-        usuario_db = await buscar_usuario(chat_id)
-        if usuario_db:
-            pdv_email = pdv_email or usuario_db.get("pdv_email")
-            pdv_senha = pdv_senha or usuario_db.get("pdv_senha")
+        try:
+            from database import buscar_usuario
+            logger.info(f"[SEMANA] Buscando credenciais do banco para {chat_id}")
+            usuario_db = await buscar_usuario(chat_id)
+            if usuario_db:
+                pdv_email = pdv_email or usuario_db.get("pdv_email")
+                pdv_senha = pdv_senha or usuario_db.get("pdv_senha")
+                logger.info(f"[SEMANA] Credenciais do banco: email={bool(pdv_email)}, senha={bool(pdv_senha)}")
+            else:
+                logger.warning(f"[SEMANA] Usuário não encontrado no banco para {chat_id}")
+        except Exception as db_error:
+            logger.error(f"[SEMANA] Erro ao buscar banco para {chat_id}: {db_error}", exc_info=True)
     
     vendas = d.get("vendas")
 
@@ -2015,10 +2024,12 @@ async def comando_semana_atual(msg, chat_id: int):
     data_ini_carregada = d.get("data_ini", "")
     if vendas is not None and not vendas.empty and data_ini_carregada <= ini:
         v = vendas
+        logger.info(f"[SEMANA] Usando cache ({len(v)} linhas)")
     else:
         await msg.reply_text("⏳ Buscando dados da semana atual...")
         try:
             if not pdv_email or not pdv_senha:
+                logger.warning(f"[SEMANA] Sem credenciais PDV para {chat_id}")
                 await msg.reply_text(
                     "❌ Seus dados de acesso ao PDV não estão configurados.\n\n"
                     "Use /start para atualizar suas credenciais."
@@ -2047,9 +2058,9 @@ async def comando_semana_atual(msg, chat_id: int):
             dados_usuario[chat_id]["vendas"]       = v
             dados_usuario[chat_id]["periodo_label"] = f"Semana atual ({ini} – {fim})"
         except Exception as e:
-            logger.error(f"[SEMANA] Erro para {chat_id}: {e}", exc_info=True)
+            logger.error(f"[SEMANA] Erro para {chat_id}: {type(e).__name__}: {e}", exc_info=True)
             await msg.reply_text(
-                f"❌ Erro ao buscar dados: {str(e)[:100]}\n\n"
+                f"❌ Erro ao buscar dados: {type(e).__name__}\n\n"
                 f"Verifique sua conexão e tente novamente."
             )
             return
@@ -2062,9 +2073,9 @@ async def comando_semana_atual(msg, chat_id: int):
         await enviar(msg, f"💡 {b('INSIGHT')}\n\n{insight}")
         await abrir_menu(msg, chat_id)
     except Exception as e:
-        logger.error(f"[SEMANA] Erro ao processar/enviar para {chat_id}: {e}", exc_info=True)
+        logger.error(f"[SEMANA] Erro ao processar/enviar para {chat_id}: {type(e).__name__}: {e}", exc_info=True)
         await msg.reply_text(
-            f"❌ Erro ao processar dados: {str(e)[:100]}"
+            f"❌ Erro ao processar dados: {type(e).__name__}"
         )
 
 
@@ -2124,17 +2135,23 @@ async def comando_semana_comparativo(msg, chat_id: int):
         import asyncio
         loop = asyncio.get_event_loop()
 
-        # Busca os dois períodos
-        logger.info(f"[COMPARATIVO] Buscando {ini_atual} a {fim_atual} (atual) para {chat_id}")
-        logger.info(f"[COMPARATIVO] Buscando {ini_anterior} a {fim_anterior} (anterior) para {chat_id}")
-        
+        # Busca os dois períodos SEQUENCIALMENTE (não em paralelo)
+        # para evitar que o segundo sobrescreva o arquivo do primeiro
+        logger.info(f"[COMPARATIVO] Buscando SEQUENCIAL {ini_atual} a {fim_atual} (atual) para {chat_id}")
         path_atual, _, _    = await loop.run_in_executor(None, baixar_relatorios_periodo, ini_atual,    fim_atual,    pdv_email, pdv_senha)
-        path_anterior, _, _ = await loop.run_in_executor(None, baixar_relatorios_periodo, ini_anterior, fim_anterior, pdv_email, pdv_senha)
-
-        v_atual    = normalizar_vendas(pd.read_excel(path_atual))
-        v_anterior = normalizar_vendas(pd.read_excel(path_anterior))
+        logger.info(f"[COMPARATIVO] Arquivo atual: {path_atual}")
         
-        logger.info(f"[COMPARATIVO] Atual: {len(v_atual)} linhas, Anterior: {len(v_anterior)} linhas")
+        # Lê IMEDIATAMENTE antes de buscar o próximo
+        v_atual = normalizar_vendas(pd.read_excel(path_atual))
+        logger.info(f"[COMPARATIVO] Atual lida: {len(v_atual)} linhas, soma R$ {v_atual['valor'].sum():.2f}")
+
+        logger.info(f"[COMPARATIVO] Buscando {ini_anterior} a {fim_anterior} (anterior) para {chat_id}")
+        path_anterior, _, _ = await loop.run_in_executor(None, baixar_relatorios_periodo, ini_anterior, fim_anterior, pdv_email, pdv_senha)
+        logger.info(f"[COMPARATIVO] Arquivo anterior: {path_anterior}")
+        
+        # Lê o anterior
+        v_anterior = normalizar_vendas(pd.read_excel(path_anterior))
+        logger.info(f"[COMPARATIVO] Anterior lida: {len(v_anterior)} linhas, soma R$ {v_anterior['valor'].sum():.2f}")
     except Exception as e:
         logger.error(f"[COMPARATIVO] Erro para {chat_id}: {e}", exc_info=True)
         await msg.reply_text(f"❌ Erro ao buscar dados: {str(e)[:100]}")
