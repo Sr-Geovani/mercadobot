@@ -137,7 +137,21 @@ async def handle_webhook(request: web.Request) -> web.Response:
             # Qualquer pagamento confirmado significa que a pessoa já é assinante —
             # nunca deixa o status como "trial" depois de um pagamento real.
             novo_status    = "ativo"
-            assinatura_fim = (agora + timedelta(days=31)).isoformat()
+            
+            # ⚠️ IMPORTANTE: Se o user já tinha assinatura_fim definida (agendamento),
+            # RESPEITA ela. Só calcula novo se não tinha.
+            assinatura_fim_existente = usuario.get("assinatura_fim")
+            if assinatura_fim_existente:
+                try:
+                    # Tenta usar a data existente (agendamento respeitado)
+                    datetime.fromisoformat(assinatura_fim_existente)
+                    assinatura_fim = assinatura_fim_existente
+                except:
+                    # Se erro ao parsear, recalcula
+                    assinatura_fim = (agora + timedelta(days=31)).isoformat()
+            else:
+                # Sem assinatura_fim anterior, calcula 31 dias
+                assinatura_fim = (agora + timedelta(days=31)).isoformat()
             
             # Busca subscription ID de várias possíveis localizações no webhook
             asaas_subscription_id = None
@@ -157,8 +171,12 @@ async def handle_webhook(request: web.Request) -> web.Response:
             campos_update = dict(
                 status=novo_status,
                 assinatura_fim=assinatura_fim,
-                trial_usado=True,
             )
+            
+            # Só marca trial_usado=True se o user era TRIAL antes
+            # Se era cancelado_mas_ativo ou outro status, não marca
+            if usuario.get("status") == "trial":
+                campos_update["trial_usado"] = True
             
             # Atualiza a referência da subscription real, caso ainda não tivéssemos
             # (acontece no primeiro pagamento confirmado vindo de um Checkout)
@@ -171,7 +189,7 @@ async def handle_webhook(request: web.Request) -> web.Response:
             await atualizar_usuario(chat_id, **campos_update)
 
             # Se o usuário já estava em trial, esta é a primeira cobrança real (fim do trial).
-            # Se já estava "ativo", é uma renovação mensal — mensagem mais simples, sem spam.
+            # Se já estava "ativo" ou outro, é uma renovação/reativação — mensagem apropriada.
             era_trial = usuario.get("status") == "trial"
 
             if _bot:

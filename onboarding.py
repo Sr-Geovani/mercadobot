@@ -732,6 +732,20 @@ async def cmd_cancelar_assinatura(update: Update, context: ContextTypes.DEFAULT_
     chat_id = update.effective_chat.id
     usuario = await buscar_usuario(chat_id)
 
+    # Se já está cancelado, não deixa cancelar de novo
+    if usuario and usuario["status"] == "cancelado_mas_ativo":
+        kb = InlineKeyboardMarkup([[
+            InlineKeyboardButton("🔄 Reativar assinatura", callback_data="reativar")
+        ]])
+        await update.message.reply_text(
+            f"⏸️ {b('Sua assinatura já foi cancelada.')}\n\n"
+            f"Você ainda tem acesso pelo período já pago.\n\n"
+            f"Use o botão abaixo se quiser renovar:",
+            parse_mode="HTML",
+            reply_markup=kb
+        )
+        return
+
     # Permite cancelar se está em trial, ativo OU cancelado_mas_ativo
     # (cancelado_mas_ativo pode ter checkout agendado que precisa ser cancelado)
     if not usuario or usuario["status"] not in ("trial", "ativo", "cancelado_mas_ativo"):
