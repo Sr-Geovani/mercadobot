@@ -2011,22 +2011,51 @@ async def comando_semana_atual(msg, chat_id: int):
             loop = asyncio.get_event_loop()
             pdv_email = d.get("pdv_email") or dados_usuario.get(chat_id, {}).get("pdv_email")
             pdv_senha = d.get("pdv_senha") or dados_usuario.get(chat_id, {}).get("pdv_senha")
+            
+            if not pdv_email or not pdv_senha:
+                await msg.reply_text(
+                    "❌ Seus dados de acesso ao PDV não estão configurados.\n\n"
+                    "Use /start para atualizar suas credenciais."
+                )
+                return
+            
+            logger.info(f"[SEMANA] Buscando {ini} a {fim} para {chat_id}")
             path_v, path_p, total_c = await loop.run_in_executor(
                 None, baixar_relatorios_periodo, ini, fim, pdv_email, pdv_senha
             )
+            logger.info(f"[SEMANA] Arquivos baixados: {path_v}")
             v = normalizar_vendas(pd.read_excel(path_v))
+            logger.info(f"[SEMANA] Vendas normalizadas: {len(v)} linhas")
+            
+            if v.empty:
+                await msg.reply_text(
+                    f"📭 Nenhuma venda registrada na semana de {ini} a {fim}.\n\n"
+                    f"Verifique se os totens estão operando normalmente."
+                )
+                return
+                
             dados_usuario[chat_id]["vendas"]       = v
             dados_usuario[chat_id]["periodo_label"] = f"Semana atual ({ini} – {fim})"
         except Exception as e:
-            await msg.reply_text(f"❌ Erro ao buscar dados: {e}")
+            logger.error(f"[SEMANA] Erro para {chat_id}: {e}", exc_info=True)
+            await msg.reply_text(
+                f"❌ Erro ao buscar dados: {str(e)[:100]}\n\n"
+                f"Verifique sua conexão e tente novamente."
+            )
             return
 
-    await enviar(msg, bloco_semanal(v))
-    await msg.reply_photo(photo=g_semanal(v))
-    ctx = f"Semana atual {ini} a {fim}. Faturamento: R$ {v['valor'].sum():.2f}"
-    insight = await insight_ia(ctx, "tendência da semana e comparativo entre filiais")
-    await enviar(msg, f"💡 {b('INSIGHT')}\n\n{insight}")
-    await abrir_menu(msg, chat_id)
+    try:
+        await enviar(msg, bloco_semanal(v))
+        await msg.reply_photo(photo=g_semanal(v))
+        ctx = f"Semana atual {ini} a {fim}. Faturamento: R$ {v['valor'].sum():.2f}"
+        insight = await insight_ia(ctx, "tendência da semana e comparativo entre filiais")
+        await enviar(msg, f"💡 {b('INSIGHT')}\n\n{insight}")
+        await abrir_menu(msg, chat_id)
+    except Exception as e:
+        logger.error(f"[SEMANA] Erro ao processar/enviar para {chat_id}: {e}", exc_info=True)
+        await msg.reply_text(
+            f"❌ Erro ao processar dados: {str(e)[:100]}"
+        )
 
 
 async def comando_semana_comparativo(msg, chat_id: int):
@@ -2045,24 +2074,52 @@ async def comando_semana_comparativo(msg, chat_id: int):
     ultimo_anterior  = primeiro_atual - timedelta(days=1)
     ini_anterior     = ultimo_anterior.replace(day=1).strftime("%d/%m/%Y")
     fim_anterior     = ultimo_anterior.strftime("%d/%m/%Y")
+    
+    # Nomes dos meses em português
+    meses_pt = {
+        "01": "Janeiro", "02": "Fevereiro", "03": "Março", "04": "Abril",
+        "05": "Maio", "06": "Junho", "07": "Julho", "08": "Agosto",
+        "09": "Setembro", "10": "Outubro", "11": "Novembro", "12": "Dezembro"
+    }
+    mes_atual_num = agora.strftime("%m")
+    mes_ant_num = ultimo_anterior.strftime("%m")
+    ano_atual = agora.strftime("%Y")
+    ano_ant = ultimo_anterior.strftime("%Y")
+    
+    nome_atual = f"{meses_pt[mes_atual_num]}/{ano_atual}"
+    nome_anterior = f"{meses_pt[mes_ant_num]}/{ano_ant}"
 
-    await msg.reply_text(f"⏳ Buscando {agora.strftime('%B')} e mês anterior...")
+    await msg.reply_text(f"⏳ Buscando {nome_atual} e {nome_anterior}...")
     try:
         d         = dados_usuario.get(chat_id, {})
         pdv_email = d.get("pdv_email")
         pdv_senha = d.get("pdv_senha")
+        
+        if not pdv_email or not pdv_senha:
+            await msg.reply_text(
+                "❌ Seus dados de acesso ao PDV não estão configurados.\n\n"
+                "Use /start para atualizar suas credenciais."
+            )
+            return
+            
         from scraper import baixar_relatorios_periodo
         import asyncio
         loop = asyncio.get_event_loop()
 
         # Busca os dois períodos
+        logger.info(f"[COMPARATIVO] Buscando {ini_atual} a {fim_atual} (atual) para {chat_id}")
+        logger.info(f"[COMPARATIVO] Buscando {ini_anterior} a {fim_anterior} (anterior) para {chat_id}")
+        
         path_atual, _, _    = await loop.run_in_executor(None, baixar_relatorios_periodo, ini_atual,    fim_atual,    pdv_email, pdv_senha)
         path_anterior, _, _ = await loop.run_in_executor(None, baixar_relatorios_periodo, ini_anterior, fim_anterior, pdv_email, pdv_senha)
 
         v_atual    = normalizar_vendas(pd.read_excel(path_atual))
         v_anterior = normalizar_vendas(pd.read_excel(path_anterior))
+        
+        logger.info(f"[COMPARATIVO] Atual: {len(v_atual)} linhas, Anterior: {len(v_anterior)} linhas")
     except Exception as e:
-        await msg.reply_text(f"❌ Erro ao buscar dados: {e}")
+        logger.error(f"[COMPARATIVO] Erro para {chat_id}: {e}", exc_info=True)
+        await msg.reply_text(f"❌ Erro ao buscar dados: {str(e)[:100]}")
         return
 
     # Bloco comparativo
@@ -2071,9 +2128,8 @@ async def comando_semana_comparativo(msg, chat_id: int):
     var          = fat_atual - fat_anterior
     var_pct      = (var / fat_anterior * 100) if fat_anterior > 0 else 0
     sinal        = "📈" if var >= 0 else "📉"
-
-    nome_atual    = agora.strftime("%B/%Y").capitalize()
-    nome_anterior = ultimo_anterior.strftime("%B/%Y").capitalize()
+    
+    logger.info(f"[COMPARATIVO] Atual: R$ {fat_atual:.2f}, Anterior: R$ {fat_anterior:.2f}, Var: {var_pct:.1f}%")
 
     texto = (
         f"📊 {b('Mês atual x Mês anterior')}\n\n"

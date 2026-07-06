@@ -1450,6 +1450,28 @@ async def executar_tool_cancelamentos(chat_id: int, data_ini: str = None, data_f
             "mensagem": f"✅ Ótimo! Nenhum cancelamento em {data_ini}.",
         }
     
+    # Se valor_total é 0 MAS tem linhas, calcula soma dos valores
+    if valor_total == 0 and todas_linhas:
+        logger.info(f"[CANCELAMENTOS] valor_total=0 mas tem {len(todas_linhas)} linhas — calculando soma")
+        # Encontra índice da coluna "Valor cancelamento"
+        idx_valor = None
+        for idx, h in enumerate(headers):
+            if "valor" in h.lower() and "cancel" in h.lower():
+                idx_valor = idx
+                break
+        
+        if idx_valor is not None:
+            soma_manual = 0
+            for linha in todas_linhas:
+                if len(linha) > idx_valor:
+                    try:
+                        v_str = str(linha[idx_valor]).replace("R$", "").strip().replace(".", "").replace(",", ".")
+                        soma_manual += float(v_str) if v_str else 0
+                    except:
+                        pass
+            valor_total = soma_manual
+            logger.info(f"[CANCELAMENTOS] Soma manual calculada: R$ {valor_total:.2f}")
+    
     # **TEM CANCELAMENTOS!** Monta resposta
     linhas = [f"⚠️ <b>CANCELAMENTOS</b>\n"]
     linhas.append(f"💰 <b>Valor total:</b> R$ {valor_total:.2f}")
