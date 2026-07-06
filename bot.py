@@ -2925,6 +2925,7 @@ async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ─── Reativar assinatura ─────────────────────────────────
     if acao == "reativar":
+        await query.answer()  # Remove o "spinning" do botão
         from database import buscar_usuario
         usuario = await buscar_usuario(chat_id)
 

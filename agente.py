@@ -47,7 +47,10 @@ TOOLS = [
             "não estimativas). Use esta ferramenta sempre que o usuário perguntar sobre "
             "vendas, faturamento, quanto vendeu, receita, ticket médio, número de "
             "transações ou cancelamentos em um período (hoje, ontem, esta semana, "
-            "este mês, ou um intervalo de datas específico)."
+            "este mês, ou um intervalo de datas específico). "
+            "Se o operador mencionar 'agora', 'atualizado', 'refresh', ou pedir dados "
+            "que ele sabe que podem ter mudado desde a última pergunta, passe "
+            "forcar_fresh=true para buscar dados frescos do PDV (ignorando cache)."
         ),
         "input_schema": {
             "type": "object",
@@ -63,6 +66,11 @@ TOOLS = [
                 "descricao_periodo": {
                     "type": "string",
                     "description": "Descrição curta e amigável do período em português, ex: 'hoje', 'ontem', 'esta semana'. Usada só para exibição.",
+                },
+                "forcar_fresh": {
+                    "type": "boolean",
+                    "description": "Se true, ignora dados em cache e busca do PDV agora mesmo. Use quando o operador pedir 'dados atualizados', 'agora', ou refresh. Padrão: false (reutiliza cache se o período é o mesmo, para evitar scrape duplicado).",
+                    "default": False,
                 },
             },
             "required": ["data_ini", "data_fim", "descricao_periodo"],
@@ -295,7 +303,7 @@ def _resolver_periodo_relativo(texto_periodo: str) -> tuple[str, str] | None:
 
 
 async def garantir_dados_periodo(chat_id: int, data_ini: str, data_fim: str,
-                                  descricao_periodo: str) -> dict:
+                                  descricao_periodo: str, forcar_fresh: bool = False) -> dict:
     """
     Busca vendas E produtos do PDV Legal para o período, reaproveitando o
     mesmo caminho real usado pelos botões existentes. Salva em dados_usuario
@@ -304,6 +312,9 @@ async def garantir_dados_periodo(chat_id: int, data_ini: str, data_fim: str,
     Centraliza a busca para evitar baixar os dados duas vezes quando o agente
     precisa encadear múltiplas ferramentas (ex: faturamento + score) sobre o
     mesmo período.
+    
+    Se forcar_fresh=True, ignora o cache e busca dados novos do PDV agora mesmo.
+    Use quando o operador pedir "atualizado", "agora", "refresh".
     """
     import asyncio
     import pandas as pd
@@ -318,10 +329,11 @@ async def garantir_dados_periodo(chat_id: int, data_ini: str, data_fim: str,
     pdv_email = usuario.get("pdv_email")
     pdv_senha = usuario.get("pdv_senha")
 
-    # Reaproveita dados já carregados se o período pedido for exatamente o
-    # mesmo já carregado em dados_usuario — evita scrape duplicado.
+    # Reaproveita dados já carregados SE o período for o mesmo E não foi
+    # pedido refresh forçado (forcar_fresh=False é o padrão, para evitar
+    # scrape duplicado numa mesma conversa).
     d_atual = dados_usuario.get(chat_id, {})
-    if d_atual.get("data_ini") == data_ini and d_atual.get("data_fim") == data_fim \
+    if not forcar_fresh and d_atual.get("data_ini") == data_ini and d_atual.get("data_fim") == data_fim \
        and d_atual.get("vendas") is not None:
         return {
             "vendas": d_atual["vendas"],
@@ -353,13 +365,16 @@ async def garantir_dados_periodo(chat_id: int, data_ini: str, data_fim: str,
 
 
 async def executar_tool_buscar_faturamento(chat_id: int, data_ini: str, data_fim: str,
-                                            descricao_periodo: str) -> dict:
+                                            descricao_periodo: str, forcar_fresh: bool = False) -> dict:
     """
     Executa de fato a busca de faturamento — reaproveita o MESMO caminho que
     o botão 'Briefing'/'Atualizar' já usa: scraper real do PDV Legal +
     normalização de dados. Não há lógica duplicada nem dado simulado.
+    
+    Se forcar_fresh=True, ignora cache e baixa dados do PDV agora mesmo.
     """
-    dados = await garantir_dados_periodo(chat_id, data_ini, data_fim, descricao_periodo)
+    dados = await garantir_dados_periodo(chat_id, data_ini, data_fim, descricao_periodo,
+                                          forcar_fresh=forcar_fresh)
     if "erro" in dados:
         return dados
 
