@@ -33,55 +33,130 @@ ultimo_texto_narravel = {}
 
 def _limpar_para_audio(texto: str) -> str:
     """
-    Remove tags HTML, emojis de marcação e símbolos que soam mal no TTS,
-    deixando um texto limpo para ser narrado.
+    Deixa só o texto falado: remove tags HTML, markdown, TODOS os emojis
+    (por faixa Unicode) e símbolos que soam mal no TTS. O objetivo é uma
+    narração limpa e natural, sem "carinha sorridente", "alerta", etc.
     """
     import re
     if not texto:
         return ""
+
     # Remove tags HTML
     texto = re.sub(r"<[^>]+>", "", texto)
-    # Remove asteriscos/underscores de markdown
+    # Remove markdown (asteriscos, underscores, crases, hashtags)
     texto = re.sub(r"[*_`#]", "", texto)
-    # Converte quebras múltiplas em pausa simples
+
+    # Remove TODOS os emojis e pictogramas por faixa Unicode
+    padrao_emoji = re.compile(
+        "["
+        "\U0001F300-\U0001FAFF"  # símbolos, pictogramas, emoticons, objetos
+        "\U00002600-\U000027BF"  # símbolos diversos e dingbats
+        "\U0001F1E6-\U0001F1FF"  # bandeiras
+        "\U00002190-\U000021FF"  # setas
+        "\U00002B00-\U00002BFF"  # setas e símbolos extras
+        "\U0000FE00-\U0000FE0F"  # seletores de variação
+        "\U00002000-\U0000206F"  # pontuação geral (inclui alguns símbolos)
+        "\U000024C2"
+        "\U0000203C\U00002049"
+        "]+",
+        flags=re.UNICODE
+    )
+    texto = padrao_emoji.sub("", texto)
+
+    # Converte quebras de linha em pausas naturais
     texto = re.sub(r"\n{2,}", ". ", texto)
     texto = texto.replace("\n", ". ")
-    # Remove emojis comuns de marcação (mantém o texto legível)
-    texto = re.sub(r"[📊⚠️📦🗂💳🕐📅📈🏆🎯⭐🔍💬💡🛒🔊🚨🌙💸😔👋🎁🎉✅❌⏳🔒🔄🔔]", "", texto)
-    # Normaliza espaços
+
+    # Remove bullets e travessões que sobraram no início de linhas
+    texto = re.sub(r"(?:^|(?<=\. ))[•\-–—]\s*", "", texto)
+
+    # Troca "R$" por "reais" só quando faz sentido ficaria complexo;
+    # deixamos como está pois o TTS pt-BR já lê "R$" como "reais".
+
+    # Colapsa pontuação repetida e espaços
+    texto = re.sub(r"\.{2,}", ".", texto)
+    texto = re.sub(r"\s+([.,!?])", r"\1", texto)
     texto = re.sub(r"\s{2,}", " ", texto).strip()
+    # Evita começar com pontuação solta
+    texto = re.sub(r"^[.,\s]+", "", texto)
     return texto
 
 
 async def gerar_audio_tts(texto: str) -> BytesIO | None:
     """
-    Gera áudio (voz) a partir de texto usando gTTS (grátis, pt-BR).
-    Retorna um BytesIO com o .ogg pronto para send_voice, ou None em erro.
+    Gera áudio de voz a partir de texto.
 
-    NOTA: gTTS requer acesso à internet e a biblioteca instalada
-    (pip install gTTS). A voz é funcional mas robótica; para voz premium
-    trocar por Google Cloud TTS ou OpenAI TTS no futuro.
+    Usa OpenAI TTS quando OPENAI_API_KEY está configurada (voz natural,
+    velocidade ajustável). Caso contrário, cai no gTTS (grátis, robótico).
+
+    Controle de velocidade: variável TTS_SPEED (padrão 1.15 = ~15% mais rápido).
+    Retorna BytesIO pronto para send_voice, ou None em erro.
     """
     texto_limpo = _limpar_para_audio(texto)
     if not texto_limpo:
         return None
 
-    # Limita tamanho para não gerar áudios gigantes (gTTS trava em textos enormes)
+    # Limita tamanho para não gerar áudios gigantes
     if len(texto_limpo) > 3000:
         texto_limpo = texto_limpo[:3000] + ". Texto completo disponível no chat."
 
+    velocidade = float(os.getenv("TTS_SPEED", "1.15"))
+    openai_key = os.getenv("OPENAI_API_KEY")
+    loop = asyncio.get_event_loop()
+
+    # ─── OPÇÃO 1: OpenAI TTS (voz natural + velocidade) ───────────────
+    if openai_key:
+        try:
+            def _openai_tts():
+                from openai import OpenAI
+                client = OpenAI(api_key=openai_key)
+                # Voz "nova" ou "shimmer" soam bem em pt-BR; speed 0.25–4.0
+                resp = client.audio.speech.create(
+                    model="tts-1",
+                    voice=os.getenv("TTS_VOICE", "nova"),
+                    input=texto_limpo,
+                    speed=max(0.25, min(4.0, velocidade)),
+                    response_format="opus",  # ideal para voice message do Telegram
+                )
+                buf = BytesIO(resp.read())
+                buf.seek(0)
+                return buf
+
+            audio_buf = await loop.run_in_executor(None, _openai_tts)
+            return audio_buf
+        except Exception as e:
+            logger.warning(f"OpenAI TTS falhou ({e}); usando gTTS como fallback")
+
+    # ─── OPÇÃO 2: gTTS (grátis, fallback) ─────────────────────────────
     try:
         from gtts import gTTS
-        loop = asyncio.get_event_loop()
 
-        def _sintetizar():
+        def _gtts():
             buf = BytesIO()
             tts = gTTS(text=texto_limpo, lang="pt", tld="com.br")
             tts.write_to_fp(buf)
             buf.seek(0)
             return buf
 
-        audio_buf = await loop.run_in_executor(None, _sintetizar)
+        audio_buf = await loop.run_in_executor(None, _gtts)
+
+        # Acelera o áudio do gTTS se pydub+ffmpeg estiverem disponíveis
+        if velocidade and abs(velocidade - 1.0) > 0.01:
+            try:
+                from pydub import AudioSegment
+                def _acelerar(b):
+                    b.seek(0)
+                    seg = AudioSegment.from_file(b, format="mp3")
+                    seg = seg.speedup(playback_speed=velocidade)
+                    out = BytesIO()
+                    seg.export(out, format="ogg", codec="libopus")
+                    out.seek(0)
+                    return out
+                audio_buf = await loop.run_in_executor(None, _acelerar, audio_buf)
+            except Exception as e:
+                # pydub/ffmpeg indisponível — envia na velocidade normal
+                logger.info(f"Aceleração de áudio indisponível ({e}); enviando velocidade normal")
+
         return audio_buf
     except Exception as e:
         logger.error(f"Erro ao gerar áudio TTS: {e}")
