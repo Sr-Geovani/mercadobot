@@ -224,6 +224,67 @@ async def listar_usuarios_ativos() -> list:
         return [dict(r) for r in rows]
 
 
+async def listar_usuarios_com_acesso() -> list:
+    """
+    Lista todos os usuários que têm acesso ATIVO AGORA:
+    - status='trial' com trial_fim no futuro
+    - status='ativo' com assinatura_fim no futuro
+    - status='cancelado_mas_ativo' com trial_fim OU assinatura_fim no futuro
+    
+    Usado pelo scheduler para enviar briefings e alertas apenas a quem tem acesso.
+    """
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    
+    pool = await get_pool()
+    async with pool.acquire() as conn:
+        # Retorna todos os usuários dos 3 status
+        rows = await conn.fetch(
+            "SELECT * FROM usuarios WHERE status IN ('trial', 'ativo', 'cancelado_mas_ativo')"
+        )
+    
+    usuarios_com_acesso = []
+    brasilia = ZoneInfo("America/Sao_Paulo")
+    agora = datetime.now(brasilia)
+    
+    for r in rows:
+        d = dict(r)
+        chat_id = d.get("chat_id")
+        status = d.get("status")
+        trial_fim = d.get("trial_fim")
+        assinatura_fim = d.get("assinatura_fim")
+        
+        # Converte para datetime se for string
+        if isinstance(trial_fim, str):
+            try:
+                trial_fim = datetime.fromisoformat(trial_fim.replace('Z', '+00:00'))
+            except:
+                trial_fim = None
+        
+        if isinstance(assinatura_fim, str):
+            try:
+                assinatura_fim = datetime.fromisoformat(assinatura_fim.replace('Z', '+00:00'))
+            except:
+                assinatura_fim = None
+        
+        # Verifica se tem acesso
+        tem_acesso = False
+        
+        if status == "trial" and trial_fim and agora <= trial_fim:
+            tem_acesso = True
+        elif status == "ativo" and assinatura_fim and agora <= assinatura_fim:
+            tem_acesso = True
+        elif status == "cancelado_mas_ativo":
+            # Pode ter acesso via trial OU assinatura
+            if (trial_fim and agora <= trial_fim) or (assinatura_fim and agora <= assinatura_fim):
+                tem_acesso = True
+        
+        if tem_acesso:
+            usuarios_com_acesso.append(d)
+    
+    return usuarios_com_acesso
+
+
 async def listar_usuarios_em_trial() -> list:
     """Lista todos os usuários que estão em trial (primeiros 7 dias)."""
     pool = await get_pool()

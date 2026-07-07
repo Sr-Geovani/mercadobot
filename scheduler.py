@@ -255,8 +255,8 @@ async def enviar_fechamento_mes():
     - Recomendações + overdelivery
     + 4 gráficos (evolução, top 10, categorias, filiais)
     """
-    from database import listar_usuarios_ativos
-    usuarios = await listar_usuarios_ativos()
+    from database import listar_usuarios_com_acesso
+    usuarios = await listar_usuarios_com_acesso()
     if not usuarios:
         return
 
@@ -471,17 +471,17 @@ async def briefing_usuario(bot: Bot, usuario: dict):
 
 
 async def enviar_briefing_automatico():
-    """Busca todos os usuários ativos e envia o briefing para cada um."""
-    from database import listar_usuarios_ativos
+    """Busca todos os usuários com acesso ativo e envia o briefing para cada um."""
+    from database import listar_usuarios_com_acesso
 
     agora    = datetime.now(BRASILIA)
-    usuarios = await listar_usuarios_ativos()
+    usuarios = await listar_usuarios_com_acesso()
 
     if not usuarios:
-        logger.info("Nenhum usuário ativo para o briefing.")
+        logger.info("Nenhum usuário com acesso ativo para o briefing.")
         return
 
-    logger.info(f"Briefing automático — {agora:%d/%m/%Y %H:%M} — {len(usuarios)} usuário(s)")
+    logger.info(f"Briefing automático — {agora:%d/%m/%Y %H:%M} — {len(usuarios)} usuário(s) com acesso")
     bot = Bot(token=TELEGRAM_TOKEN)
 
     for usuario in usuarios:
@@ -649,11 +649,11 @@ async def enviar_padroes_detectados_automatico():
     campeões no benchmark agregado entre clientes nesse mesmo passo —
     aproveitando o mesmo download de dados.
     """
-    from database import listar_usuarios_ativos
+    from database import listar_usuarios_com_acesso
     from padroes import detectar_padroes_vendas, notificar_padroes_novos, registrar_produto_campeao_benchmark, consolidar_fatos_cliente
     from bot import normalizar_vendas, normalizar_produtos, kb_menu, b
 
-    usuarios = await listar_usuarios_ativos()
+    usuarios = await listar_usuarios_com_acesso()
     if not usuarios:
         return
 
@@ -718,8 +718,8 @@ async def enviar_padroes_detectados_automatico():
 
 async def enviar_fechamento_semanal():
     """Envia resumo da semana todo domingo às 23h59."""
-    from database import listar_usuarios_ativos
-    usuarios = await listar_usuarios_ativos()
+    from database import listar_usuarios_com_acesso
+    usuarios = await listar_usuarios_com_acesso()
     if not usuarios:
         return
 
@@ -930,8 +930,8 @@ async def enviar_parcial_dia():
     Busca dados frescos do dia, atualiza dados_usuario,
     e envia SEMPRE um resumo parcial do dia — independente de alertas.
     """
-    from database import listar_usuarios_ativos
-    usuarios = await listar_usuarios_ativos()
+    from database import listar_usuarios_com_acesso
+    usuarios = await listar_usuarios_com_acesso()
     if not usuarios:
         return
 
@@ -1049,8 +1049,8 @@ async def enviar_alertas_proativos(modo: str = "completo"):
     modo='basico'   → só zero vendas (seg–qua)
     modo='completo' → zero vendas + cancelamentos + pico noturno (qui–dom)
     """
-    from database import listar_usuarios_ativos
-    usuarios = await listar_usuarios_ativos()
+    from database import listar_usuarios_com_acesso
+    usuarios = await listar_usuarios_com_acesso()
     if not usuarios:
         return
 
@@ -1172,8 +1172,8 @@ async def enviar_alerta_pico():
     Busca dados frescos, atualiza dados_usuario,
     e alerta só se não houver vendas entre 19h e 19h59.
     """
-    from database import listar_usuarios_ativos
-    usuarios = await listar_usuarios_ativos()
+    from database import listar_usuarios_com_acesso
+    usuarios = await listar_usuarios_com_acesso()
     if not usuarios:
         return
 
@@ -1269,9 +1269,9 @@ async def enviar_onboarding_guiado():
     Trial: dias 1, 2, 4 e 2 dias antes do fim (só valor)
     Mês: engajamento nos dias 10, 15, 20, 25
     """
-    from database import listar_usuarios_ativos
+    from database import listar_usuarios_com_acesso
     from telegram import InlineKeyboardMarkup, InlineKeyboardButton
-    usuarios = await listar_usuarios_ativos()
+    usuarios = await listar_usuarios_com_acesso()
     if not usuarios:
         return
 
