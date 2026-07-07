@@ -171,6 +171,7 @@ async def handle_webhook(request: web.Request) -> web.Response:
             campos_update = dict(
                 status=novo_status,
                 assinatura_fim=assinatura_fim,
+                trial_fim=None,  # ← LIMPA trial_fim quando ativa assinatura paga
             )
             
             # Só marca trial_usado=True se o user era TRIAL antes
