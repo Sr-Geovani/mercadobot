@@ -167,6 +167,30 @@ async def handle_webhook(request: web.Request) -> web.Response:
             # Tenta: resultado.id se começar com "sub_" (edge case)
             if not asaas_subscription_id and resultado.get("id", "").startswith("sub_"):
                 asaas_subscription_id = resultado.get("id")
+            
+            # ← NOVO: Se ainda não tem subscription ID, busca do Asaas usando customer ID
+            if not asaas_subscription_id:
+                customer_id = resultado.get("customer") or usuario.get("asaas_id")
+                if customer_id:
+                    try:
+                        import httpx
+                        async with httpx.AsyncClient() as client:
+                            resp = await client.get(
+                                f"https://api.asaas.com/v3/subscriptions",
+                                headers={
+                                    "accept": "application/json",
+                                    "access_token": ASAAS_API_KEY,
+                                },
+                                params={"customer": customer_id, "limit": 1}
+                            )
+                            if resp.status_code == 200:
+                                data = resp.json()
+                                subs = data.get("data", [])
+                                if subs:
+                                    asaas_subscription_id = subs[0].get("id")
+                                    logger.info(f"🔍 Subscription encontrada no Asaas: {asaas_subscription_id}")
+                    except Exception as e:
+                        logger.warning(f"⚠️ Erro ao buscar subscription no Asaas: {e}")
 
             campos_update = dict(
                 status=novo_status,
@@ -179,13 +203,13 @@ async def handle_webhook(request: web.Request) -> web.Response:
             if usuario.get("status") == "trial":
                 campos_update["trial_usado"] = True
             
-            # Atualiza a referência da subscription real, caso ainda não tivéssemos
-            # (acontece no primeiro pagamento confirmado vindo de um Checkout)
+            # Atualiza a referência da subscription real (não customer ID!)
+            # Se conseguiu um subscription ID válido, salva
             if asaas_subscription_id and asaas_subscription_id.startswith("sub_"):
                 campos_update["assinatura_asaas_id"] = asaas_subscription_id
                 logger.info(f"✅ Subscription salva: {asaas_subscription_id}")
             else:
-                logger.warning(f"⚠️ Nenhum subscription ID encontrado no webhook. Resultado: {resultado}")
+                logger.warning(f"⚠️ Nenhum subscription ID válido encontrado. Resultado: {resultado}")
 
             await atualizar_usuario(chat_id, **campos_update)
 
