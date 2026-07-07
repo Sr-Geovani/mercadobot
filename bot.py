@@ -24,6 +24,68 @@ logging.basicConfig(format="%(asctime)s - %(levelname)s - %(message)s", level=lo
 logger = logging.getLogger(__name__)
 
 dados_usuario = {}
+
+# Cache do último texto "narrável" por chat_id, para o botão "🔊 Ouvir".
+# Guarda o texto puro (sem HTML) da última resposta enviada, para que o
+# usuário possa pedir a versão em áudio sob demanda.
+ultimo_texto_narravel = {}
+
+
+def _limpar_para_audio(texto: str) -> str:
+    """
+    Remove tags HTML, emojis de marcação e símbolos que soam mal no TTS,
+    deixando um texto limpo para ser narrado.
+    """
+    import re
+    if not texto:
+        return ""
+    # Remove tags HTML
+    texto = re.sub(r"<[^>]+>", "", texto)
+    # Remove asteriscos/underscores de markdown
+    texto = re.sub(r"[*_`#]", "", texto)
+    # Converte quebras múltiplas em pausa simples
+    texto = re.sub(r"\n{2,}", ". ", texto)
+    texto = texto.replace("\n", ". ")
+    # Remove emojis comuns de marcação (mantém o texto legível)
+    texto = re.sub(r"[📊⚠️📦🗂💳🕐📅📈🏆🎯⭐🔍💬💡🛒🔊🚨🌙💸😔👋🎁🎉✅❌⏳🔒🔄🔔]", "", texto)
+    # Normaliza espaços
+    texto = re.sub(r"\s{2,}", " ", texto).strip()
+    return texto
+
+
+async def gerar_audio_tts(texto: str) -> BytesIO | None:
+    """
+    Gera áudio (voz) a partir de texto usando gTTS (grátis, pt-BR).
+    Retorna um BytesIO com o .ogg pronto para send_voice, ou None em erro.
+
+    NOTA: gTTS requer acesso à internet e a biblioteca instalada
+    (pip install gTTS). A voz é funcional mas robótica; para voz premium
+    trocar por Google Cloud TTS ou OpenAI TTS no futuro.
+    """
+    texto_limpo = _limpar_para_audio(texto)
+    if not texto_limpo:
+        return None
+
+    # Limita tamanho para não gerar áudios gigantes (gTTS trava em textos enormes)
+    if len(texto_limpo) > 3000:
+        texto_limpo = texto_limpo[:3000] + ". Texto completo disponível no chat."
+
+    try:
+        from gtts import gTTS
+        loop = asyncio.get_event_loop()
+
+        def _sintetizar():
+            buf = BytesIO()
+            tts = gTTS(text=texto_limpo, lang="pt", tld="com.br")
+            tts.write_to_fp(buf)
+            buf.seek(0)
+            return buf
+
+        audio_buf = await loop.run_in_executor(None, _sintetizar)
+        return audio_buf
+    except Exception as e:
+        logger.error(f"Erro ao gerar áudio TTS: {e}")
+        return None
 aguardando_dias = {}
 
 # ─── INSTALA PLAYWRIGHT BROWSER SE NECESSÁRIO ────────────────
@@ -1702,26 +1764,60 @@ def _md_para_html(texto: str) -> str:
     return texto
 
 
-async def enviar(msg, texto: str):
+def kb_ouvir():
+    """Teclado com botão para ouvir a última resposta em áudio."""
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔊 Ouvir em áudio", callback_data="ouvir_audio")]
+    ])
+
+
+async def enviar(msg, texto: str, chat_id: int = None, com_audio: bool = True):
     """Envia texto com parse_mode HTML, dividindo se necessário.
 
     Converte Markdown para HTML automaticamente quando detecta formatação
-    Markdown (asteriscos) sem tags HTML já presentes — isso padroniza as
-    respostas do agente de IA (que vêm em Markdown) com o visual do resto do
-    bot (que usa HTML), sem afetar mensagens que já vêm formatadas em HTML
-    pelos blocos de análise.
+    Markdown (asteriscos) sem tags HTML já presentes.
+
+    Extrai o chat_id automaticamente do objeto msg quando não informado,
+    guarda o texto no cache narrável e adiciona o botão "🔊 Ouvir" na última
+    parte da mensagem — assim todas as chamadas existentes ganham áudio sob
+    demanda sem precisar passar chat_id manualmente.
     """
     if texto and "**" in texto and "<b>" not in texto and "<i>" not in texto:
         texto = _md_para_html(texto)
+
+    # Extrai chat_id do msg automaticamente se não foi passado
+    if chat_id is None:
+        try:
+            if hasattr(msg, "chat") and msg.chat:
+                chat_id = msg.chat.id
+            elif hasattr(msg, "chat_id"):
+                chat_id = msg.chat_id
+        except Exception:
+            chat_id = None
+
+    # Guarda o texto para o botão "Ouvir" recuperar depois
+    if chat_id and com_audio and texto:
+        ultimo_texto_narravel[chat_id] = texto
+
     LIMITE = 4000
-    while len(texto) > LIMITE:
-        corte = texto.rfind("\n", 0, LIMITE)
+    partes = []
+    resto = texto
+    while len(resto) > LIMITE:
+        corte = resto.rfind("\n", 0, LIMITE)
         if corte == -1:
             corte = LIMITE
-        await msg.reply_text(texto[:corte], parse_mode="HTML")
-        texto = texto[corte:].strip()
-    if texto:
-        await msg.reply_text(texto, parse_mode="HTML")
+        partes.append(resto[:corte])
+        resto = resto[corte:].strip()
+    if resto:
+        partes.append(resto)
+
+    # Envia todas as partes; adiciona botão "Ouvir" apenas na última
+    for i, parte in enumerate(partes):
+        eh_ultima = (i == len(partes) - 1)
+        if eh_ultima and chat_id and com_audio:
+            await msg.reply_text(parte, parse_mode="HTML", reply_markup=kb_ouvir())
+        else:
+            await msg.reply_text(parte, parse_mode="HTML")
 
 # ─── HANDLERS ────────────────────────────────────────────────
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -3297,11 +3393,38 @@ async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "reativar", "verificar_status", "menu_principal",
         "atualizar_credenciais", "confirmar_cancelamento",
         "validar_cartao", "validar_cartao_trial",
-        "pico_ok", "pico_problema",
+        "pico_ok", "pico_problema", "ouvir_audio",
     }
     if acao not in acoes_sempre_liberadas and not acao.startswith("reativar_"):
         if not await verificar_acesso(update, context):
             return
+
+    # ─── Ouvir última resposta em áudio (sob demanda) ───────────────────
+    if acao == "ouvir_audio":
+        await query.answer("🔊 Gerando áudio...")
+        texto = ultimo_texto_narravel.get(chat_id)
+        if not texto:
+            await msg.reply_text(
+                "🔇 Não encontrei um texto recente para narrar.\n\n"
+                "Peça uma análise ou briefing e toque em 🔊 Ouvir logo em seguida."
+            )
+            return
+        try:
+            audio_buf = await gerar_audio_tts(texto)
+            if audio_buf is None:
+                await msg.reply_text(
+                    "🔇 Não consegui gerar o áudio agora. Tente novamente em instantes."
+                )
+                return
+            audio_buf.name = "resposta.ogg"
+            await msg.reply_voice(voice=audio_buf)
+            logger.info(f"Áudio TTS enviado para {chat_id}")
+        except Exception as e:
+            logger.error(f"Erro ao enviar áudio para {chat_id}: {e}")
+            await msg.reply_text(
+                "🔇 Não consegui gerar o áudio agora. Tente novamente em instantes."
+            )
+        return
 
     if acao == "pico_ok":
         await query.answer("✅ Ótimo! Boas vendas nessa noite! 🚀")

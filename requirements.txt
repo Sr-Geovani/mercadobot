@@ -9,3 +9,4 @@ aiosqlite
 aiohttp
 httpx
 asyncpg
+gTTS
