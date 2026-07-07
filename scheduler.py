@@ -567,6 +567,16 @@ def iniciar_scheduler():
         replace_existing=True,
     )
 
+    # Alerta de tarde — 17h15 TODOS os dias: sem vendas entre 13h e 17h
+    scheduler.add_job(
+        enviar_alerta_tarde,
+        trigger="cron",
+        hour=17,
+        minute=15,
+        id="alerta_tarde",
+        replace_existing=True,
+    )
+
     # Alertas às 19h — zero vendas + cancelamentos suspeitos
     scheduler.add_job(
         partial(enviar_alertas_proativos, modo="completo"),
@@ -658,6 +668,7 @@ def iniciar_scheduler():
     scheduler.start()
     logger.info(f"Briefing agendado para {HORARIO_HORA:02d}:{HORARIO_MINUTO:02d} (Brasília)")
     logger.info("Alertas (zero vendas + cancelamentos suspeitos) agendados para 13h15, 19h15, 20h15 (qui-dom) e 22h00")
+    logger.info("Alerta de tarde (sem vendas 13h-17h) agendado para 17h15 todos os dias")
     return scheduler
 
 
@@ -1173,8 +1184,10 @@ async def enviar_alertas_proativos(modo: str = "completo"):
                     f"Verifique se o sistema está operando normalmente."
                 )
 
-            # Pico noturno — só no modo completo (qui-dom às 22h)
-            if modo == "completo" and "hora" in vendas2.columns:
+            # Pico noturno — só faz sentido DEPOIS que o período 19h-21h já passou.
+            # Antes das 21h essas horas ainda não ocorreram no dia, então
+            # "zero vendas entre 19h e 22h" seria sempre falso-positivo.
+            if modo == "completo" and hora_atual >= 21 and "hora" in vendas2.columns:
                 vendas_noite = vendas2[vendas2["hora"].between(19, 21)]
                 if len(vendas_noite) == 0:
                     alertas.append(
@@ -1296,6 +1309,80 @@ async def enviar_alerta_pico():
             await asyncio.sleep(3)
         except Exception as e:
             logger.error(f"Erro no alerta de pico para {chat_id}: {e}")
+
+
+async def enviar_alerta_tarde():
+    """
+    Dispara às 17h15 TODOS os dias.
+    Verifica se houve vendas entre 13h e 16h59. Se não houve nenhuma,
+    alerta que a operação pode ter parado de vender à tarde.
+    Só envia quando o período 13h-17h está sem nenhuma venda.
+    """
+    from database import listar_usuarios_com_acesso
+    usuarios = await listar_usuarios_com_acesso()
+    if not usuarios:
+        return
+
+    bot   = Bot(token=TELEGRAM_TOKEN)
+    agora = datetime.now(BRASILIA)
+    hoje  = agora.strftime("%d/%m/%Y")
+
+    for usuario in usuarios:
+        chat_id   = usuario["chat_id"]
+        pdv_email = usuario.get("pdv_email")
+        pdv_senha = usuario.get("pdv_senha")
+        if not pdv_email or not pdv_senha:
+            continue
+        try:
+            from scraper import baixar_relatorios_periodo
+            from bot import normalizar_vendas, normalizar_produtos, dados_usuario, kb_menu
+
+            # Busca dados frescos do dia
+            path_vendas, path_produtos, total_cancel = await asyncio.get_event_loop().run_in_executor(
+                None, baixar_relatorios_periodo, hoje, hoje, pdv_email, pdv_senha
+            )
+            vendas   = normalizar_vendas(pd.read_excel(path_vendas))
+            produtos = normalizar_produtos(pd.read_excel(path_produtos))
+
+            # Atualiza dados_usuario
+            dados_usuario[chat_id] = {
+                "vendas":        vendas,
+                "produtos":      produtos,
+                "total_cancel":  total_cancel,
+                "periodo_label": f"Hoje ({hoje})",
+                "data_ini":      hoje,
+                "data_fim":      hoje,
+            }
+            logger.info(f"Alerta tarde: dados_usuario[{chat_id}] atualizado ({hoje})")
+
+            if vendas.empty or "HoraAbertura" not in vendas.columns:
+                continue
+
+            vendas["hora"] = pd.to_datetime(vendas["HoraAbertura"], format="%H:%M:%S", errors="coerce").dt.hour
+
+            # Verifica se houve vendas entre 13h e 16h59
+            vendas_tarde = vendas[vendas["hora"].between(13, 16)]
+            if len(vendas_tarde) == 0:
+                await bot.send_message(
+                    chat_id=chat_id,
+                    text=(
+                        "⚠️ <b>Atenção — sem vendas à tarde!</b>\n\n"
+                        "Não registrei nenhuma venda entre 13h e 17h.\n\n"
+                        "Pode ser um problema na operação — verifique:\n"
+                        "• Totens ligados e conectados\n"
+                        "• PDV Legal sincronizando\n"
+                        "• Produtos disponíveis nas prateleiras"
+                    ),
+                    parse_mode="HTML",
+                    reply_markup=kb_menu(f"Hoje ({hoje})")
+                )
+                logger.info(f"Alerta tarde disparado para {chat_id} — sem vendas 13h-17h")
+            else:
+                logger.info(f"Alerta tarde: {len(vendas_tarde)} venda(s) entre 13h-17h para {chat_id} — sem alerta")
+
+            await asyncio.sleep(3)
+        except Exception as e:
+            logger.error(f"Erro no alerta de tarde para {chat_id}: {e}")
 
 
 async def enviar_onboarding_guiado():
