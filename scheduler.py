@@ -53,7 +53,8 @@ async def reconciliar_assinaturas():
 
         # Verifica se assinatura_fim já está vencida (ou usuário já bloqueado)
         precisa_checar = (status == "bloqueado")
-        if status in ("ativo", "trial") and usuario.get("assinatura_fim"):
+        # Verifica status ativo, trial, ou cancelado_mas_ativo
+        if status in ("ativo", "trial", "cancelado_mas_ativo") and usuario.get("assinatura_fim"):
             try:
                 fim = datetime.fromisoformat(usuario["assinatura_fim"])
                 if agora > fim:
@@ -545,6 +546,16 @@ def iniciar_scheduler():
         replace_existing=True,
     )
 
+    # Alertas proativos às 13h — cancelamentos suspeitos + ritmo de vendas
+    scheduler.add_job(
+        partial(enviar_alertas_proativos, modo="completo"),
+        trigger="cron",
+        hour=13,
+        minute=15,  # 15 minutos após a parcial
+        id="alertas_13h",
+        replace_existing=True,
+    )
+
     # Atualiza dados às 19h (sem alerta) — quinta a domingo
     scheduler.add_job(
         enviar_alerta_pico,
@@ -553,6 +564,16 @@ def iniciar_scheduler():
         hour=19,
         minute=0,
         id="atualiza_pico_19h",
+        replace_existing=True,
+    )
+
+    # Alertas proativos às 19h — cancelamentos suspeitos + ritmo de vendas
+    scheduler.add_job(
+        partial(enviar_alertas_proativos, modo="completo"),
+        trigger="cron",
+        hour=19,
+        minute=15,  # 15 minutos após atualizar pico
+        id="alertas_19h",
         replace_existing=True,
     )
 
@@ -567,25 +588,13 @@ def iniciar_scheduler():
         replace_existing=True,
     )
 
-    # Alertas 22h — todos os dias: só zero vendas
-    scheduler.add_job(
-        partial(enviar_alertas_proativos, modo="basico"),
-        trigger="cron",
-        day_of_week="mon,tue,wed",
-        hour=22,
-        minute=0,
-        id="alertas_noite_basico",
-        replace_existing=True,
-    )
-
-    # Alertas 22h — qui a dom: completo (cancelamentos + pico noturno + zero vendas)
+    # Alertas proativos às 23h — cancelamentos suspeitos + ritmo de vendas final do dia
     scheduler.add_job(
         partial(enviar_alertas_proativos, modo="completo"),
         trigger="cron",
-        day_of_week="thu,fri,sat,sun",
-        hour=22,
+        hour=23,
         minute=0,
-        id="alertas_noite_completo",
+        id="alertas_23h",
         replace_existing=True,
     )
 
@@ -637,7 +646,7 @@ def iniciar_scheduler():
 
     scheduler.start()
     logger.info(f"Briefing agendado para {HORARIO_HORA:02d}:{HORARIO_MINUTO:02d} (Brasília)")
-    logger.info("Alertas proativos agendados para 13h e 19h")
+    logger.info("Alertas proativos agendados para 13h15, 19h15 e 23h00")
     return scheduler
 
 
