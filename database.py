@@ -166,7 +166,17 @@ async def usuario_tem_acesso(chat_id: int) -> tuple[bool, str]:
         return False, "nao_cadastrado"
 
     agora = datetime.now(BRASILIA)
-    logger.info(f"[ACESSO-DEBUG] chat_id={chat_id}, agora={agora}")
+    status = user.get("status", "pendente")
+    logger.info(f"[ACESSO-DEBUG] chat_id={chat_id}, status={status}, agora={agora}")
+    
+    # BLOQUEIO EXPLÍCITO: pendente e bloqueado NUNCA têm acesso
+    if status == "pendente":
+        logger.info(f"[ACESSO-DEBUG] ❌ BLOQUEIA - status pendente (aguardando validação de cartão)")
+        return False, "pendente"
+    
+    if status == "bloqueado":
+        logger.info(f"[ACESSO-DEBUG] ❌ BLOQUEIA - status bloqueado")
+        return False, "bloqueado"
     
     # PRIORIDADE ABSOLUTA: assinatura_fim
     assinatura_fim_raw = user.get("assinatura_fim")

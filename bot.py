@@ -3907,6 +3907,11 @@ async def verificar_acesso(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         return True
 
     mensagens = {
+        "pendente": (
+            f"⏳ {b('Aguardando confirmação de cartão.')}\n\n"
+            f"Clique em {b('Validar Cartão')} para iniciar seu trial de 7 dias.\n"
+            f"Sem cobrança até a confirmação."
+        ),
         "trial_expirado": (
             f"⏰ {b('Seu trial de 7 dias encerrou.')}\n\n"
             f"Para continuar usando o MercadoBot, cadastre seu cartão e ative a assinatura."
