@@ -200,27 +200,15 @@ async def handle_webhook(request: web.Request) -> web.Response:
             if not asaas_subscription_id and resultado.get("id", "").startswith("sub_"):
                 asaas_subscription_id = resultado.get("id")
             
-            # ← NOVO: Se ainda não tem subscription ID, busca do Asaas usando customer ID
+            # ← Se ainda não tem subscription ID, busca do Asaas usando customer ID
             if not asaas_subscription_id:
                 customer_id = resultado.get("customer") or usuario.get("asaas_id")
                 if customer_id:
                     try:
-                        import httpx
-                        async with httpx.AsyncClient() as client:
-                            resp = await client.get(
-                                f"https://api.asaas.com/v3/subscriptions",
-                                headers={
-                                    "accept": "application/json",
-                                    "access_token": ASAAS_API_KEY,
-                                },
-                                params={"customer": customer_id, "limit": 1}
-                            )
-                            if resp.status_code == 200:
-                                data = resp.json()
-                                subs = data.get("data", [])
-                                if subs:
-                                    asaas_subscription_id = subs[0].get("id")
-                                    logger.info(f"🔍 Subscription encontrada no Asaas: {asaas_subscription_id}")
+                        from pagamento import buscar_assinatura_ativa
+                        asaas_subscription_id = await buscar_assinatura_ativa(customer_id, tentativas=3)
+                        if asaas_subscription_id:
+                            logger.info(f"🔍 Subscription encontrada no Asaas: {asaas_subscription_id}")
                     except Exception as e:
                         logger.warning(f"⚠️ Erro ao buscar subscription no Asaas: {e}")
 
@@ -228,6 +216,7 @@ async def handle_webhook(request: web.Request) -> web.Response:
                 status=novo_status,
                 assinatura_fim=assinatura_fim,
                 trial_fim=None,  # ← LIMPA trial_fim quando ativa assinatura paga
+                ultimo_checkout_id=None,  # ← LIMPA checkout consumido
             )
             
             # Só marca trial_usado=True se o user era TRIAL antes
