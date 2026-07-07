@@ -546,13 +546,13 @@ def iniciar_scheduler():
         replace_existing=True,
     )
 
-    # Alertas proativos às 13h — cancelamentos suspeitos + ritmo de vendas
+    # Verifica cancelamentos suspeitos às 13h (após parcial) — APENAS dispara se encontrar algo fora do padrão
     scheduler.add_job(
-        partial(enviar_alertas_proativos, modo="completo"),
+        partial(enviar_alertas_cancelamentos, hora=13),
         trigger="cron",
         hour=13,
-        minute=15,  # 15 minutos após a parcial
-        id="alertas_13h",
+        minute=15,  # 15 min após parcial
+        id="alertas_cancelamentos_13h",
         replace_existing=True,
     )
 
@@ -567,13 +567,13 @@ def iniciar_scheduler():
         replace_existing=True,
     )
 
-    # Alertas proativos às 19h — cancelamentos suspeitos + ritmo de vendas
+    # Verifica cancelamentos suspeitos às 19h — APENAS dispara se encontrar algo fora do padrão
     scheduler.add_job(
-        partial(enviar_alertas_proativos, modo="completo"),
+        partial(enviar_alertas_cancelamentos, hora=19),
         trigger="cron",
         hour=19,
-        minute=15,  # 15 minutos após atualizar pico
-        id="alertas_19h",
+        minute=15,  # 15 min após atualizar
+        id="alertas_cancelamentos_19h",
         replace_existing=True,
     )
 
@@ -588,13 +588,13 @@ def iniciar_scheduler():
         replace_existing=True,
     )
 
-    # Alertas proativos às 23h — cancelamentos suspeitos + ritmo de vendas final do dia
+    # Verifica cancelamentos suspeitos às 22h — APENAS dispara se encontrar algo fora do padrão
     scheduler.add_job(
-        partial(enviar_alertas_proativos, modo="completo"),
+        partial(enviar_alertas_cancelamentos, hora=22),
         trigger="cron",
-        hour=23,
+        hour=22,
         minute=0,
-        id="alertas_23h",
+        id="alertas_cancelamentos_22h",
         replace_existing=True,
     )
 
@@ -646,7 +646,7 @@ def iniciar_scheduler():
 
     scheduler.start()
     logger.info(f"Briefing agendado para {HORARIO_HORA:02d}:{HORARIO_MINUTO:02d} (Brasília)")
-    logger.info("Alertas proativos agendados para 13h15, 19h15 e 23h00")
+    logger.info("Alertas de cancelamento agendados para 13h15, 19h15 e 22h (disparam APENAS se encontrar padrões suspeitos)")
     return scheduler
 
 
@@ -1050,6 +1050,99 @@ async def enviar_parcial_dia():
             logger.error(f"Erro em enviar_parcial_dia para {chat_id}: {e}")
             await asyncio.sleep(3)
             continue
+
+
+async def enviar_alertas_cancelamentos(hora: int = 22):
+    """
+    Verifica cancelamentos suspeitos e padrões anormais.
+    APENAS DISPARA SE encontrar algo fora do padrão.
+    
+    Usa as 6 camadas de detecção:
+    1. Valor alto (topo 10% da distribuição)
+    2. Taxa do dia (cancelamentos > 25% do faturamento)
+    3. Concentração horária (múltiplos em 1h)
+    4. Janela curta (3+ cancelamentos em poucos minutos)
+    5. Cancelamento parcial >R$35
+    6. Múltiplos altos (>R$35) mesma filial <2h
+    """
+    from database import listar_usuarios_com_acesso
+    usuarios = await listar_usuarios_com_acesso()
+    if not usuarios:
+        return
+
+    bot   = Bot(token=TELEGRAM_TOKEN)
+    agora = datetime.now(BRASILIA)
+    hoje  = agora.strftime("%d/%m/%Y")
+
+    for usuario in usuarios:
+        chat_id   = usuario["chat_id"]
+        pdv_email = usuario.get("pdv_email")
+        pdv_senha = usuario.get("pdv_senha")
+        if not pdv_email or not pdv_senha:
+            continue
+
+        try:
+            from scraper import baixar_relatorios_periodo
+            from bot import normalizar_vendas, dados_usuario, kb_menu
+
+            # Busca dados frescos do dia
+            path_vendas, _, total_cancel = await asyncio.get_event_loop().run_in_executor(
+                None, baixar_relatorios_periodo, hoje, hoje, pdv_email, pdv_senha
+            )
+
+            vendas = normalizar_vendas(pd.read_excel(path_vendas))
+
+            if vendas.empty:
+                logger.info(f"Alertas cancelamentos {hora}h: sem vendas para {chat_id}")
+                continue
+
+            # Atualiza cache com dados frescos
+            if chat_id not in dados_usuario:
+                dados_usuario[chat_id] = {}
+            dados_usuario[chat_id].update({
+                "vendas": vendas,
+                "total_cancel": total_cancel,
+                "periodo_label": f"Hoje ({hoje})",
+                "data_ini": hoje,
+                "data_fim": hoje,
+            })
+
+            # ─── VERIFICAÇÃO PROATIVA (detecta cancelamentos suspeitos) ───
+            deteccao = await verificar_alertas_proativos(
+                bot, chat_id, pdv_email, pdv_senha, vendas, total_cancel, hora_atual=hora
+            )
+
+            # APENAS dispara se encontrou algo suspeito
+            if not deteccao.get("tem_alerta"):
+                logger.info(f"Alertas cancelamentos {hora}h: nada suspeito para {chat_id}")
+                continue
+
+            # Formata e envia os alertas encontrados
+            alertas = deteccao.get("alertas", [])
+            if not alertas:
+                continue
+
+            from agente import _formatar_alertas_cancelamento
+            bloco_alertas = _formatar_alertas_cancelamento(alertas)
+
+            if bloco_alertas:
+                texto = (
+                    f"🔔 <b>Alertas de Cancelamento</b> — {agora:%H:%M}\n"
+                    f"{bloco_alertas}\n\n"
+                    f"<i>Investigar agora: /lista_cancelamentos_detalhe</i>"
+                )
+                await bot.send_message(
+                    chat_id=chat_id,
+                    text=texto,
+                    parse_mode="HTML",
+                    reply_markup=kb_menu(f"Hoje ({hoje})")
+                )
+                logger.info(f"Alertas cancelamentos {hora}h: DISPAROU para {chat_id} ({len(alertas)} alertas)")
+            else:
+                logger.info(f"Alertas cancelamentos {hora}h: nenhum alerta formatado para {chat_id}")
+
+        except Exception as e:
+            logger.error(f"Alertas cancelamentos {hora}h para {chat_id}: {e}", exc_info=True)
 
 
 async def enviar_alertas_proativos(modo: str = "completo"):
