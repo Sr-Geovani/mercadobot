@@ -2893,6 +2893,21 @@ async def cmd_reativar_handler(update: Update, context: ContextTypes.DEFAULT_TYP
         return
 
     status = usuario["status"]
+    
+    # BLOQUEIO: status "pendente" deve validar cartão primeiro, não reativar
+    if status == "pendente":
+        kb = InlineKeyboardMarkup([[
+            InlineKeyboardButton("✅ Validar Cartão", callback_data="validar_cartao")
+        ]])
+        await update.message.reply_text(
+            f"⏳ {b('Seu cadastro está aguardando confirmação.')}\n\n"
+            f"Clique abaixo para validar seu cartão e iniciar o trial de 7 dias.\n"
+            f"Sem cobranças até a confirmação.",
+            parse_mode="HTML",
+            reply_markup=kb
+        )
+        return
+    
     BRASILIA = ZoneInfo("America/Sao_Paulo")
     agora = datetime.now(BRASILIA)
 
@@ -3225,6 +3240,7 @@ async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
     acoes_sempre_liberadas = {
         "reativar", "verificar_status", "menu_principal",
         "atualizar_credenciais", "confirmar_cancelamento",
+        "validar_cartao", "validar_cartao_trial",
         "pico_ok", "pico_problema",
     }
     if acao not in acoes_sempre_liberadas and not acao.startswith("reativar_"):
@@ -3266,6 +3282,61 @@ async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ─── Validar cartão no onboarding (trial) ──────────────────
     if acao == "validar_cartao_trial":
+        await query.answer()
+        from database import buscar_usuario
+        from pagamento import gerar_link_pagamento
+        
+        usuario = await buscar_usuario(chat_id)
+        if not usuario or not usuario.get("asaas_id"):
+            await msg.reply_text(
+                "❌ Erro ao validar cartão.\n\n"
+                "Use /start para criar um novo cadastro."
+            )
+            return
+        
+        try:
+            # Gera checkout COM TRIAL — não cobra agora, cobra após 7 dias
+            link, assinatura_id = await gerar_link_pagamento(
+                usuario.get("asaas_id"),
+                chat_id,
+                reativacao=False,  # Não é reativação, é trial inicial
+                dias_trial_restantes=7
+            )
+            
+            if not link:
+                await msg.reply_text(
+                    "❌ Erro ao gerar link de validação.\n\n"
+                    "Use /start para tentar novamente.",
+                    parse_mode="HTML"
+                )
+                return
+            
+            kb = InlineKeyboardMarkup([
+                [InlineKeyboardButton("💳 Validar Cartão (7 dias grátis)", url=link)],
+            ])
+            
+            await msg.reply_text(
+                f"🎁 {b('7 dias de trial grátis!')}\n\n"
+                f"Clique no botão para validar seu cartão de crédito.\n\n"
+                f"✅ Nenhuma cobrança agora.\n"
+                f"💳 Primeira cobrança: em 7 dias (R$ 29,90)\n\n"
+                f"Pode cancelar a qualquer momento sem custo.",
+                parse_mode="HTML",
+                reply_markup=kb
+            )
+            
+            logger.info(f"[ONBOARDING] Link de validação gerado para {chat_id}: {link}")
+        except Exception as e:
+            logger.error(f"Erro ao gerar link de validação: {e}")
+            await msg.reply_text(
+                "❌ Erro ao processar validação.\n\n"
+                "Use /start para tentar novamente.",
+                parse_mode="HTML"
+            )
+        return
+
+    # ─── Validar Cartão (para pendente que foi bloqueado) ───────────────────
+    if acao == "validar_cartao":
         await query.answer()
         from database import buscar_usuario
         from pagamento import gerar_link_pagamento
@@ -3931,9 +4002,16 @@ async def verificar_acesso(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     }
 
     texto_bloqueio = mensagens.get(motivo, "Use /start para acessar o MercadoBot.")
-    kb_bloqueio = InlineKeyboardMarkup([
-        [InlineKeyboardButton("🔄 Reativar assinatura", callback_data="reativar")],
-    ])
+    
+    # Botão diferente para pendente (validar cartão) vs outros (reativar)
+    if motivo == "pendente":
+        kb_bloqueio = InlineKeyboardMarkup([
+            [InlineKeyboardButton("✅ Validar Cartão", callback_data="validar_cartao")],
+        ])
+    else:
+        kb_bloqueio = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔄 Reativar assinatura", callback_data="reativar")],
+        ])
 
     if update.message:
         await update.message.reply_text(texto_bloqueio, parse_mode="HTML", reply_markup=kb_bloqueio)
