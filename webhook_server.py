@@ -84,19 +84,51 @@ async def handle_webhook(request: web.Request) -> web.Response:
 
             campos_update = dict(status="trial", trial_fim=trial_fim, trial_usado=True)
             
-            # Se vem com subscription ID, salva
-            if asaas_subscription_id and asaas_subscription_id.startswith("sub_"):
-                campos_update["assinatura_asaas_id"] = asaas_subscription_id
-            # Se vem com customer ID, também salva (importante para checkout)
-            elif asaas_customer_id and asaas_customer_id.startswith("cus_"):
+            # Salva customer ID (necessário para operações futuras)
+            if asaas_customer_id and asaas_customer_id.startswith("cus_"):
                 campos_update["asaas_id"] = asaas_customer_id
                 logger.info(f"Salvando customer ID: {asaas_customer_id}")
             
-            # Se vem subscription no objeto (em alguns webhooks), também salva
-            if isinstance(resultado.get("subscription"), dict):
+            # ─── BUSCA A SUBSCRIPTION REAL CRIADA PELO CHECKOUT ───
+            # Quando um checkout RECURRENT é pago, o Asaas cria automaticamente
+            # uma subscription. O webhook do CHECKOUT_PAID traz apenas o checkout ID,
+            # não o subscription ID. Precisamos buscar a subscription pelo customer.
+            subscription_id_real = None
+            
+            # 1. Se o webhook já trouxe subscription ID válido, usa
+            if asaas_subscription_id and asaas_subscription_id.startswith("sub_"):
+                subscription_id_real = asaas_subscription_id
+                logger.info(f"✅ Subscription ID veio no webhook: {subscription_id_real}")
+            
+            # 2. Se veio subscription dentro do objeto, usa
+            if not subscription_id_real and isinstance(resultado.get("subscription"), dict):
                 sub_id = resultado["subscription"].get("id")
                 if sub_id and sub_id.startswith("sub_"):
-                    campos_update["assinatura_asaas_id"] = sub_id
+                    subscription_id_real = sub_id
+                    logger.info(f"✅ Subscription ID no sub-objeto: {subscription_id_real}")
+            
+            # 3. Se ainda não tem, BUSCA no Asaas pelo customer ID (com retry)
+            if not subscription_id_real and asaas_customer_id:
+                try:
+                    from pagamento import buscar_assinatura_ativa
+                    # 3 tentativas: subscription pode levar 1-2s para ser criada
+                    subscription_id_real = await buscar_assinatura_ativa(asaas_customer_id, tentativas=3)
+                    if subscription_id_real:
+                        logger.info(f"🔍 Subscription encontrada no Asaas: {subscription_id_real}")
+                    else:
+                        logger.warning(f"⚠️ Nenhuma subscription ativa encontrada para {asaas_customer_id}")
+                except Exception as e:
+                    logger.error(f"❌ Erro ao buscar subscription: {e}")
+            
+            # Salva o subscription ID real (não checkout, não customer!)
+            if subscription_id_real:
+                campos_update["assinatura_asaas_id"] = subscription_id_real
+                logger.info(f"✅ Subscription salva no banco: {subscription_id_real}")
+            else:
+                logger.warning(f"⚠️ Não foi possível obter subscription ID para {chat_id}")
+            
+            # Limpa ultimo_checkout_id — o checkout foi consumido (pago)
+            campos_update["ultimo_checkout_id"] = None
 
             await atualizar_usuario(chat_id, **campos_update)
             logger.info(f"Usuário {chat_id} — cartão validado, trial de 7 dias liberado até {trial_fim}.")

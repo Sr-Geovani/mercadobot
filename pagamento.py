@@ -451,20 +451,86 @@ async def verificar_pagamento_confirmado(asaas_cliente_id: str) -> bool:
         return False
 
 
-async def buscar_assinatura_ativa(asaas_cliente_id: str) -> str:
-    """Busca assinatura ativa existente para o cliente. Retorna o ID ou vazio."""
-    async with httpx.AsyncClient() as client:
-        resp = await client.get(
-            f"{ASAAS_URL}/subscriptions",
-            params={"customer": asaas_cliente_id, "status": "ACTIVE"},
-            headers=_headers()
-        )
-        data = resp.json()
-        assinaturas = data.get("data", [])
-        if assinaturas:
-            logger.info(f"Assinatura ativa encontrada: {assinaturas[0]['id']}")
-            return assinaturas[0]["id"]
+async def reativar_subscription_existente(asaas_cliente_id: str) -> str:
+    """
+    Reativa uma subscription que foi cancelada/inativada mas ainda existe no Asaas.
+    Se encontrar uma subscription INACTIVE, reativa. Se não houver nenhuma,
+    retorna vazio (chamador deve criar uma nova).
+    
+    Retorna o subscription ID reativado, ou vazio se não encontrou.
+    """
+    try:
+        async with httpx.AsyncClient() as client:
+            # Busca TODAS as subscriptions do cliente (qualquer status)
+            resp = await client.get(
+                f"{ASAAS_URL}/subscriptions",
+                params={"customer": asaas_cliente_id},
+                headers=_headers()
+            )
+            data = resp.json()
+            subs = data.get("data", [])
+            
+            if not subs:
+                logger.info(f"[REATIVAR-SUB] Nenhuma subscription para {asaas_cliente_id}")
+                return ""
+            
+            # Procura primeiro uma ACTIVE (já está boa, só retorna)
+            for sub in subs:
+                if sub.get("status") == "ACTIVE":
+                    logger.info(f"[REATIVAR-SUB] Subscription já ativa: {sub['id']}")
+                    return sub["id"]
+            
+            # Se não há ACTIVE, tenta reativar a primeira INACTIVE
+            for sub in subs:
+                if sub.get("status") in ("INACTIVE", "EXPIRED"):
+                    sub_id = sub["id"]
+                    # Reativa alterando status para ACTIVE
+                    resp_update = await client.put(
+                        f"{ASAAS_URL}/subscriptions/{sub_id}",
+                        json={"status": "ACTIVE"},
+                        headers=_headers()
+                    )
+                    if resp_update.status_code in (200, 201):
+                        logger.info(f"[REATIVAR-SUB] Subscription reativada: {sub_id}")
+                        return sub_id
+                    else:
+                        logger.warning(f"[REATIVAR-SUB] Falha ao reativar {sub_id}: {resp_update.status_code}")
+            
+            return ""
+    except Exception as e:
+        logger.error(f"[REATIVAR-SUB] Erro: {e}")
         return ""
+
+
+async def buscar_assinatura_ativa(asaas_cliente_id: str, tentativas: int = 1) -> str:
+    """
+    Busca assinatura ativa existente para o cliente. Retorna o ID ou vazio.
+    
+    tentativas: número de tentativas com espera de 2s entre elas.
+    Útil logo após CHECKOUT_PAID, quando a subscription pode levar
+    1-2 segundos para ser criada no Asaas.
+    """
+    import asyncio
+    
+    for tentativa in range(max(1, tentativas)):
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(
+                f"{ASAAS_URL}/subscriptions",
+                params={"customer": asaas_cliente_id, "status": "ACTIVE"},
+                headers=_headers()
+            )
+            data = resp.json()
+            assinaturas = data.get("data", [])
+            if assinaturas:
+                logger.info(f"Assinatura ativa encontrada: {assinaturas[0]['id']}")
+                return assinaturas[0]["id"]
+        
+        # Se não encontrou e ainda há tentativas, espera antes de tentar de novo
+        if tentativa < tentativas - 1:
+            logger.info(f"Subscription ainda não disponível, tentativa {tentativa + 1}/{tentativas}. Aguardando 2s...")
+            await asyncio.sleep(2)
+    
+    return ""
 
 
 async def buscar_link_assinatura(assinatura_id: str) -> str:
@@ -597,25 +663,54 @@ async def cancelar_assinatura(asaas_id: str) -> bool:
     - Subscriptions ativas
     - Checkouts pendentes (importante!)
     - Payments futuros
+    
+    Aceita qualquer tipo de ID (subscription sub_, customer cus_, ou checkout).
+    Sempre resolve para o customer correto antes de deletar tudo.
     """
     try:
         async with httpx.AsyncClient() as client:
-            logger.info(f"[CANCELAR] Cancelando {asaas_id}")
+            logger.info(f"[CANCELAR] Iniciando cancelamento de {asaas_id}")
             
-            # Se for subscription ID, extrai o customer
-            customer_id = asaas_id
+            customer_id = None
+            
+            # CASO 1: É subscription ID (sub_) — busca o customer dela
             if asaas_id.startswith("sub_"):
                 logger.info(f"[CANCELAR] É subscription ID, buscando customer...")
-                
                 resp = await client.get(
                     f"{ASAAS_URL}/subscriptions/{asaas_id}",
                     headers=_headers()
                 )
-                
                 if resp.status_code == 200:
                     data = resp.json()
                     customer_id = data.get("customer")
-                    logger.info(f"[CANCELAR] Customer encontrado: {customer_id}")
+                    logger.info(f"[CANCELAR] Customer da subscription: {customer_id}")
+                else:
+                    logger.warning(f"[CANCELAR] Subscription {asaas_id} não encontrada (status {resp.status_code})")
+            
+            # CASO 2: É customer ID (cus_) — usa direto
+            elif asaas_id.startswith("cus_"):
+                customer_id = asaas_id
+                logger.info(f"[CANCELAR] É customer ID direto: {customer_id}")
+            
+            # CASO 3: ID desconhecido (ex: checkout ID) — tenta buscar como checkout
+            else:
+                logger.info(f"[CANCELAR] ID desconhecido, tentando resolver via checkout...")
+                # Tenta buscar o checkout para pegar o customer
+                resp_checkout = await client.get(
+                    f"{ASAAS_URL}/checkouts/{asaas_id}",
+                    headers=_headers()
+                )
+                if resp_checkout.status_code == 200:
+                    data = resp_checkout.json()
+                    customer_id = data.get("customer")
+                    logger.info(f"[CANCELAR] Customer do checkout: {customer_id}")
+                else:
+                    logger.warning(f"[CANCELAR] Checkout {asaas_id} não encontrado (status {resp_checkout.status_code})")
+            
+            # Se não conseguiu resolver o customer, não pode continuar
+            if not customer_id:
+                logger.error(f"[CANCELAR] ❌ Não foi possível resolver customer para {asaas_id}")
+                return False
             
             # Agora temos o customer_id, vamos deletar tudo associado
             logger.info(f"[CANCELAR] Deletando tudo do customer {customer_id}")

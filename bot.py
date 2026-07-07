@@ -2738,7 +2738,7 @@ async def enviar_reativacao(update_or_msg, chat_id: int, is_callback: bool = Fal
     is_callback: True se vem de callback_query, False se de /reativar
     """
     from database import buscar_usuario, atualizar_usuario, usuario_tem_acesso
-    from pagamento import gerar_checkout_reativacao
+    from pagamento import gerar_checkout_reativacao, cancelar_checkout, reativar_subscription_existente
     from datetime import datetime
     from zoneinfo import ZoneInfo
     
@@ -2760,14 +2760,62 @@ async def enviar_reativacao(update_or_msg, chat_id: int, is_callback: bool = Fal
                 await update_or_msg.reply_text(msg_text)
             return
         
+        # LIMPEZA: cancela qualquer checkout anterior ainda pendente
+        # para evitar múltiplos checkouts "vivos" gerando cobranças duplicadas
+        checkout_anterior = usuario.get("ultimo_checkout_id")
+        if checkout_anterior:
+            await cancelar_checkout(checkout_anterior)
+            logger.info(f"[REATIVAR] Checkout anterior {checkout_anterior} cancelado para {chat_id}")
+        
         brasilia = ZoneInfo("America/Sao_Paulo")
         status = usuario.get("status")
         
         # ─── CENÁRIO 1: cancelado_mas_ativo COM ACESSO ───────────────────
-        # Ofereça agendamento para a data de expiração
+        # Tenta REATIVAR a subscription existente (sem criar checkout novo!)
         if status == "cancelado_mas_ativo":
             tem_acesso, _ = await usuario_tem_acesso(chat_id)
             if tem_acesso:
+                # PRIMEIRO tenta reativar subscription existente no Asaas
+                sub_reativada = await reativar_subscription_existente(asaas_id)
+                if sub_reativada:
+                    # Sucesso! Não precisa de novo checkout nem cobrança
+                    await atualizar_usuario(
+                        chat_id,
+                        status="ativo",
+                        assinatura_asaas_id=sub_reativada
+                    )
+                    
+                    # Determina data de expiração para a mensagem
+                    data_exp_str = ""
+                    if usuario.get("assinatura_fim"):
+                        try:
+                            de = datetime.fromisoformat(usuario["assinatura_fim"])
+                            data_exp_str = de.strftime("%d/%m/%Y")
+                        except:
+                            pass
+                    elif usuario.get("trial_fim"):
+                        try:
+                            de = datetime.fromisoformat(usuario["trial_fim"])
+                            data_exp_str = de.strftime("%d/%m/%Y")
+                        except:
+                            pass
+                    
+                    msg_text = (
+                        f"✅ {b('Assinatura reativada com sucesso!')}\n\n"
+                        f"Sua assinatura voltou a ficar ativa — sem nova cobrança agora.\n"
+                    )
+                    if data_exp_str:
+                        msg_text += f"Próxima renovação: {b(data_exp_str)}.\n"
+                    msg_text += f"\nObrigado por continuar com o MercadoBot! 🎉"
+                    
+                    if is_callback:
+                        await update_or_msg.message.reply_text(msg_text, parse_mode="HTML")
+                    else:
+                        await update_or_msg.reply_text(msg_text, parse_mode="HTML")
+                    logger.info(f"[REATIVAR] Subscription {sub_reativada} reativada para {chat_id} (sem cobrança)")
+                    return
+                
+                # Se NÃO conseguiu reativar subscription, cai no fluxo de agendamento
                 # Determina data de expiração
                 data_expiracao = None
                 if usuario.get("assinatura_fim"):
@@ -2805,9 +2853,13 @@ async def enviar_reativacao(update_or_msg, chat_id: int, is_callback: bool = Fal
                             await update_or_msg.reply_text(msg_text)
                         return
                     
-                    # Salva novo assinatura_id
+                    # Salva novo assinatura_id E o checkout para limpeza futura
                     if assinatura_id:
-                        await atualizar_usuario(chat_id, assinatura_asaas_id=assinatura_id)
+                        await atualizar_usuario(
+                            chat_id,
+                            assinatura_asaas_id=assinatura_id,
+                            ultimo_checkout_id=assinatura_id
+                        )
                     
                     kb = InlineKeyboardMarkup([
                         [InlineKeyboardButton("💳 Confirmar pagamento", url=link)],
@@ -2843,9 +2895,13 @@ async def enviar_reativacao(update_or_msg, chat_id: int, is_callback: bool = Fal
                 await update_or_msg.reply_text(msg_text)
             return
         
-        # Salva novo assinatura_id
+        # Salva novo assinatura_id E o checkout para limpeza futura
         if assinatura_id:
-            await atualizar_usuario(chat_id, assinatura_asaas_id=assinatura_id)
+            await atualizar_usuario(
+                chat_id,
+                assinatura_asaas_id=assinatura_id,
+                ultimo_checkout_id=assinatura_id
+            )
         
         # Mensagem de boas-vindas (acesso imediato)
         kb = InlineKeyboardMarkup([
@@ -3311,6 +3367,11 @@ async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
                 return
             
+            # Salva o checkout ID para poder cancelá-lo depois se necessário
+            if assinatura_id:
+                from database import atualizar_usuario
+                await atualizar_usuario(chat_id, ultimo_checkout_id=assinatura_id)
+            
             kb = InlineKeyboardMarkup([
                 [InlineKeyboardButton("💳 Validar Cartão (7 dias grátis)", url=link)],
             ])
@@ -3338,7 +3399,7 @@ async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # ─── Validar Cartão (para pendente que foi bloqueado) ───────────────────
     if acao == "validar_cartao":
         await query.answer()
-        from database import buscar_usuario
+        from database import buscar_usuario, atualizar_usuario
         from pagamento import gerar_link_pagamento
         
         usuario = await buscar_usuario(chat_id)
@@ -3365,6 +3426,10 @@ async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     parse_mode="HTML"
                 )
                 return
+            
+            # Salva o checkout ID para poder cancelá-lo depois se necessário
+            if assinatura_id:
+                await atualizar_usuario(chat_id, ultimo_checkout_id=assinatura_id)
             
             kb = InlineKeyboardMarkup([
                 [InlineKeyboardButton("💳 Validar Cartão (7 dias grátis)", url=link)],
@@ -3587,18 +3652,28 @@ async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     pass
 
         if usuario:
+            # Cancela usando o customer ID (asaas_id) que é o mais confiável.
+            # A função cancelar_assinatura resolve e deleta TUDO do customer:
+            # subscriptions, checkouts pendentes e payments futuros.
+            # Preferimos o customer ID pois o assinatura_asaas_id pode estar
+            # incorreto em fluxos antigos (checkout ID salvo por engano).
+            customer_id = usuario.get("asaas_id")
             assinatura_id = usuario.get("assinatura_asaas_id")
             
-            if assinatura_id:
-                # Sempre cancela a assinatura (funciona para trial e ativo)
-                # Cancela a subscription e qualquer cobrança futura associada
+            # Prioriza customer ID; se não tiver, usa assinatura_asaas_id
+            id_para_cancelar = customer_id or assinatura_id
+            
+            if id_para_cancelar:
                 try:
-                    resultado = await cancelar_assinatura(assinatura_id)
-                    logger.info(f"✅ Assinatura cancelada com sucesso: {assinatura_id}")
+                    resultado = await cancelar_assinatura(id_para_cancelar)
+                    if resultado:
+                        logger.info(f"✅ Cancelamento no Asaas OK para {chat_id} (id={id_para_cancelar})")
+                    else:
+                        logger.warning(f"⚠️ Cancelamento no Asaas retornou False para {chat_id} (id={id_para_cancelar})")
                 except Exception as e_cancel:
-                    logger.error(f"❌ ERRO ao cancelar assinatura {assinatura_id}: {e_cancel}")
+                    logger.error(f"❌ ERRO ao cancelar no Asaas para {chat_id}: {e_cancel}")
             else:
-                logger.warning(f"⚠️ Usuário {chat_id} sem assinatura_asaas_id para cancelar no Asaas. Status apenas no banco será alterado.")
+                logger.warning(f"⚠️ Usuário {chat_id} sem IDs Asaas para cancelar. Status apenas no banco será alterado.")
 
         await atualizar_usuario(chat_id, status="cancelado_mas_ativo")
 
