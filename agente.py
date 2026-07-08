@@ -349,12 +349,48 @@ async def garantir_dados_periodo(chat_id: int, data_ini: str, data_fim: str,
     pdv_email = usuario.get("pdv_email")
     pdv_senha = usuario.get("pdv_senha")
 
-    # Reaproveita dados já carregados SE o período for o mesmo E não foi
-    # pedido refresh forçado (forcar_fresh=False é o padrão, para evitar
-    # scrape duplicado numa mesma conversa).
+    # Reaproveita dados já carregados SE o período for o mesmo, não foi pedido
+    # refresh forçado, E o cache ainda está dentro da validade.
+    #
+    # Validade por tipo de período (evita servir dado velho como se fosse atual):
+    # - Período que inclui HOJE (ainda mudando): 10 minutos. Passou disso,
+    #   rebaixa, porque vendas novas podem ter entrado.
+    # - Período FECHADO (só datas passadas): vale o dia todo, pois não muda mais.
+    from datetime import datetime
+    from zoneinfo import ZoneInfo as _ZI
+    _br = _ZI("America/Sao_Paulo")
+    _agora = datetime.now(_br)
+    _hoje_str = _agora.strftime("%d/%m/%Y")
+
     d_atual = dados_usuario.get(chat_id, {})
-    if not forcar_fresh and d_atual.get("data_ini") == data_ini and d_atual.get("data_fim") == data_fim \
-       and d_atual.get("vendas") is not None:
+    cache_valido = False
+    if (not forcar_fresh
+            and d_atual.get("data_ini") == data_ini
+            and d_atual.get("data_fim") == data_fim
+            and d_atual.get("vendas") is not None):
+        carimbo = d_atual.get("baixado_em")
+        if carimbo:
+            idade_seg = (_agora - carimbo).total_seconds()
+            # O período inclui hoje? (data_fim é hoje ou futuro)
+            try:
+                fim_dt = datetime.strptime(data_fim, "%d/%m/%Y").date()
+                inclui_hoje = fim_dt >= _agora.date()
+            except Exception:
+                inclui_hoje = True  # na dúvida, trata como "hoje" (validade curta)
+            if inclui_hoje:
+                cache_valido = idade_seg < 600      # 10 minutos para dados de hoje
+            else:
+                cache_valido = idade_seg < 86400    # período fechado: dia todo
+        else:
+            # Cache antigo sem carimbo: por segurança, não confia se inclui hoje
+            try:
+                fim_dt = datetime.strptime(data_fim, "%d/%m/%Y").date()
+                cache_valido = fim_dt < _agora.date()  # só confia se for período fechado
+            except Exception:
+                cache_valido = False
+
+    if cache_valido:
+        logger.info(f"[CACHE] Reusando dados de {data_ini}-{data_fim} para {chat_id} (dentro da validade)")
         return {
             "vendas": d_atual["vendas"],
             "produtos": d_atual.get("produtos"),
@@ -380,6 +416,7 @@ async def garantir_dados_periodo(chat_id: int, data_ini: str, data_fim: str,
     dados_usuario[chat_id]["total_cancel"]  = total_cancel
     dados_usuario[chat_id]["data_ini"]      = data_ini
     dados_usuario[chat_id]["data_fim"]      = data_fim
+    dados_usuario[chat_id]["baixado_em"]    = _agora  # carimbo para validade do cache
 
     return {"vendas": vendas, "produtos": produtos, "total_cancel": total_cancel}
 

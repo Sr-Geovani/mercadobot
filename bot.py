@@ -2233,58 +2233,28 @@ async def comando_semana_atual(msg, chat_id: int):
         except Exception as db_error:
             logger.error(f"[SEMANA] Erro ao buscar banco para {chat_id}: {db_error}", exc_info=True)
     
-    vendas = d.get("vendas")
-
-    # Se dados carregados já cobrem a semana, usa — senão busca
-    data_ini_carregada = d.get("data_ini", "")
-    if vendas is not None and not vendas.empty and data_ini_carregada <= ini:
-        v = vendas
-        logger.info(f"[SEMANA] Usando cache ({len(v)} linhas)")
-    else:
-        await msg.reply_text("⏳ Buscando dados da semana atual...")
-        try:
-            if not pdv_email or not pdv_senha:
-                logger.warning(f"[SEMANA] Sem credenciais PDV para {chat_id}")
-                await msg.reply_text(
-                    "❌ Seus dados de acesso ao PDV não estão configurados.\n\n"
-                    "Use /start para atualizar suas credenciais."
-                )
-                return
-            
-            from scraper import baixar_relatorios_periodo
-            import asyncio
-            loop = asyncio.get_event_loop()
-
-            logger.info(f"[SEMANA] Buscando {ini} a {fim} para {chat_id}")
-            path_v, path_p, total_c = await loop.run_in_executor(
-                None, baixar_relatorios_periodo, ini, fim, pdv_email, pdv_senha
-            )
-            logger.info(f"[SEMANA] Arquivos baixados: {path_v}")
-            v = normalizar_vendas(pd.read_excel(path_v))
-            logger.info(f"[SEMANA] Vendas normalizadas: {len(v)} linhas")
-            
-            if v.empty:
-                await msg.reply_text(
-                    f"📭 Nenhuma venda registrada na semana de {ini} a {fim}.\n\n"
-                    f"Verifique se os totens estão operando normalmente."
-                )
-                return
-                
-            # Garante novamente antes de salvar
-            if chat_id not in dados_usuario:
-                dados_usuario[chat_id] = {}
-            
-            dados_usuario[chat_id]["vendas"]       = v
-            dados_usuario[chat_id]["periodo_label"] = f"Semana atual ({ini} – {fim})"
-            dados_usuario[chat_id]["data_ini"]      = ini
-            logger.info(f"[SEMANA] Cache atualizado para {chat_id}")
-        except Exception as e:
-            logger.error(f"[SEMANA] Erro para {chat_id}: {type(e).__name__}: {e}", exc_info=True)
+    await msg.reply_text("⏳ Buscando dados da semana atual...")
+    try:
+        v, _, _ = await obter_dados_periodo(chat_id, ini, fim, f"Semana atual ({ini} – {fim})")
+        if v is None:
             await msg.reply_text(
-                f"❌ Erro ao buscar dados: {type(e).__name__}\n\n"
-                f"Verifique sua conexão e tente novamente."
+                "❌ Seus dados de acesso ao PDV não estão configurados, "
+                "ou houve erro na busca.\n\nUse /start para atualizar suas credenciais."
             )
             return
+        if v.empty:
+            await msg.reply_text(
+                f"📭 Nenhuma venda registrada na semana de {ini} a {fim}.\n\n"
+                f"Verifique se os totens estão operando normalmente."
+            )
+            return
+    except Exception as e:
+        logger.error(f"[SEMANA] Erro para {chat_id}: {type(e).__name__}: {e}", exc_info=True)
+        await msg.reply_text(
+            f"❌ Erro ao buscar dados: {type(e).__name__}\n\n"
+            f"Verifique sua conexão e tente novamente."
+        )
+        return
 
     try:
         await enviar(msg, bloco_semanal(v))
@@ -2432,6 +2402,27 @@ async def comando_semana_comparativo(msg, chat_id: int):
         )
 
 
+async def obter_dados_periodo(chat_id: int, ini: str, fim: str, label: str = "", forcar_fresh: bool = False):
+    """
+    Ponte dos botões para a busca central de dados (a mesma que a IA usa),
+    garantindo a MESMA regra de validade de cache:
+    - dados de hoje: válidos por 10 min
+    - período fechado: válidos por 24h
+    - forcar_fresh=True: sempre baixa do PDV agora
+
+    Retorna (vendas_df, produtos_df, total_cancel) ou (None, None, None) em erro.
+    Importa localmente para evitar import circular com agente.py.
+    """
+    from agente import garantir_dados_periodo
+    dados = await garantir_dados_periodo(
+        chat_id, ini, fim, label or f"{ini} a {fim}", forcar_fresh=forcar_fresh
+    )
+    if "erro" in dados:
+        logger.warning(f"[DADOS] Erro ao obter {ini}-{fim} para {chat_id}: {dados['erro']}")
+        return None, None, None
+    return dados.get("vendas"), dados.get("produtos"), dados.get("total_cancel", {})
+
+
 async def comando_semana_mes(msg, chat_id: int):
     """Mês atual agrupado por semana."""
     from datetime import datetime
@@ -2443,18 +2434,12 @@ async def comando_semana_mes(msg, chat_id: int):
 
     await msg.reply_text("⏳ Buscando dados do mês...")
     try:
-        d         = dados_usuario.get(chat_id, {})
-        pdv_email = d.get("pdv_email")
-        pdv_senha = d.get("pdv_senha")
-        from scraper import baixar_relatorios_periodo
-        import asyncio
-        loop = asyncio.get_event_loop()
-        path_v, _, _ = await loop.run_in_executor(
-            None, baixar_relatorios_periodo, ini, fim, pdv_email, pdv_senha
-        )
-        v = normalizar_vendas(pd.read_excel(path_v))
+        v, _, _ = await obter_dados_periodo(chat_id, ini, fim, "Mês atual")
+        if v is None:
+            await msg.reply_text("❌ Erro ao buscar dados. Verifique suas credenciais com /start.")
+            return
     except Exception as e:
-        await msg.reply_text(f"❌ Erro ao buscar dados: {e}")
+        await msg.reply_text(f"❌ Erro ao buscar dados: {type(e).__name__}")
         return
 
     await enviar(msg, bloco_semanal(v))
@@ -4083,27 +4068,22 @@ async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode="HTML"
             )
 
-            # Busca os dados do período escolhido
+            # Busca os dados do período escolhido (usa cache central com validade)
             try:
-                usuario_db = await buscar_usuario_db(chat_id)
-                pdv_email  = usuario_db.get("pdv_email") if usuario_db else None
-                pdv_senha  = usuario_db.get("pdv_senha") if usuario_db else None
-
-                from scraper import baixar_relatorios_periodo
-                import asyncio as _asyncio
-                loop = _asyncio.get_event_loop()
-                _, path_produtos, _ = await loop.run_in_executor(
-                    None, baixar_relatorios_periodo, ini, fim, pdv_email, pdv_senha
-                )
-                produtos = pd.read_excel(path_produtos)
-                produtos = normalizar_produtos(produtos)
+                _, produtos, _ = await obter_dados_periodo(chat_id, ini, fim, label_per)
+                if produtos is None:
+                    await msg.reply_text(
+                        "❌ Erro ao buscar dados do PDV Legal. Verifique suas credenciais com /start."
+                    )
+                    await abrir_menu(msg, chat_id)
+                    return
 
                 if produtos.empty:
                     await msg.reply_text("⚠️ Nenhum produto encontrado para o período selecionado.")
                     await abrir_menu(msg, chat_id)
                     return
 
-                # Aplica margem de segurança se necessário
+                # Aplica margem de segurança se necessário (copy evita contaminar o cache)
                 if modo == "estoque":
                     produtos = produtos.copy()
                     produtos["quantidade"] = (produtos["quantidade"] * 1.3).round().astype(int)
