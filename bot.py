@@ -118,7 +118,7 @@ async def gerar_audio_tts(texto: str) -> BytesIO | None:
     if len(texto_limpo) > 3000:
         texto_limpo = texto_limpo[:3000] + ". Texto completo disponível no chat."
 
-    velocidade = float(os.getenv("TTS_SPEED", "1.65"))
+    velocidade = float(os.getenv("TTS_SPEED", "1.5"))
     openai_key = os.getenv("OPENAI_API_KEY")
     loop = asyncio.get_event_loop()
 
