@@ -2902,6 +2902,36 @@ async def cmd_status_handler(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await cmd_status(update, context)
 
 
+def calcular_dias_trial_desde_criacao(usuario: dict, trial_dias: int = 7) -> int:
+    """
+    Dias de trial restantes contando a partir da DATA DE CRIAÇÃO do cadastro.
+    O trial vai de criado_em até criado_em + trial_dias, independente de quando
+    o cartão é validado. Retorna um valor entre 0 e trial_dias.
+    """
+    from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
+    brasilia = ZoneInfo("America/Sao_Paulo")
+    criado_raw = usuario.get("criado_em")
+    if not criado_raw:
+        return trial_dias  # sem data de criação, concede o período cheio
+    try:
+        criado = datetime.fromisoformat(criado_raw)
+        if criado.tzinfo is None:
+            criado = criado.replace(tzinfo=brasilia)
+        fim = criado + timedelta(days=trial_dias)
+        agora = datetime.now(brasilia)
+        # Arredonda para cima: um dia parcial ainda conta como dia de trial.
+        # Assim, recém-criado mostra 7 (não 6), e criado ontem mostra 6.
+        import math
+        segundos_restantes = (fim - agora).total_seconds()
+        if segundos_restantes <= 0:
+            return 0
+        dias = math.ceil(segundos_restantes / 86400)
+        return max(0, min(trial_dias, dias))
+    except Exception:
+        return trial_dias
+
+
 def calcular_dias_trial_restantes(usuario: dict) -> int:
     """Retorna dias de trial restantes. 0 se expirado ou não havia trial."""
     from datetime import datetime
@@ -3583,13 +3613,16 @@ async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
         
+        # Trial ancorado na data de criação: validar cartão não reinicia a contagem.
+        dias_trial = calcular_dias_trial_desde_criacao(usuario)
+        trial_ainda_vale = dias_trial > 0
+        
         try:
-            # Gera checkout COM TRIAL — não cobra agora, cobra após 7 dias
             link, assinatura_id = await gerar_link_pagamento(
                 usuario.get("asaas_id"),
                 chat_id,
-                reativacao=False,  # Não é reativação, é trial inicial
-                dias_trial_restantes=7
+                reativacao=not trial_ainda_vale,
+                dias_trial_restantes=dias_trial
             )
             
             if not link:
@@ -3605,21 +3638,33 @@ async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 from database import atualizar_usuario
                 await atualizar_usuario(chat_id, ultimo_checkout_id=assinatura_id)
             
-            kb = InlineKeyboardMarkup([
-                [InlineKeyboardButton("💳 Validar Cartão (7 dias grátis)", url=link)],
-            ])
+            if not trial_ainda_vale:
+                kb = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("💳 Confirmar cartão e assinar", url=link)],
+                ])
+                await msg.reply_text(
+                    f"💳 {b('Confirme seu cartão para ativar')}\n\n"
+                    f"Seu período de teste já terminou.\n\n"
+                    f"Ao confirmar, sua assinatura mensal de {b('R$ 29,90')} é ativada.\n"
+                    f"Pode cancelar quando quiser.",
+                    parse_mode="HTML",
+                    reply_markup=kb
+                )
+            else:
+                kb = InlineKeyboardMarkup([
+                    [InlineKeyboardButton(f"💳 Validar Cartão ({dias_trial} dias grátis)", url=link)],
+                ])
+                await msg.reply_text(
+                    f"🎁 {b(f'{dias_trial} dias de trial grátis!')}\n\n"
+                    f"Clique no botão para validar seu cartão de crédito.\n\n"
+                    f"✅ Nenhuma cobrança agora.\n"
+                    f"💳 Primeira cobrança: em {dias_trial} dia(s) (R$ 29,90)\n\n"
+                    f"Pode cancelar a qualquer momento sem custo.",
+                    parse_mode="HTML",
+                    reply_markup=kb
+                )
             
-            await msg.reply_text(
-                f"🎁 {b('7 dias de trial grátis!')}\n\n"
-                f"Clique no botão para validar seu cartão de crédito.\n\n"
-                f"✅ Nenhuma cobrança agora.\n"
-                f"💳 Primeira cobrança: em 7 dias (R$ 29,90)\n\n"
-                f"Pode cancelar a qualquer momento sem custo.",
-                parse_mode="HTML",
-                reply_markup=kb
-            )
-            
-            logger.info(f"[ONBOARDING] Link de validação gerado para {chat_id}: {link}")
+            logger.info(f"[ONBOARDING] Link gerado para {chat_id}: {link} (dias_trial={dias_trial})")
         except Exception as e:
             logger.error(f"Erro ao gerar link de validação: {e}")
             await msg.reply_text(
@@ -3643,13 +3688,16 @@ async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
         
+        # Trial ancorado na data de criação: validar cartão não reinicia a contagem.
+        dias_trial = calcular_dias_trial_desde_criacao(usuario)
+        trial_ainda_vale = dias_trial > 0
+        
         try:
-            # Gera checkout COM TRIAL — não cobra agora, cobra após 7 dias
             link, assinatura_id = await gerar_link_pagamento(
                 usuario.get("asaas_id"),
                 chat_id,
-                reativacao=False,  # Não é reativação, é trial inicial
-                dias_trial_restantes=7
+                reativacao=not trial_ainda_vale,
+                dias_trial_restantes=dias_trial
             )
             
             if not link:
@@ -3664,21 +3712,33 @@ async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if assinatura_id:
                 await atualizar_usuario(chat_id, ultimo_checkout_id=assinatura_id)
             
-            kb = InlineKeyboardMarkup([
-                [InlineKeyboardButton("💳 Validar Cartão (7 dias grátis)", url=link)],
-            ])
+            if not trial_ainda_vale:
+                kb = InlineKeyboardMarkup([
+                    [InlineKeyboardButton("💳 Confirmar cartão e assinar", url=link)],
+                ])
+                await msg.reply_text(
+                    f"💳 {b('Confirme seu cartão para ativar')}\n\n"
+                    f"Seu período de teste já terminou.\n\n"
+                    f"Ao confirmar, sua assinatura mensal de {b('R$ 29,90')} é ativada.\n"
+                    f"Pode cancelar quando quiser.",
+                    parse_mode="HTML",
+                    reply_markup=kb
+                )
+            else:
+                kb = InlineKeyboardMarkup([
+                    [InlineKeyboardButton(f"💳 Validar Cartão ({dias_trial} dias grátis)", url=link)],
+                ])
+                await msg.reply_text(
+                    f"🎁 {b(f'{dias_trial} dias de trial grátis!')}\n\n"
+                    f"Clique no botão para validar seu cartão de crédito.\n\n"
+                    f"✅ Nenhuma cobrança agora.\n"
+                    f"💳 Primeira cobrança: em {dias_trial} dia(s) (R$ 29,90)\n\n"
+                    f"Pode cancelar a qualquer momento sem custo.",
+                    parse_mode="HTML",
+                    reply_markup=kb
+                )
             
-            await msg.reply_text(
-                f"🎁 {b('7 dias de trial grátis!')}\n\n"
-                f"Clique no botão para validar seu cartão de crédito.\n\n"
-                f"✅ Nenhuma cobrança agora.\n"
-                f"💳 Primeira cobrança: em 7 dias (R$ 29,90)\n\n"
-                f"Pode cancelar a qualquer momento sem custo.",
-                parse_mode="HTML",
-                reply_markup=kb
-            )
-            
-            logger.info(f"[ONBOARDING] Link de validação gerado para {chat_id}: {link}")
+            logger.info(f"[ONBOARDING] Link gerado (2) para {chat_id}: {link} (dias_trial={dias_trial})")
         except Exception as e:
             logger.error(f"Erro ao gerar link de validação: {e}")
             await msg.reply_text(

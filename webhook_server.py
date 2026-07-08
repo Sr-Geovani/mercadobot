@@ -78,11 +78,35 @@ async def handle_webhook(request: web.Request) -> web.Response:
             # SUBSCRIPTION_CREATED ou CHECKOUT_PAID — validou cartão
             # A cobrança real só ocorrerá no nextDueDate (fim do trial).
             agora     = datetime.now(BRASILIA)
-            trial_fim = (agora + timedelta(days=7)).isoformat()
             asaas_subscription_id = resultado.get("asaas_id")
             asaas_customer_id = resultado.get("customer")  # ID do cliente Asaas
 
+            # O trial é ancorado na DATA DE CRIAÇÃO do cadastro, não no momento
+            # da validação do cartão. Assim, validar (ou revalidar) o cartão não
+            # reinicia a contagem: o trial sempre vai de criado_em até
+            # criado_em + 7 dias. Se o cadastro foi criado ontem, hoje restam ~6.
+            TRIAL_DIAS = 7
+            criado_em_raw = usuario.get("criado_em")
+            base_trial = None
+            if criado_em_raw:
+                try:
+                    base_trial = datetime.fromisoformat(criado_em_raw)
+                    if base_trial.tzinfo is None:
+                        base_trial = base_trial.replace(tzinfo=BRASILIA)
+                except Exception:
+                    base_trial = None
+            # Fallback: se não houver data de criação legível, usa agora
+            if base_trial is None:
+                base_trial = agora
+
+            trial_fim_dt = base_trial + timedelta(days=TRIAL_DIAS)
+            trial_fim = trial_fim_dt.isoformat()
+
             campos_update = dict(status="trial", trial_fim=trial_fim, trial_usado=True)
+            logger.info(
+                f"Usuário {chat_id} — cartão validado. Trial ancorado em criado_em="
+                f"{base_trial.isoformat()} → trial_fim={trial_fim}"
+            )
             
             # Salva customer ID (necessário para operações futuras)
             if asaas_customer_id and asaas_customer_id.startswith("cus_"):
