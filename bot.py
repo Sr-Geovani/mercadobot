@@ -25,10 +25,28 @@ logger = logging.getLogger(__name__)
 
 dados_usuario = {}
 
-# Cache do último texto "narrável" por chat_id, para o botão "🔊 Ouvir".
-# Guarda o texto puro (sem HTML) da última resposta enviada, para que o
-# usuário possa pedir a versão em áudio sob demanda.
-ultimo_texto_narravel = {}
+# Cache de textos "narráveis" para o botão "🔊 Ouvir".
+# Indexado por um ID curto único por mensagem: cada bloco enviado tem seu
+# próprio texto guardado, para que o botão de cada bloco toque exatamente
+# aquele conteúdo (e não só o último). Estrutura: { audio_id: texto }.
+textos_narraveis = {}
+# Ordem de inserção para poda (evita crescer sem limite na memória)
+_ordem_narraveis = []
+_MAX_NARRAVEIS = 500
+
+
+def _guardar_narravel(texto: str) -> str:
+    """Guarda um texto e retorna um audio_id curto para o callback do botão."""
+    import uuid
+    audio_id = uuid.uuid4().hex[:12]
+    textos_narraveis[audio_id] = texto
+    _ordem_narraveis.append(audio_id)
+    # Poda os mais antigos se passar do limite
+    while len(_ordem_narraveis) > _MAX_NARRAVEIS:
+        antigo = _ordem_narraveis.pop(0)
+        textos_narraveis.pop(antigo, None)
+    return audio_id
+
 
 
 def _limpar_para_audio(texto: str) -> str:
@@ -100,7 +118,7 @@ async def gerar_audio_tts(texto: str) -> BytesIO | None:
     if len(texto_limpo) > 3000:
         texto_limpo = texto_limpo[:3000] + ". Texto completo disponível no chat."
 
-    velocidade = float(os.getenv("TTS_SPEED", "1.15"))
+    velocidade = float(os.getenv("TTS_SPEED", "1.65"))
     openai_key = os.getenv("OPENAI_API_KEY")
     loop = asyncio.get_event_loop()
 
@@ -1839,10 +1857,10 @@ def _md_para_html(texto: str) -> str:
     return texto
 
 
-def kb_ouvir():
-    """Teclado com botão para ouvir a última resposta em áudio."""
+def kb_ouvir(audio_id: str):
+    """Teclado com botão para ouvir aquela mensagem específica em áudio."""
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🔊 Ouvir em áudio", callback_data="ouvir_audio")]
+        [InlineKeyboardButton("🔊 Ouvir em áudio", callback_data=f"ouvir:{audio_id}")]
     ])
 
 
@@ -1870,10 +1888,6 @@ async def enviar(msg, texto: str, chat_id: int = None, com_audio: bool = True):
         except Exception:
             chat_id = None
 
-    # Guarda o texto para o botão "Ouvir" recuperar depois
-    if chat_id and com_audio and texto:
-        ultimo_texto_narravel[chat_id] = texto
-
     LIMITE = 4000
     partes = []
     resto = texto
@@ -1886,11 +1900,13 @@ async def enviar(msg, texto: str, chat_id: int = None, com_audio: bool = True):
     if resto:
         partes.append(resto)
 
-    # Envia todas as partes; adiciona botão "Ouvir" apenas na última
-    for i, parte in enumerate(partes):
-        eh_ultima = (i == len(partes) - 1)
-        if eh_ultima and chat_id and com_audio:
-            await msg.reply_text(parte, parse_mode="HTML", reply_markup=kb_ouvir())
+    # Envia todas as partes. Cada parte recebe seu PRÓPRIO botão "Ouvir"
+    # apontando para o seu próprio texto (via audio_id único), para que o
+    # áudio de cada bloco toque exatamente aquele conteúdo.
+    for parte in partes:
+        if com_audio and parte.strip():
+            audio_id = _guardar_narravel(parte)
+            await msg.reply_text(parte, parse_mode="HTML", reply_markup=kb_ouvir(audio_id))
         else:
             await msg.reply_text(parte, parse_mode="HTML")
 
@@ -3468,20 +3484,23 @@ async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "reativar", "verificar_status", "menu_principal",
         "atualizar_credenciais", "confirmar_cancelamento",
         "validar_cartao", "validar_cartao_trial",
-        "pico_ok", "pico_problema", "ouvir_audio",
+        "pico_ok", "pico_problema",
     }
-    if acao not in acoes_sempre_liberadas and not acao.startswith("reativar_"):
+    if (acao not in acoes_sempre_liberadas
+            and not acao.startswith("reativar_")
+            and not acao.startswith("ouvir:")):
         if not await verificar_acesso(update, context):
             return
 
-    # ─── Ouvir última resposta em áudio (sob demanda) ───────────────────
-    if acao == "ouvir_audio":
+    # ─── Ouvir uma mensagem específica em áudio (sob demanda) ───────────
+    if acao.startswith("ouvir:"):
         await query.answer("🔊 Gerando áudio...")
-        texto = ultimo_texto_narravel.get(chat_id)
+        audio_id = acao.split(":", 1)[1]
+        texto = textos_narraveis.get(audio_id)
         if not texto:
             await msg.reply_text(
-                "🔇 Não encontrei um texto recente para narrar.\n\n"
-                "Peça uma análise ou briefing e toque em 🔊 Ouvir logo em seguida."
+                "🔇 Esse trecho não está mais disponível para áudio.\n\n"
+                "Peça a análise novamente e toque em 🔊 Ouvir."
             )
             return
         try:
@@ -3493,7 +3512,7 @@ async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 return
             audio_buf.name = "resposta.ogg"
             await msg.reply_voice(voice=audio_buf)
-            logger.info(f"Áudio TTS enviado para {chat_id}")
+            logger.info(f"Áudio TTS enviado para {chat_id} (audio_id={audio_id})")
         except Exception as e:
             logger.error(f"Erro ao enviar áudio para {chat_id}: {e}")
             await msg.reply_text(
