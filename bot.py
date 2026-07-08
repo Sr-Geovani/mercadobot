@@ -81,18 +81,42 @@ def _limpar_para_audio(texto: str) -> str:
     )
     texto = padrao_emoji.sub("", texto)
 
-    # Converte quebras de linha em pausas naturais
-    texto = re.sub(r"\n{2,}", ". ", texto)
-    texto = texto.replace("\n", ". ")
+    # ─── Números falados: moeda e percentual soam mal "cru" no TTS ───
+    # "R$ 4.357,87" → "4357 reais e 87 centavos"
+    # "R$ 1.000,00" → "1000 reais"
+    def _moeda_por_extenso(m):
+        inteiro = m.group(1).replace(".", "")   # remove separador de milhar
+        centavos = m.group(2)
+        if centavos and centavos != "00":
+            return f"{inteiro} reais e {int(centavos)} centavos"
+        return f"{inteiro} reais"
+
+    # R$ 1.234,56  ou  R$ 1234
+    texto = re.sub(r"R\$\s*([\d.]+),(\d{2})", _moeda_por_extenso, texto)
+    texto = re.sub(r"R\$\s*([\d.]+)", lambda m: f"{m.group(1).replace('.', '')} reais", texto)
+
+    # Percentual: "-77,5%" → "menos 77 vírgula 5 por cento"; "12%" → "12 por cento"
+    def _pct_por_extenso(m):
+        sinal = "menos " if m.group(1) == "-" else ""
+        inteiro = m.group(2)
+        decimal = m.group(3)
+        if decimal:
+            return f"{sinal}{inteiro} vírgula {decimal} por cento"
+        return f"{sinal}{inteiro} por cento"
+
+    texto = re.sub(r"([+-]?)(\d+)(?:,(\d+))?\s*%", _pct_por_extenso, texto)
+
+    # Converte quebras de linha em pausas — usa vírgula (pausa curta) em vez
+    # de ponto (pausa longa), para a leitura não ficar arrastada.
+    texto = re.sub(r"\n{2,}", ". ", texto)   # parágrafo = pausa maior
+    texto = texto.replace("\n", ", ")         # linha simples = pausa curta
 
     # Remove bullets e travessões que sobraram no início de linhas
-    texto = re.sub(r"(?:^|(?<=\. ))[•\-–—]\s*", "", texto)
-
-    # Troca "R$" por "reais" só quando faz sentido ficaria complexo;
-    # deixamos como está pois o TTS pt-BR já lê "R$" como "reais".
+    texto = re.sub(r"(?:^|(?<=[.,] ))[•\-–—]\s*", "", texto)
 
     # Colapsa pontuação repetida e espaços
     texto = re.sub(r"\.{2,}", ".", texto)
+    texto = re.sub(r",\s*,", ",", texto)          # vírgulas duplicadas
     texto = re.sub(r"\s+([.,!?])", r"\1", texto)
     texto = re.sub(r"\s{2,}", " ", texto).strip()
     # Evita começar com pontuação solta
