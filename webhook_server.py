@@ -155,20 +155,44 @@ async def handle_webhook(request: web.Request) -> web.Response:
             campos_update["ultimo_checkout_id"] = None
 
             await atualizar_usuario(chat_id, **campos_update)
-            logger.info(f"Usuário {chat_id} — cartão validado, trial de 7 dias liberado até {trial_fim}.")
+            logger.info(f"Usuário {chat_id} — cartão validado, trial liberado até {trial_fim}.")
 
             if _bot:
                 try:
                     from bot import kb_menu
+                    # Calcula dias reais de trial a partir do trial_fim recém-gravado
+                    import math
+                    dias_trial_msg = 7
+                    try:
+                        _fim = datetime.fromisoformat(trial_fim)
+                        if _fim.tzinfo is None:
+                            _fim = _fim.replace(tzinfo=BRASILIA)
+                        _seg = (_fim - agora).total_seconds()
+                        dias_trial_msg = max(1, min(7, math.ceil(_seg / 86400))) if _seg > 0 else 0
+                    except Exception:
+                        dias_trial_msg = 7
+
+                    if dias_trial_msg > 0:
+                        bloco_preco = (
+                            f"Seu cartão foi validado. Você tem <b>{dias_trial_msg} dia(s) grátis</b> para explorar tudo.\n\n"
+                            f"<b>🔔 Importante — Informação de preço (uma única vez):</b>\n\n"
+                            f"📅 <b>Durante o teste:</b> Grátis\n"
+                            f"💰 <b>Após o teste:</b> R$ 29,90/mês (primeiros 3 meses)\n"
+                            f"💰 <b>A partir do 4º mês:</b> R$ 49,90/mês\n\n"
+                        )
+                    else:
+                        bloco_preco = (
+                            f"Seu cartão foi validado e sua assinatura está ativa.\n\n"
+                            f"<b>🔔 Informação de preço (uma única vez):</b>\n\n"
+                            f"💰 R$ 29,90/mês (primeiros 3 meses)\n"
+                            f"💰 <b>A partir do 4º mês:</b> R$ 49,90/mês\n\n"
+                        )
+
                     await _bot.send_message(
                         chat_id=chat_id,
                         text=(
                             f"🎉 <b>Bem-vindo ao MercadoBot!</b>\n\n"
-                            f"Seu cartão foi validado. Você tem <b>7 dias grátis</b> para explorar tudo.\n\n"
-                            f"<b>🔔 Importante — Informação de preço (uma única vez):</b>\n\n"
-                            f"📅 <b>Dias 1–7:</b> Grátis (trial completo)\n"
-                            f"💰 <b>A partir do dia 8:</b> R$ 29,90/mês (primeiros 3 meses)\n"
-                            f"💰 <b>A partir do 4º mês:</b> R$ 49,90/mês\n\n"
+                            f"{bloco_preco}"
                             f"Sem surpresas. Sem pegadinha. Cancela quando quiser.\n\n"
                             f"═════════════════════════════════════\n\n"
                             f"<b>O que você pode fazer agora:</b>\n\n"

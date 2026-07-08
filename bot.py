@@ -3178,13 +3178,26 @@ async def cmd_reativar_handler(update: Update, context: ContextTypes.DEFAULT_TYP
     
     # BLOQUEIO: status "pendente" deve validar cartão primeiro, não reativar
     if status == "pendente":
+        dias_tr = calcular_dias_trial_desde_criacao(usuario)
         kb = InlineKeyboardMarkup([[
             InlineKeyboardButton("✅ Validar Cartão", callback_data="validar_cartao")
         ]])
+        if dias_tr > 0:
+            texto_pend = (
+                f"⏳ {b('Seu cadastro está aguardando confirmação.')}\n\n"
+                f"Clique abaixo para validar seu cartão e ativar seus "
+                f"{b(f'{dias_tr} dia(s) de teste grátis')}.\n"
+                f"Sem cobranças até a confirmação."
+            )
+        else:
+            texto_pend = (
+                f"⏳ {b('Seu cadastro está aguardando confirmação.')}\n\n"
+                f"Clique abaixo para validar seu cartão e ativar sua "
+                f"assinatura de {b('R$ 29,90/mês')}.\n"
+                f"Sem cobranças até a confirmação."
+            )
         await update.message.reply_text(
-            f"⏳ {b('Seu cadastro está aguardando confirmação.')}\n\n"
-            f"Clique abaixo para validar seu cartão e iniciar o trial de 7 dias.\n"
-            f"Sem cobranças até a confirmação.",
+            texto_pend,
             parse_mode="HTML",
             reply_markup=kb
         )
