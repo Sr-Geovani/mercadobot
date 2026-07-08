@@ -10,3 +10,4 @@ aiohttp
 httpx
 asyncpg
 gTTS
+openai

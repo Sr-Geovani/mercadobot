@@ -3511,7 +3511,14 @@ async def callback_botoes(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 )
                 return
             audio_buf.name = "resposta.ogg"
-            await msg.reply_voice(voice=audio_buf)
+            # Timeouts generosos: o upload do áudio pode demorar,
+            # especialmente em briefings longos. Sem isso, estoura "Timed out".
+            await msg.reply_voice(
+                voice=audio_buf,
+                read_timeout=60,
+                write_timeout=60,
+                connect_timeout=30,
+            )
             logger.info(f"Áudio TTS enviado para {chat_id} (audio_id={audio_id})")
         except Exception as e:
             logger.error(f"Erro ao enviar áudio para {chat_id}: {e}")
