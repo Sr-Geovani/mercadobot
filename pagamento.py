@@ -15,7 +15,9 @@ ASAAS_KEY = os.environ.get("ASAAS_KEY")
 ASAAS_URL = os.environ.get("ASAAS_URL", "https://sandbox.asaas.com/api/v3")
 # Em produção: ASAAS_URL = https://api.asaas.com/v3
 
-PRECO_MENSAL = 29.90
+PRECO_MENSAL = 29.90          # valor promocional (primeiros meses)
+PRECO_MENSAL_APOS = 49.90     # valor após o período promocional
+MESES_PRECO_PROMOCIONAL = 3   # nº de cobranças no valor promocional (4ª cobrança já sobe)
 TRIAL_DIAS   = 7
 
 
@@ -500,6 +502,33 @@ async def reativar_subscription_existente(asaas_cliente_id: str) -> str:
     except Exception as e:
         logger.error(f"[REATIVAR-SUB] Erro: {e}")
         return ""
+
+
+async def atualizar_valor_assinatura(subscription_id: str, novo_valor: float) -> bool:
+    """
+    Atualiza o valor de uma subscription no Asaas (PUT).
+    As PRÓXIMAS cobranças passam a sair no novo valor; as já geradas não mudam.
+    Usado para o reajuste do período promocional (29,90 -> 49,90).
+    Retorna True se atualizou com sucesso.
+    """
+    if not subscription_id or not subscription_id.startswith("sub_"):
+        logger.warning(f"[REAJUSTE] subscription_id inválido: {subscription_id}")
+        return False
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.put(
+                f"{ASAAS_URL}/subscriptions/{subscription_id}",
+                json={"value": novo_valor, "updatePendingPayments": False},
+                headers=_headers()
+            )
+            if resp.status_code in (200, 201):
+                logger.info(f"[REAJUSTE] Subscription {subscription_id} atualizada para R$ {novo_valor:.2f}")
+                return True
+            logger.error(f"[REAJUSTE] Falha ao atualizar {subscription_id}: {resp.status_code} {resp.text[:200]}")
+            return False
+    except Exception as e:
+        logger.error(f"[REAJUSTE] Erro ao atualizar valor de {subscription_id}: {e}")
+        return False
 
 
 async def buscar_assinatura_ativa(asaas_cliente_id: str, tentativas: int = 1) -> str:

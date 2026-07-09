@@ -266,6 +266,39 @@ async def handle_webhook(request: web.Request) -> web.Response:
                 trial_fim=None,  # ← LIMPA trial_fim quando ativa assinatura paga
                 ultimo_checkout_id=None,  # ← LIMPA checkout consumido
             )
+
+            # ─── CONTAGEM DE COBRANÇAS E REAJUSTE PROMOCIONAL ───────────────
+            # Trial NÃO conta. Cada pagamento_confirmado é uma cobrança real.
+            # Cobranças 1, 2 e 3 saem a R$ 29,90. Ao confirmar a 3ª, atualizamos
+            # a subscription no Asaas para R$ 49,90, de modo que a 4ª em diante
+            # já saia no valor cheio. O contador persiste entre cancelamento e
+            # reativação (continua de onde parou).
+            try:
+                from pagamento import (
+                    atualizar_valor_assinatura,
+                    PRECO_MENSAL_APOS, MESES_PRECO_PROMOCIONAL,
+                )
+                cobrancas_antes = usuario.get("cobrancas_pagas", 0) or 0
+                cobrancas_agora = cobrancas_antes + 1
+                campos_update["cobrancas_pagas"] = cobrancas_agora
+                logger.info(f"[REAJUSTE] {chat_id} — cobrança nº {cobrancas_agora} confirmada")
+
+                # Ao completar o nº de cobranças promocionais, sobe o valor.
+                # (na 3ª confirmação, prepara a subscription para cobrar 49,90 na 4ª)
+                if cobrancas_agora == MESES_PRECO_PROMOCIONAL and asaas_subscription_id:
+                    ok = await atualizar_valor_assinatura(asaas_subscription_id, PRECO_MENSAL_APOS)
+                    if ok:
+                        logger.info(
+                            f"[REAJUSTE] {chat_id} — subscription {asaas_subscription_id} "
+                            f"reajustada para R$ {PRECO_MENSAL_APOS:.2f} a partir da próxima cobrança"
+                        )
+                    else:
+                        logger.error(
+                            f"[REAJUSTE] {chat_id} — FALHA ao reajustar {asaas_subscription_id}. "
+                            f"Verificar manualmente no Asaas."
+                        )
+            except Exception as e_reajuste:
+                logger.error(f"[REAJUSTE] Erro na contagem/reajuste para {chat_id}: {e_reajuste}")
             
             # Só marca trial_usado=True se o user era TRIAL antes
             # Se era cancelado_mas_ativo ou outro status, não marca
