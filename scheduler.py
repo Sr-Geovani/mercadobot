@@ -895,31 +895,56 @@ async def verificar_alertas_proativos(bot, chat_id, pdv_email, pdv_senha, vendas
     except Exception as e:
         logger.warning(f"Alerta ritmo falhou para {chat_id}: {e}")
 
-    # ─── 2. CANCELAMENTOS SUSPEITOS ───
+    # ─── 2. CANCELAMENTOS SUSPEITOS (6 camadas) ───
+    # Fonte primária: o detalhe que o scraper já retorna dentro de total_cancel
+    # ("_detalhe"), que está em memória e não depende de arquivo temporário.
+    # Fallback: o arquivo /tmp/pdvlegal/cancelamentos_detalhe.json (pode não
+    # existir após reinício do Railway ou se a janela não baixou cancelamentos).
     try:
-        detalhe_path = Path("/tmp/pdvlegal/cancelamentos_detalhe.json")
-        if detalhe_path.exists():
-            with open(detalhe_path, "r", encoding="utf-8") as f:
-                detalhe = json.load(f)
-            todas_linhas = detalhe.get("linhas", detalhe.get("amostra", []))
-            headers = detalhe.get("headers", [])
+        todas_linhas = []
+        headers = []
 
+        # 1) Tenta pegar do total_cancel (em memória, confiável)
+        if isinstance(total_cancel, dict) and isinstance(total_cancel.get("_detalhe"), dict):
+            det = total_cancel["_detalhe"]
+            todas_linhas = det.get("linhas", det.get("amostra", [])) or []
+            headers = det.get("headers", []) or []
             if todas_linhas and headers:
-                # Só considera cancelamentos de HOJE (Brasília) e usa piso R$ 30.
-                hoje_br = datetime.now(BRASILIA).date()
-                deteccao = detectar_cancelamentos_suspeitos(
-                    todas_linhas, headers,
-                    piso_valor_alto=30.0,
-                    apenas_data=hoje_br,
+                logger.info(f"[ALERTA-CANCEL] Usando detalhe em memória para {chat_id} ({len(todas_linhas)} linhas)")
+
+        # 2) Fallback: arquivo /tmp
+        if not (todas_linhas and headers):
+            detalhe_path = Path("/tmp/pdvlegal/cancelamentos_detalhe.json")
+            if detalhe_path.exists():
+                with open(detalhe_path, "r", encoding="utf-8") as f:
+                    detalhe = json.load(f)
+                todas_linhas = detalhe.get("linhas", detalhe.get("amostra", [])) or []
+                headers = detalhe.get("headers", []) or []
+                if todas_linhas and headers:
+                    logger.info(f"[ALERTA-CANCEL] Usando detalhe do arquivo /tmp para {chat_id}")
+            else:
+                logger.warning(
+                    f"[ALERTA-CANCEL] Sem detalhe em memória E sem arquivo /tmp para {chat_id} "
+                    f"na janela {hora_atual}h — detecção das 6 camadas pulada. "
+                    f"O alerta de % ainda roda pelo total_cancel."
                 )
-                if deteccao.get("tem_alerta"):
-                    from agente import _formatar_alertas_cancelamento
-                    bloco = _formatar_alertas_cancelamento(deteccao["alertas"])
-                    if bloco:
-                        await bot.send_message(chat_id=chat_id, text=bloco.strip(),
-                                                parse_mode="HTML", reply_markup=kb_menu())
-                        mensagens_enviadas.append("cancelamento")
-                        await asyncio.sleep(2)
+
+        if todas_linhas and headers:
+            # Só considera cancelamentos de HOJE (Brasília) e usa piso R$ 30.
+            hoje_br = datetime.now(BRASILIA).date()
+            deteccao = detectar_cancelamentos_suspeitos(
+                todas_linhas, headers,
+                piso_valor_alto=30.0,
+                apenas_data=hoje_br,
+            )
+            if deteccao.get("tem_alerta"):
+                from agente import _formatar_alertas_cancelamento
+                bloco = _formatar_alertas_cancelamento(deteccao["alertas"])
+                if bloco:
+                    await bot.send_message(chat_id=chat_id, text=bloco.strip(),
+                                            parse_mode="HTML", reply_markup=kb_menu())
+                    mensagens_enviadas.append("cancelamento")
+                    await asyncio.sleep(2)
     except Exception as e:
         logger.warning(f"Alerta cancelamento falhou para {chat_id}: {e}")
 
@@ -1149,10 +1174,18 @@ async def enviar_alertas_proativos(modo: str = "completo"):
                         alertas.append(bloco_formatado)
                         logger.info(f"Alertas: {len(alertas_suspeitos)} alertas de cancelamento suspeito para {chat_id}")
 
-            # Alerta de cancelamentos — só no modo completo (qui-dom às 22h)
+            # Alerta de cancelamentos acima de 25% — em todas as janelas completas.
+            # Usa o TOTAL REAL de cancelamentos lido do PDV (total_cancel['_total']),
+            # a MESMA fonte da parcial das 13h. Antes usava a coluna
+            # ValorItensCancelados da planilha de vendas, que NÃO inclui
+            # cancelamentos integrais (desistências), gerando divergência: a
+            # parcial mostrava 27% mas o alerta calculava ~0% e não disparava.
             if modo == "completo":
-                cancel = vendas["ValorItensCancelados"].sum() if "ValorItensCancelados" in vendas.columns else 0
-                total  = vendas["valor"].sum()
+                if isinstance(total_cancel, dict):
+                    cancel = total_cancel.get("_total", 0) or 0
+                else:
+                    cancel = float(total_cancel or 0)
+                total = vendas["valor"].sum() if "valor" in vendas.columns else 0
                 if total > 0 and cancel > 0 and (cancel / total) > 0.25:
                     detalhe_filiais = ""
                     if isinstance(total_cancel, dict):
