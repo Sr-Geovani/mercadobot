@@ -2140,6 +2140,13 @@ async def comando_produtos(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id  = update.effective_chat.id
     d        = dados_usuario.get(chat_id, {})
     produtos = d.get("produtos")
+    logger.info(
+        f"[DIAG-PRODUTOS] chat_id={chat_id} (tipo {type(chat_id).__name__}) | "
+        f"chaves em dados_usuario={list(dados_usuario.keys())} | "
+        f"tem_produtos={produtos is not None} | "
+        f"data_ini={d.get('data_ini')} | data_fim={d.get('data_fim')} | "
+        f"periodo_label={d.get('periodo_label')}"
+    )
     # Se não há produtos em memória mas existe um período ativo, busca esse
     # período em vez de pedir do zero (o operador já escolheu um período antes).
     if (produtos is None or (hasattr(produtos, "empty") and produtos.empty)):
