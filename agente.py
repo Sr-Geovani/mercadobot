@@ -437,6 +437,7 @@ async def garantir_dados_periodo(chat_id: int, data_ini: str, data_fim: str,
     # o período que o operador vê e reusa nos botões.
     if set_periodo_menu:
         dados_usuario[chat_id]["periodo_label"] = descricao_periodo
+        logger.info(f"[PERIODO-MENU] Período do menu setado para {chat_id}: '{descricao_periodo}' ({data_ini}-{data_fim})")
 
     return {"vendas": vendas, "produtos": produtos, "total_cancel": total_cancel}
 
