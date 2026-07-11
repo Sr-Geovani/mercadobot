@@ -17,6 +17,28 @@ from telegram import Bot, InlineKeyboardMarkup, InlineKeyboardButton
 logger         = logging.getLogger(__name__)
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 BRASILIA       = ZoneInfo("America/Sao_Paulo")
+
+# Controle de deduplicação de alertas por dia.
+# Estrutura: { "AAAA-MM-DD": { chat_id: set(assinaturas_ja_enviadas) } }
+# Evita reenviar o MESMO alerta em cada janela (13h15, 19h15, 20h15, 22h).
+# Só dispara se a assinatura do alerta for nova ou tiver mudado (ex: cancelamento
+# que cresceu de valor). Reseta a cada novo dia automaticamente.
+_alertas_enviados_dia = {}
+
+
+def _ja_alertou_hoje(chat_id: int, assinatura: str) -> bool:
+    """Retorna True se essa assinatura de alerta já foi enviada hoje para o chat."""
+    hoje_str = datetime.now(BRASILIA).strftime("%Y-%m-%d")
+    # Limpa dias antigos (mantém só hoje)
+    for dia in list(_alertas_enviados_dia.keys()):
+        if dia != hoje_str:
+            del _alertas_enviados_dia[dia]
+    do_dia = _alertas_enviados_dia.setdefault(hoje_str, {})
+    enviadas = do_dia.setdefault(chat_id, set())
+    if assinatura in enviadas:
+        return True
+    enviadas.add(assinatura)
+    return False
 HORARIO_HORA   = int(os.environ.get("BRIEFING_HORA",   "7"))
 HORARIO_MINUTO = int(os.environ.get("BRIEFING_MINUTO", "0"))
 
@@ -938,13 +960,20 @@ async def verificar_alertas_proativos(bot, chat_id, pdv_email, pdv_senha, vendas
                 apenas_data=hoje_br,
             )
             if deteccao.get("tem_alerta"):
-                from agente import _formatar_alertas_cancelamento
-                bloco = _formatar_alertas_cancelamento(deteccao["alertas"])
-                if bloco:
-                    await bot.send_message(chat_id=chat_id, text=bloco.strip(),
-                                            parse_mode="HTML", reply_markup=kb_menu())
-                    mensagens_enviadas.append("cancelamento")
-                    await asyncio.sleep(2)
+                # Dedup: assinatura pela quantidade de cancelamentos suspeitos.
+                # Se surgir um novo cancelamento (quantidade muda), reenvia;
+                # se for a mesma quantidade da janela anterior, não repete.
+                qtd_suspeitos = len(deteccao.get("alertas", []))
+                n_linhas_cancel = len([l for l in todas_linhas if l])  # total detectado
+                assinatura_6c = f"cancel6c:{qtd_suspeitos}:{n_linhas_cancel}"
+                if not _ja_alertou_hoje(chat_id, assinatura_6c):
+                    from agente import _formatar_alertas_cancelamento
+                    bloco = _formatar_alertas_cancelamento(deteccao["alertas"])
+                    if bloco:
+                        await bot.send_message(chat_id=chat_id, text=bloco.strip(),
+                                                parse_mode="HTML", reply_markup=kb_menu())
+                        mensagens_enviadas.append("cancelamento")
+                        await asyncio.sleep(2)
     except Exception as e:
         logger.warning(f"Alerta cancelamento falhou para {chat_id}: {e}")
 
@@ -1187,20 +1216,25 @@ async def enviar_alertas_proativos(modo: str = "completo"):
                     cancel = float(total_cancel or 0)
                 total = vendas["valor"].sum() if "valor" in vendas.columns else 0
                 if total > 0 and cancel > 0 and (cancel / total) > 0.25:
-                    detalhe_filiais = ""
-                    if isinstance(total_cancel, dict):
-                        linhas_filial = []
-                        for filial, val in total_cancel.items():
-                            if filial.startswith("_") or val == 0:
-                                continue
-                            linhas_filial.append(f"  • {filial.title()}: R$ {val:.2f}")
-                        if linhas_filial:
-                            detalhe_filiais = "\n" + "\n".join(linhas_filial)
-                    alertas.append(
-                        f"⚠️ <b>Cancelamentos acima do limite</b>\n"
-                        f"Total: R$ {cancel:.2f} ({cancel/total*100:.1f}% do faturamento){detalhe_filiais}\n"
-                        f"Limite saudável: até 25%."
-                    )
+                    # Assinatura por faixa de valor: só reenvia se o total de
+                    # cancelamentos subiu de faixa (ex: cada R$ 50 a mais é "novo").
+                    faixa = int(cancel // 50)
+                    assinatura_cancel = f"cancel25:{faixa}"
+                    if not _ja_alertou_hoje(chat_id, assinatura_cancel):
+                        detalhe_filiais = ""
+                        if isinstance(total_cancel, dict):
+                            linhas_filial = []
+                            for filial, val in total_cancel.items():
+                                if filial.startswith("_") or val == 0:
+                                    continue
+                                linhas_filial.append(f"  • {filial.title()}: R$ {val:.2f}")
+                            if linhas_filial:
+                                detalhe_filiais = "\n" + "\n".join(linhas_filial)
+                        alertas.append(
+                            f"⚠️ <b>Cancelamentos acima do limite</b>\n"
+                            f"Total: R$ {cancel:.2f} ({cancel/total*100:.1f}% do faturamento){detalhe_filiais}\n"
+                            f"Limite saudável: até 25%."
+                        )
 
             # Alerta zero vendas — todos os modos
             vendas2 = vendas.copy()
@@ -1212,10 +1246,12 @@ async def enviar_alertas_proativos(modo: str = "completo"):
                 n_vendas = len(vendas2)
 
             if n_vendas == 0 and hora_atual >= 10:
-                alertas.append(
-                    f"🚨 Nenhuma venda registrada hoje até às {hora_atual}h. "
-                    f"Verifique se o sistema está operando normalmente."
-                )
+                # Zero vendas: alerta uma vez por dia (não repete a cada janela)
+                if not _ja_alertou_hoje(chat_id, "zero_vendas"):
+                    alertas.append(
+                        f"🚨 Nenhuma venda registrada hoje até às {hora_atual}h. "
+                        f"Verifique se o sistema está operando normalmente."
+                    )
 
             # Pico noturno — só faz sentido DEPOIS que o período 19h-21h já passou.
             # Antes das 21h essas horas ainda não ocorreram no dia, então
@@ -1223,10 +1259,11 @@ async def enviar_alertas_proativos(modo: str = "completo"):
             if modo == "completo" and hora_atual >= 21 and "hora" in vendas2.columns:
                 vendas_noite = vendas2[vendas2["hora"].between(19, 21)]
                 if len(vendas_noite) == 0:
-                    alertas.append(
-                        f"🌙 Nenhuma venda registrada entre 19h e 22h. "
-                        f"Pico noturno sem movimento — verifique os totens."
-                    )
+                    if not _ja_alertou_hoje(chat_id, "pico_noturno"):
+                        alertas.append(
+                            f"🌙 Nenhuma venda registrada entre 19h e 22h. "
+                            f"Pico noturno sem movimento — verifique os totens."
+                        )
 
             if not alertas:
                 logger.info(f"Alertas: nenhum alerta para {chat_id} às {hora_atual}h")
