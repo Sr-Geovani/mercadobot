@@ -2140,9 +2140,17 @@ async def comando_produtos(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id  = update.effective_chat.id
     d        = dados_usuario.get(chat_id, {})
     produtos = d.get("produtos")
-    if produtos is None or produtos.empty:
-        await pedir_periodo(update.message)
-        return
+    # Se não há produtos em memória mas existe um período ativo, busca esse
+    # período em vez de pedir do zero (o operador já escolheu um período antes).
+    if (produtos is None or (hasattr(produtos, "empty") and produtos.empty)):
+        ini = d.get("data_ini")
+        fim = d.get("data_fim")
+        if ini and fim:
+            await update.message.reply_text("⏳ Buscando produtos do período...")
+            _, produtos, _ = await obter_dados_periodo(chat_id, ini, fim, d.get("periodo_label", ""))
+        if produtos is None or (hasattr(produtos, "empty") and produtos.empty):
+            await pedir_periodo(update.message)
+            return
     await update.message.reply_text("⏳ Analisando produtos...")
     await enviar(update.message, bloco_top_produtos(produtos))
     await update.message.reply_photo(photo=g_top_produtos(produtos))
@@ -2155,9 +2163,15 @@ async def comando_categorias(update: Update, context: ContextTypes.DEFAULT_TYPE)
     chat_id  = update.effective_chat.id
     d        = dados_usuario.get(chat_id, {})
     produtos = d.get("produtos")
-    if produtos is None or produtos.empty:
-        await pedir_periodo(update.message)
-        return
+    if (produtos is None or (hasattr(produtos, "empty") and produtos.empty)):
+        ini = d.get("data_ini")
+        fim = d.get("data_fim")
+        if ini and fim:
+            await update.message.reply_text("⏳ Buscando dados do período...")
+            _, produtos, _ = await obter_dados_periodo(chat_id, ini, fim, d.get("periodo_label", ""))
+        if produtos is None or (hasattr(produtos, "empty") and produtos.empty):
+            await pedir_periodo(update.message)
+            return
     await update.message.reply_text("⏳ Calculando receita por categoria...")
     await enviar(update.message, bloco_categorias(produtos))
     await update.message.reply_photo(photo=g_categorias(produtos))

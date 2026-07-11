@@ -323,7 +323,8 @@ def _resolver_periodo_relativo(texto_periodo: str) -> tuple[str, str] | None:
 
 
 async def garantir_dados_periodo(chat_id: int, data_ini: str, data_fim: str,
-                                  descricao_periodo: str, forcar_fresh: bool = False) -> dict:
+                                  descricao_periodo: str, forcar_fresh: bool = False,
+                                  set_periodo_menu: bool = True) -> dict:
     """
     Busca vendas E produtos do PDV Legal para o período, reaproveitando o
     mesmo caminho real usado pelos botões existentes. Salva em dados_usuario
@@ -335,6 +336,12 @@ async def garantir_dados_periodo(chat_id: int, data_ini: str, data_fim: str,
     
     Se forcar_fresh=True, ignora o cache e busca dados novos do PDV agora mesmo.
     Use quando o operador pedir "atualizado", "agora", "refresh".
+
+    set_periodo_menu: se True (padrão), este período vira o "período ativo" do
+    menu (o que aparece no topo e que os botões reusam). Buscas AUXILIARES
+    (histórico para comparação, última venda, investigação) devem passar False,
+    para não sobrescrever o período principal que o operador está analisando
+    com um label técnico ou um recorte que não interessa ao menu.
     """
     import asyncio
     import pandas as pd
@@ -412,11 +419,15 @@ async def garantir_dados_periodo(chat_id: int, data_ini: str, data_fim: str,
         dados_usuario[chat_id] = {}
     dados_usuario[chat_id]["vendas"]        = vendas
     dados_usuario[chat_id]["produtos"]      = produtos
-    dados_usuario[chat_id]["periodo_label"] = descricao_periodo
     dados_usuario[chat_id]["total_cancel"]  = total_cancel
     dados_usuario[chat_id]["data_ini"]      = data_ini
     dados_usuario[chat_id]["data_fim"]      = data_fim
     dados_usuario[chat_id]["baixado_em"]    = _agora  # carimbo para validade do cache
+    # Só as buscas principais definem o período visível do menu. Buscas
+    # auxiliares (histórico, comparação) salvam os dados mas não sobrescrevem
+    # o período que o operador vê e reusa nos botões.
+    if set_periodo_menu:
+        dados_usuario[chat_id]["periodo_label"] = descricao_periodo
 
     return {"vendas": vendas, "produtos": produtos, "total_cancel": total_cancel}
 
@@ -727,7 +738,7 @@ async def executar_tool_ultima_venda(chat_id: int, data_ini: str = None, data_fi
         data_fim = agora.strftime("%d/%m/%Y")
         data_ini = agora.strftime("%d/%m/%Y")  # Hoje
     
-    dados = await garantir_dados_periodo(chat_id, data_ini, data_fim, "para buscar última venda")
+    dados = await garantir_dados_periodo(chat_id, data_ini, data_fim, "para buscar última venda", set_periodo_menu=False)
     if "erro" in dados:
         return dados
     
@@ -978,7 +989,7 @@ async def executar_tool_cancelamento_por_hora(chat_id: int, data_ini: str = None
     data_hist_ini = (agora - timedelta(days=dias_atras)).strftime("%d/%m/%Y")
     data_hist_fim = (agora - timedelta(days=1)).strftime("%d/%m/%Y")
     
-    dados_hist = await garantir_dados_periodo(chat_id, data_hist_ini, data_hist_fim, "histórico para comparação")
+    dados_hist = await garantir_dados_periodo(chat_id, data_hist_ini, data_hist_fim, "histórico para comparação", set_periodo_menu=False)
     if "erro" in dados_hist:
         return {"erro": "Sem histórico suficiente para comparação (mínimo 7 dias)."}
     
@@ -1674,7 +1685,7 @@ async def executar_tool_investigar_queda(chat_id: int, data_ini: str = None, dat
     data_hist_ini = (agora - timedelta(days=dias_atras)).strftime("%d/%m/%Y")
     data_hist_fim = (agora - timedelta(days=1)).strftime("%d/%m/%Y")
     
-    dados_hist = await garantir_dados_periodo(chat_id, data_hist_ini, data_hist_fim, "histórico para comparação")
+    dados_hist = await garantir_dados_periodo(chat_id, data_hist_ini, data_hist_fim, "histórico para comparação", set_periodo_menu=False)
     if "erro" in dados_hist:
         return {"erro": "Sem histórico suficiente para comparação (mínimo 7 dias)."}
     
