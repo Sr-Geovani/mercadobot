@@ -398,6 +398,15 @@ async def garantir_dados_periodo(chat_id: int, data_ini: str, data_fim: str,
 
     if cache_valido:
         logger.info(f"[CACHE] Reusando dados de {data_ini}-{data_fim} para {chat_id} (dentro da validade)")
+        # Mesmo servindo do cache, atualiza o período ativo do menu (quando é
+        # busca principal), para que os botões reusem esse período em vez de
+        # pedir do zero. O bug era: cache retornava aqui e pulava essa gravação.
+        if set_periodo_menu:
+            if chat_id not in dados_usuario:
+                dados_usuario[chat_id] = {}
+            dados_usuario[chat_id]["periodo_label"] = descricao_periodo
+            dados_usuario[chat_id]["data_ini"] = data_ini
+            dados_usuario[chat_id]["data_fim"] = data_fim
         return {
             "vendas": d_atual["vendas"],
             "produtos": d_atual.get("produtos"),
