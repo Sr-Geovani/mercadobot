@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 
 logger = logging.getLogger(__name__)
 
-PDV_URL      = "https://pdvlegal.com.br/loginpdvlegal.aspx"
+PDV_URL      = "https://admin.pdvlegal.com.br/loginpdvlegal.aspx"
 PDV_EMAIL    = os.environ.get("PDV_EMAIL")
 PDV_SENHA    = os.environ.get("PDV_SENHA")
 DOWNLOAD_DIR = Path("/tmp/pdvlegal")
@@ -86,7 +86,7 @@ async def exportar_vendas(page, data_ini: str, data_fim: str) -> Path:
     logger.info(f"Exportando Vendas: {data_ini} → {data_fim}")
     DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
-    await page.goto("https://pdvlegal.com.br/relatorios.aspx?relatorio=1", wait_until="networkidle")
+    await page.goto("https://admin.pdvlegal.com.br/relatorios.aspx?relatorio=1", wait_until="networkidle")
     await page.wait_for_timeout(1500)
     logger.info("Página de vendas carregada")
 
@@ -137,7 +137,7 @@ async def exportar_produtos(page, data_ini: str, data_fim: str) -> Path:
     logger.info(f"Exportando Produtos: {data_ini} → {data_fim}")
     DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
-    await page.goto("https://pdvlegal.com.br/dashboard_produtos.aspx?relatorio=dp", wait_until="networkidle")
+    await page.goto("https://admin.pdvlegal.com.br/dashboard_produtos.aspx?relatorio=dp", wait_until="networkidle")
     await page.wait_for_timeout(1500)
 
     # Mapa de períodos padrão
@@ -327,7 +327,7 @@ async def exportar_cancelamentos(page, data_ini: str, data_fim: str) -> dict:
         new_page = await context.new_page()
 
         await new_page.goto(
-            "https://pdvlegal.com.br/dashboard_vendas.aspx?tp=2",
+            "https://admin.pdvlegal.com.br/dashboard_vendas.aspx?tp=2",
             wait_until="domcontentloaded",
             timeout=60000
         )
