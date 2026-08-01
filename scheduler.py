@@ -19,25 +19,45 @@ TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 BRASILIA       = ZoneInfo("America/Sao_Paulo")
 
 # Controle de deduplicação de alertas por dia.
-# Estrutura: { "AAAA-MM-DD": { chat_id: set(assinaturas_ja_enviadas) } }
+# Persistido em arquivo /tmp (sobrevive a reinício de processo, ex: deploy).
 # Evita reenviar o MESMO alerta em cada janela (13h15, 19h15, 20h15, 22h).
 # Só dispara se a assinatura do alerta for nova ou tiver mudado (ex: cancelamento
-# que cresceu de valor). Reseta a cada novo dia automaticamente.
-_alertas_enviados_dia = {}
+# que cresceu de valor). Arquivo do dia anterior é ignorado (reseta por dia).
+import json as _json_dedup
+from pathlib import Path as _Path_dedup
+
+def _arquivo_dedup_hoje() -> "_Path_dedup":
+    hoje_str = datetime.now(BRASILIA).strftime("%Y-%m-%d")
+    d = _Path_dedup("/tmp/pdvlegal")
+    d.mkdir(parents=True, exist_ok=True)
+    return d / f"alertas_enviados_{hoje_str}.json"
 
 
 def _ja_alertou_hoje(chat_id: int, assinatura: str) -> bool:
-    """Retorna True se essa assinatura de alerta já foi enviada hoje para o chat."""
-    hoje_str = datetime.now(BRASILIA).strftime("%Y-%m-%d")
-    # Limpa dias antigos (mantém só hoje)
-    for dia in list(_alertas_enviados_dia.keys()):
-        if dia != hoje_str:
-            del _alertas_enviados_dia[dia]
-    do_dia = _alertas_enviados_dia.setdefault(hoje_str, {})
-    enviadas = do_dia.setdefault(chat_id, set())
-    if assinatura in enviadas:
+    """
+    Retorna True se essa assinatura de alerta já foi enviada hoje para o chat.
+    Persistido em arquivo por dia, então sobrevive a reinício do processo
+    (um deploy no meio do dia não faz o alerta repetir).
+    """
+    arq = _arquivo_dedup_hoje()
+    chave = f"{chat_id}:{assinatura}"
+    # Lê o estado atual
+    enviadas = set()
+    if arq.exists():
+        try:
+            with open(arq, "r", encoding="utf-8") as f:
+                enviadas = set(_json_dedup.load(f))
+        except Exception:
+            enviadas = set()
+    if chave in enviadas:
         return True
-    enviadas.add(assinatura)
+    # Marca como enviada e persiste
+    enviadas.add(chave)
+    try:
+        with open(arq, "w", encoding="utf-8") as f:
+            _json_dedup.dump(list(enviadas), f)
+    except Exception as e:
+        logger.warning(f"[DEDUP] Não consegui persistir dedup: {e}")
     return False
 HORARIO_HORA   = int(os.environ.get("BRIEFING_HORA",   "7"))
 HORARIO_MINUTO = int(os.environ.get("BRIEFING_MINUTO", "0"))
@@ -537,13 +557,15 @@ def iniciar_scheduler():
         replace_existing=True,
     )
 
-    # Fechamento de mês — dia 01 às 7h (substitui o briefing diário neste dia)
+    # Fechamento de mês — dia 01 às 7h05 (5 min após o horário do briefing,
+    # para não disputar memória/Chromium com outros jobs das 7h e evitar o
+    # BlockingIOError/Errno 11 por falta de recurso no container).
     scheduler.add_job(
         enviar_fechamento_mes,
         trigger="cron",
         day=1,
         hour=HORARIO_HORA,
-        minute=HORARIO_MINUTO,
+        minute=(HORARIO_MINUTO + 5) if (HORARIO_MINUTO + 5) < 60 else 5,
         id="fechamento_mes",
         replace_existing=True,
     )

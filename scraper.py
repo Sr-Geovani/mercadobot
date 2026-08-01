@@ -738,7 +738,31 @@ def baixar_relatorios_periodo(data_ini: str, data_fim: str,
                                email: str = None, senha: str = None) -> tuple:
     """Baixa os relatórios e cancelamentos para o período. Retorna (path_vendas, path_produtos, total_cancel)."""
     logger.info(f"Período: {data_ini} → {data_fim}")
-    return asyncio.run(_baixar_async(data_ini, data_fim, email, senha))
+    # Retry com espera para falhas de RECURSO temporário (BlockingIOError /
+    # Errno 11 "Resource temporarily unavailable"), que ocorrem quando vários
+    # scrapers Playwright disputam memória/processos no mesmo minuto (ex: dia 1
+    # do mês, quando o fechamento mensal coincide com outros jobs). Esperar
+    # alguns segundos deixa o outro scraper terminar e liberar recursos.
+    ultimo_erro = None
+    for tentativa in range(3):
+        try:
+            return asyncio.run(_baixar_async(data_ini, data_fim, email, senha))
+        except (BlockingIOError, OSError) as e:
+            # Errno 11 = EAGAIN (recurso temporariamente indisponível)
+            ultimo_erro = e
+            espera = 5 * (tentativa + 1)  # 5s, 10s, 15s
+            logger.warning(
+                f"[SCRAPER-RETRY] Falha de recurso ({type(e).__name__}: {e}) na tentativa "
+                f"{tentativa + 1}/3. Aguardando {espera}s antes de tentar de novo..."
+            )
+            import time
+            time.sleep(espera)
+        except Exception as e:
+            # Outros erros não são de recurso — não adianta repetir
+            raise
+    # Esgotou as tentativas
+    logger.error(f"[SCRAPER-RETRY] Falhou após 3 tentativas por recurso indisponível: {ultimo_erro}")
+    raise ultimo_erro
 
 
 def garantir_browser():
