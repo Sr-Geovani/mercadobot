@@ -956,20 +956,13 @@ async def verificar_alertas_proativos(bot, chat_id, pdv_email, pdv_senha, vendas
             if todas_linhas and headers:
                 logger.info(f"[ALERTA-CANCEL] Usando detalhe em memória para {chat_id} ({len(todas_linhas)} linhas)")
 
-        # 2) Fallback: arquivo /tmp
+        # 2) Sem fallback de arquivo: o arquivo fixo compartilhado foi removido
+        # porque poderia conter cancelamentos de OUTRO usuário (vazamento entre
+        # lojas). A fonte agora é só o detalhe em memória, isolado por usuário.
         if not (todas_linhas and headers):
-            detalhe_path = Path("/tmp/pdvlegal/cancelamentos_detalhe.json")
-            if detalhe_path.exists():
-                with open(detalhe_path, "r", encoding="utf-8") as f:
-                    detalhe = json.load(f)
-                todas_linhas = detalhe.get("linhas", detalhe.get("amostra", [])) or []
-                headers = detalhe.get("headers", []) or []
-                if todas_linhas and headers:
-                    logger.info(f"[ALERTA-CANCEL] Usando detalhe do arquivo /tmp para {chat_id}")
-            else:
-                logger.warning(
-                    f"[ALERTA-CANCEL] Sem detalhe em memória E sem arquivo /tmp para {chat_id} "
-                    f"na janela {hora_atual}h — detecção das 6 camadas pulada. "
+            logger.warning(
+                f"[ALERTA-CANCEL] Sem detalhe em memória para {chat_id} "
+                f"na janela {hora_atual}h — detecção das 6 camadas pulada. "
                     f"O alerta de % ainda roda pelo total_cancel."
                 )
 

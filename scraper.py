@@ -71,7 +71,7 @@ async def fazer_login(page, email: str, senha: str):
     logger.info("Login realizado.")
 
 
-async def exportar_vendas(page, data_ini: str, data_fim: str) -> Path:
+async def exportar_vendas(page, data_ini: str, data_fim: str, sessao_dir: Path = None) -> Path:
     """
     ┌─────────────────────────────────────────────────────────────────────┐
     │ LÓGICA-BASE DO SISTEMA — NÃO ALTERAR sem necessidade absoluta.       │
@@ -127,13 +127,13 @@ async def exportar_vendas(page, data_ini: str, data_fim: str) -> Path:
             await page.click("#ContentPlaceHolder1_btnGerarRelatorio")
 
     download = await download_info.value
-    destino = DOWNLOAD_DIR / "vendas.xlsx"
+    destino = (sessao_dir or DOWNLOAD_DIR) / "vendas.xlsx"
     await download.save_as(destino)
     logger.info(f"Vendas baixado: {destino}")
     return destino
 
 
-async def exportar_produtos(page, data_ini: str, data_fim: str) -> Path:
+async def exportar_produtos(page, data_ini: str, data_fim: str, sessao_dir: Path = None) -> Path:
     logger.info(f"Exportando Produtos: {data_ini} → {data_fim}")
     DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -292,13 +292,13 @@ async def exportar_produtos(page, data_ini: str, data_fim: str) -> Path:
         await page.click("#ContentPlaceHolder1_ImageButton1")
 
     download = await download_info.value
-    destino = DOWNLOAD_DIR / "produtos.xlsx"
+    destino = (sessao_dir or DOWNLOAD_DIR) / "produtos.xlsx"
     await download.save_as(destino)
     logger.info(f"Produtos baixado: {destino}")
     return destino
 
 
-async def exportar_cancelamentos(page, data_ini: str, data_fim: str) -> dict:
+async def exportar_cancelamentos(page, data_ini: str, data_fim: str, sessao_dir: Path = None) -> dict:
     """
     Retorna dict com cancelamentos por filial + total.
 
@@ -680,7 +680,7 @@ async def exportar_cancelamentos(page, data_ini: str, data_fim: str) -> dict:
             # **SALVA** a tabela detalhada em JSON para uso posterior
             import json
             from pathlib import Path
-            detalhe_path = Path("/tmp/pdvlegal/cancelamentos_detalhe.json")
+            detalhe_path = (sessao_dir or DOWNLOAD_DIR) / "cancelamentos_detalhe.json"
             detalhe_path.parent.mkdir(exist_ok=True, parents=True)
             with open(detalhe_path, "w", encoding="utf-8") as f:
                 json.dump(detalhe, f, ensure_ascii=False, indent=2)
@@ -710,9 +710,20 @@ async def _baixar_async(data_ini: str, data_fim: str,
                         email: str = None, senha: str = None) -> tuple:
     """Executa login + downloads + cancelamentos em sequência."""
     from playwright.async_api import async_playwright
+    import hashlib, uuid
 
     _email = email or PDV_EMAIL
     _senha = senha or PDV_SENHA
+
+    # ─── ISOLAMENTO POR USUÁRIO (CRÍTICO) ──────────────────────────────
+    # Cada execução usa um diretório ÚNICO, para que dois usuários rodando
+    # o scraper ao mesmo tempo NUNCA compartilhem os arquivos vendas.xlsx /
+    # produtos.xlsx / cancelamentos_detalhe.json. Antes, o nome fixo em
+    # /tmp/pdvlegal fazia um usuário ler os dados baixados por outro
+    # (vazamento de dados entre lojas).
+    _hash_email = hashlib.md5((_email or "anon").encode()).hexdigest()[:8]
+    _sessao_dir = DOWNLOAD_DIR / f"{_hash_email}_{uuid.uuid4().hex[:8]}"
+    _sessao_dir.mkdir(parents=True, exist_ok=True)
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
@@ -720,9 +731,9 @@ async def _baixar_async(data_ini: str, data_fim: str,
         page    = await context.new_page()
         try:
             await fazer_login(page, _email, _senha)
-            path_vendas   = await exportar_vendas(page, data_ini, data_fim)
-            path_produtos = await exportar_produtos(page, data_ini, data_fim)
-            total_cancel  = await exportar_cancelamentos(page, data_ini, data_fim)
+            path_vendas   = await exportar_vendas(page, data_ini, data_fim, _sessao_dir)
+            path_produtos = await exportar_produtos(page, data_ini, data_fim, _sessao_dir)
+            total_cancel  = await exportar_cancelamentos(page, data_ini, data_fim, _sessao_dir)
             return path_vendas, path_produtos, total_cancel
         finally:
             await browser.close()

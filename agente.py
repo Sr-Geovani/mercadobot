@@ -1304,25 +1304,18 @@ async def executar_tool_listar_cancelamentos_detalhe(chat_id: int, data_ini: str
         logger.error(f"[CANCELAMENTOS-DETALHE] Erro ao garantir dados: {dados}")
         return dados
     
-    # Tenta ler o arquivo de detalhes
-    detalhe_path = Path("/tmp/pdvlegal/cancelamentos_detalhe.json")
+    # Lê o detalhe de cancelamentos da MEMÓRIA (isolado por usuário via dados),
+    # não de um arquivo fixo compartilhado — que poderia conter dados de OUTRO
+    # usuário que rodou o scraper por último (vazamento entre lojas).
+    total_cancel = dados.get("total_cancel", {})
     todas_linhas = []
     headers = []
-    
-    if detalhe_path.exists():
-        try:
-            with open(detalhe_path, "r", encoding="utf-8") as f:
-                detalhe = json.load(f)
-                todas_linhas = detalhe.get("linhas", detalhe.get("amostra", []))
-                headers = detalhe.get("headers", [])
-                logger.info(f"[CANCELAMENTOS-DETALHE] Arquivo: {len(todas_linhas)} cancelamentos encontrados")
-        except Exception as e:
-            logger.error(f"[CANCELAMENTOS-DETALHE] Erro ao ler: {e}")
-            return {"erro": "Não consegui acessar os detalhes de cancelamentos"}
-    else:
-        logger.warning(f"[CANCELAMENTOS-DETALHE] Arquivo não existe")
-        return {"erro": "Arquivo de cancelamentos não disponível"}
-    
+    if isinstance(total_cancel, dict) and isinstance(total_cancel.get("_detalhe"), dict):
+        det = total_cancel["_detalhe"]
+        todas_linhas = det.get("linhas", det.get("amostra", [])) or []
+        headers = det.get("headers", []) or []
+        logger.info(f"[CANCELAMENTOS-DETALHE] Memória: {len(todas_linhas)} cancelamentos")
+
     if not todas_linhas:
         return {
             "tem_cancelamentos": False,
@@ -1480,25 +1473,18 @@ async def executar_tool_cancelamentos(chat_id: int, data_ini: str = None, data_f
     
     logger.info(f"[CANCELAMENTOS] Valor total final: R$ {valor_total:.2f}")
     
-    # Tenta ler o arquivo de detalhes SEMPRE (independente do valor_total)
-    detalhe_path = Path("/tmp/pdvlegal/cancelamentos_detalhe.json")
+    # Lê o detalhe da MEMÓRIA (isolado por usuário), não de arquivo fixo
+    # compartilhado — evita ler cancelamentos de OUTRA loja (vazamento).
     todas_linhas = []
     headers = []
-    
-    logger.info(f"[CANCELAMENTOS] Procurando arquivo: {detalhe_path}")
-    
-    if detalhe_path.exists():
-        try:
-            with open(detalhe_path, "r", encoding="utf-8") as f:
-                detalhe = json.load(f)
-                # Tenta 'linhas' primeiro (novo formato), depois 'amostra' (antigo)
-                todas_linhas = detalhe.get("linhas", detalhe.get("amostra", []))
-                headers = detalhe.get("headers", [])
-                logger.info(f"[CANCELAMENTOS] Arquivo lido: {len(todas_linhas)} linhas, {len(headers)} headers")
-        except Exception as e:
-            logger.error(f"[CANCELAMENTOS] Erro ao ler arquivo: {e}")
-    else:
-        logger.warning(f"[CANCELAMENTOS] Arquivo não encontrado em {detalhe_path}")
+    _det_source = dados.get("total_cancelamento") if isinstance(dados.get("total_cancelamento"), dict) else None
+    if _det_source is None and isinstance(dados.get("total_cancel"), dict):
+        _det_source = dados.get("total_cancel")
+    if isinstance(_det_source, dict) and isinstance(_det_source.get("_detalhe"), dict):
+        det = _det_source["_detalhe"]
+        todas_linhas = det.get("linhas", det.get("amostra", [])) or []
+        headers = det.get("headers", []) or []
+        logger.info(f"[CANCELAMENTOS] Memória: {len(todas_linhas)} linhas, {len(headers)} headers")
     
     # Se valor_total é 0 E não tem linhas, sem cancelamento
     if valor_total == 0 and not todas_linhas:
