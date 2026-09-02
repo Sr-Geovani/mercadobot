@@ -2043,11 +2043,29 @@ async def processar_mensagem_agente(chat_id: int, texto_usuario: str = None,
         for _ in range(5):  # limite de segurança contra loop infinito
             resp = await client.messages.create(
                 model=MODEL,
-                max_tokens=1024,
+                max_tokens=4096,
                 system=system_prompt,
                 tools=TOOLS,
                 messages=messages,
             )
+
+            # ─── ESTOUROU O LIMITE DE TOKENS ──────────────────────────────
+            # Quando o modelo tenta pedir MUITAS ferramentas de uma vez (ex:
+            # "faturamento dos últimos 12 meses" = uma busca por mês), a
+            # geração é cortada no meio e stop_reason vira "max_tokens".
+            # Nesse caso resp.content contém um tool_use TRUNCADO: não dá para
+            # executar nem para salvar no histórico (quebraria a próxima
+            # chamada com erro 400 "tool_use without tool_result").
+            if resp.stop_reason == "max_tokens":
+                logger.warning(
+                    f"[AGENTE] chat_id={chat_id}: resposta truncada por max_tokens "
+                    f"(pergunta provavelmente exige muitas buscas). Histórico NÃO alterado."
+                )
+                return (
+                    "Sua pergunta exige muitas consultas de uma vez e não consegui "
+                    "completar.\n\nTente quebrar em partes — por exemplo, peça um "
+                    "período menor (últimos 3 meses) ou uma filial por vez."
+                )
 
             if resp.stop_reason != "tool_use":
                 # Claude decidiu responder direto, sem (mais) ferramentas
