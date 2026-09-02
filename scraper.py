@@ -71,6 +71,31 @@ async def fazer_login(page, email: str, senha: str):
     logger.info("Login realizado.")
 
 
+def _timeout_por_periodo(data_ini: str, data_fim: str, base_ms: int = 45000) -> int:
+    """
+    Calcula um timeout proporcional ao tamanho do período consultado.
+    Relatórios de períodos longos (meses/ano) demoram muito mais para o PDV
+    Legal gerar — com o timeout fixo curto, o download estourava e a busca
+    falhava. Escala até um teto de 3 minutos.
+    """
+    from datetime import datetime as _dt
+    try:
+        ini = _dt.strptime(data_ini, "%d/%m/%Y")
+        fim = _dt.strptime(data_fim, "%d/%m/%Y")
+        dias = max(1, (fim - ini).days + 1)
+    except Exception:
+        return base_ms
+
+    if dias <= 31:
+        return base_ms                 # até 1 mês: padrão
+    elif dias <= 92:
+        return 90000                   # até 3 meses: 1min30
+    elif dias <= 186:
+        return 120000                  # até 6 meses: 2min
+    else:
+        return 180000                  # acima: 3min (teto)
+
+
 async def exportar_vendas(page, data_ini: str, data_fim: str, sessao_dir: Path = None) -> Path:
     """
     ┌─────────────────────────────────────────────────────────────────────┐
@@ -114,17 +139,24 @@ async def exportar_vendas(page, data_ini: str, data_fim: str, sessao_dir: Path =
     logger.info("Clicando em Gerar Relatório...")
     await page.click("#ContentPlaceHolder1_btnGerarRelatorio")
 
+    # Timeouts escalados: períodos longos demoram muito mais para o site
+    # processar. Com espera fixa curta, o modal ainda não apareceu, caía-se no
+    # fallback e o clique falhava porque o botão estava coberto/invisível.
+    _tmo = _timeout_por_periodo(data_ini, data_fim, base_ms=60000)
+    _tmo_modal = max(10000, _tmo // 3)
+    logger.info(f"Vendas — aguardando modal até {_tmo_modal/1000:.0f}s / download até {_tmo/1000:.0f}s")
+
     # Nova etapa: PDV Legal mostra modal SweetAlert com botão "Baixar Excel"
     try:
-        await page.wait_for_selector(".swal-button--confirm", state="visible", timeout=10000)
+        await page.wait_for_selector(".swal-button--confirm", state="visible", timeout=_tmo_modal)
         logger.info("Modal SweetAlert detectado — clicando em Baixar Excel...")
-        async with page.expect_download(timeout=60000) as download_info:
+        async with page.expect_download(timeout=_tmo) as download_info:
             await page.click(".swal-button--confirm")
     except Exception:
         # Fallback: se não aparecer o modal, tenta download direto
         logger.info("Modal não detectado — aguardando download direto...")
-        async with page.expect_download(timeout=60000) as download_info:
-            await page.click("#ContentPlaceHolder1_btnGerarRelatorio")
+        async with page.expect_download(timeout=_tmo) as download_info:
+            await page.click("#ContentPlaceHolder1_btnGerarRelatorio", timeout=_tmo_modal)
 
     download = await download_info.value
     destino = (sessao_dir or DOWNLOAD_DIR) / "vendas.xlsx"
@@ -287,8 +319,10 @@ async def exportar_produtos(page, data_ini: str, data_fim: str, sessao_dir: Path
     await page.click("#imgDownload")
     await page.wait_for_timeout(1000)
 
-    # Clica em Excel e aguarda download
-    async with page.expect_download(timeout=45000) as download_info:
+    # Clica em Excel e aguarda download (timeout escalado pelo tamanho do período)
+    _tmo = _timeout_por_periodo(data_ini, data_fim, base_ms=45000)
+    logger.info(f"Produtos — timeout de download: {_tmo/1000:.0f}s para o período {data_ini}-{data_fim}")
+    async with page.expect_download(timeout=_tmo) as download_info:
         await page.click("#ContentPlaceHolder1_ImageButton1")
 
     download = await download_info.value

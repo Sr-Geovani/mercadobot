@@ -422,6 +422,31 @@ async def garantir_dados_periodo(chat_id: int, data_ini: str, data_fim: str,
         produtos = normalizar_produtos(pd.read_excel(path_produtos))
     except Exception as e:
         logger.error(f"Agente: erro ao buscar dados para {chat_id}: {e}")
+        # Timeout do scraper quase sempre significa PERÍODO GRANDE DEMAIS: o
+        # site do PDV Legal não consegue gerar o relatório a tempo. A mensagem
+        # precisa instruir a IA a NÃO tentar de novo — senão ela repete a mesma
+        # busca pesada com outra variação, gastando minutos e falhando igual.
+        msg_erro = str(e)
+        if "Timeout" in msg_erro or "timeout" in msg_erro:
+            dias_periodo = None
+            try:
+                _ini = datetime.strptime(data_ini, "%d/%m/%Y")
+                _fim = datetime.strptime(data_fim, "%d/%m/%Y")
+                dias_periodo = (_fim - _ini).days
+            except Exception:
+                pass
+            info_periodo = f" ({dias_periodo} dias)" if dias_periodo else ""
+            return {
+                "erro": (
+                    f"PERÍODO GRANDE DEMAIS{info_periodo}: o PDV Legal não conseguiu "
+                    f"gerar o relatório dentro do tempo limite. "
+                    f"NÃO TENTE NOVAMENTE com este mesmo período nem com outra variação — "
+                    f"vai falhar igual. Responda ao operador explicando que o período é "
+                    f"muito longo para consulta de uma vez e sugira dividir em blocos "
+                    f"menores (por exemplo, 1 a 3 meses por consulta)."
+                ),
+                "nao_retentar": True,
+            }
         return {"erro": f"Não consegui buscar os dados no PDV Legal agora: {e}"}
 
     if chat_id not in dados_usuario:
