@@ -1920,8 +1920,14 @@ def obter_historico_sessao(chat_id: int) -> list[dict]:
 def salvar_historico_sessao(chat_id: int, historico: list[dict], limite_mensagens: int = 20):
     """
     Salva o histórico atualizado, truncando para as últimas N mensagens.
-    IMPORTANTE: Não trunca no meio de um par tool_use/tool_result, pois isso
-    deixa um tool_result órfão e a API da Anthropic rejeita com erro 400.
+
+    IMPORTANTE: a API da Anthropic exige que todo bloco tool_use tenha o
+    tool_result correspondente na mensagem SEGUINTE. Um histórico salvo pela
+    metade quebra as próximas chamadas com erro 400. Por isso limpamos as duas
+    pontas:
+      - início: tool_result órfão (o tool_use foi cortado no truncamento)
+      - fim: tool_use sem tool_result (execução interrompida por erro/timeout,
+        ou truncamento cortando o resultado)
     """
     from bot import dados_usuario
 
@@ -1929,26 +1935,35 @@ def salvar_historico_sessao(chat_id: int, historico: list[dict], limite_mensagen
     if chat_id not in dados_usuario:
         dados_usuario[chat_id] = {}
 
-    # Trunca respeitando pares tool_use/tool_result
-    historico_truncado = historico[-limite_mensagens:]
-    
-    # Se a primeira mensagem for um tool_result órfão, remove ela
-    # (o tool_use correspondente foi cortado no truncamento)
-    while historico_truncado:
-        primeira = historico_truncado[0]
-        content = primeira.get("content")
-        
-        # Verifica se é uma mensagem com tool_result
-        tem_tool_result = False
+    def _tem_bloco(msg, tipo: str) -> bool:
+        content = msg.get("content")
         if isinstance(content, list):
             for bloco in content:
-                if isinstance(bloco, dict) and bloco.get("type") == "tool_result":
-                    tem_tool_result = True
-                    break
-        
-        if tem_tool_result:
-            # Remove o tool_result órfão do início
-            historico_truncado = historico_truncado[1:]
+                # blocos podem ser dict ou objeto do SDK
+                t = bloco.get("type") if isinstance(bloco, dict) else getattr(bloco, "type", None)
+                if t == tipo:
+                    return True
+        return False
+
+    # Trunca respeitando pares tool_use/tool_result
+    historico_truncado = historico[-limite_mensagens:]
+
+    # 1) Remove tool_result órfão do INÍCIO (tool_use correspondente foi cortado)
+    while historico_truncado and _tem_bloco(historico_truncado[0], "tool_result"):
+        historico_truncado = historico_truncado[1:]
+
+    # 2) Remove tool_use órfão do FIM (sem tool_result logo depois).
+    # É o caso que gera: "tool_use ids were found without tool_result blocks".
+    while historico_truncado:
+        ultima = historico_truncado[-1]
+        if _tem_bloco(ultima, "tool_use"):
+            # Só é válido se a mensagem seguinte tiver o tool_result — como é a
+            # última, não há seguinte: está órfã. Remove.
+            logger.info(
+                f"[HISTORICO] Removendo tool_use órfão no fim do histórico de {chat_id} "
+                f"(evita erro 400 na próxima chamada)"
+            )
+            historico_truncado = historico_truncado[:-1]
         else:
             break
 
